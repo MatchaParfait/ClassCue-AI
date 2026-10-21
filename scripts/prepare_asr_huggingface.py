@@ -6,13 +6,13 @@ import time
 from contextvars import copy_context
 from threading import RLock
 
-from preparation_progress import DownloadProgress, stage, checkpoint
+from classcue.preparation_progress import DownloadProgress, stage, checkpoint
 
 
 def download_components(model, paths, directory, progress=None):
     from huggingface_hub import HfApi, hf_hub_download
     from tqdm.auto import tqdm
-    from asr_models import HUB_ALLOW_PATTERNS, _managed_path, _firered_component_ready
+    from classcue.asr_models import HUB_ALLOW_PATTERNS, _managed_path, _firered_component_ready
 
     bundles = []
     for component, repository in model.repositories:

@@ -53,15 +53,15 @@ def main():
             emit({"event": "hardware", "hardware": hardware})
             return 0
         except Exception as error:
-            from qwen_resilience import classify_error
+            from classcue.qwen_resilience import classify_error
             emit({"event": "error", "kind": classify_error(error),
                   "message": f"{type(error).__name__}: {error}"})
             return 1
     if args.request is None or args.output is None:
         parser.error("--request and --output are required for inference")
-    from firered_resilience import FireRedCheckpoints, select_batch_size
-    from qwen_resilience import atomic_json, classify_error, read_json
-    from qwen_memory import memory_snapshot
+    from classcue.firered_resilience import FireRedCheckpoints, select_batch_size
+    from classcue.qwen_resilience import atomic_json, classify_error, read_json
+    from classcue.qwen_memory import memory_snapshot
 
     request = read_json(args.request)
     manifest, attempt_id = request["manifest"], request["attempt_id"]
@@ -120,8 +120,8 @@ def main():
     try:
         with redirect_stdout(sys.stderr):
             import torch
-            from firered_transcriber import load_firered_model, transcribe_firered
-            from transcript_events import worker_transcript_callback
+            from classcue.firered_transcriber import load_firered_model, transcribe_firered
+            from classcue.transcript_events import worker_transcript_callback
             hardware = cuda_hardware(torch)
             if not hardware["cuda_available"]:
                 raise RuntimeError("FireRed 需要可用 CUDA；不会自动切换 CPU")

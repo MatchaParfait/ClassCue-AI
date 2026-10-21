@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path.cwd()))
 
 import api.main as api_main
 import uvicorn
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 calls = []

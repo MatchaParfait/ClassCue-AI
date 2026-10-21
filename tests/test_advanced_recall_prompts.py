@@ -4,16 +4,16 @@ from threading import Event
 
 import pytest
 
-from core import TranscriptSegment
-from llm_experiments import LabConfig, LabResponse, render_messages
-from recall_schemes import (
+from classcue.core import TranscriptSegment
+from classcue.llm_experiments import LabConfig, LabResponse, render_messages
+from classcue.recall_schemes import (
     RecallPromptInput, RecallSchemeInput, custom_prompt_bundle, freeze_schemes,
     preview_recall_prompt, semantic_hash,
 )
 from tests.test_exam_point_judge import FakeClient, candidate, run, saved
 from tests.test_recall_schemes import config, scheme_api, wait
-from ai_provider import create_judge
-from video_store import VideoStore
+from classcue.ai_provider import create_judge
+from classcue.video_store import VideoStore
 
 
 PROMPT = "只提取教师在实际字幕中讲解的概念定义，不要求考试或掌握提示。示例：普通定义也应纳入。"
@@ -83,7 +83,7 @@ def test_advanced_snapshots_ignore_later_base_prompt_edits(saved, monkeypatch):
     scheme = store.save_recall_scheme(RecallSchemeInput.model_validate(config(advanced_prompt=PROMPT)).model_dump())
     mode = scheme["id"]
     before = freeze_schemes(store, [mode])[mode]
-    monkeypatch.setattr("llm_experiments.load_prompt_bundle",
+    monkeypatch.setattr("classcue.llm_experiments.load_prompt_bundle",
                         lambda **kwargs: pytest.fail("Advanced schemes must not reload the builtin business rules"))
     after = freeze_schemes(store, [mode])[mode]
     assert before["base_bundle"] == after["base_bundle"]

@@ -1,7 +1,7 @@
 import pytest
 
-from citation_matching import locate_quote, remap_candidate
-from core import TranscriptSegment
+from classcue.citation_matching import locate_quote, remap_candidate
+from classcue.core import TranscriptSegment
 
 
 def segments(*texts):

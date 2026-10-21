@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from asr_storage import storage_root
+from classcue.asr_storage import storage_root
 
 
 def test_storage_defaults_to_project_without_creating_files(tmp_path):

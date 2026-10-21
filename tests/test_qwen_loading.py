@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from qwen_loading import model_loading
+from classcue.qwen_loading import model_loading
 
 
 def test_standard_loading_never_patches_runtime():

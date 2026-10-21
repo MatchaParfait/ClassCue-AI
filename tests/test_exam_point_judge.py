@@ -4,13 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_provider import ProviderProfile, create_judge
-from core import TranscriptSegment
-from exam_point_judge import ExamPointJudge
-from processing_control import ProcessingCancelled
-from video_pipeline import process_saved_analysis_once, process_video_once
-from video_store import VideoStore
-from api_failure import ApiUnavailable
+from classcue.ai_provider import ProviderProfile, create_judge
+from classcue.core import TranscriptSegment
+from classcue.exam_point_judge import ExamPointJudge
+from classcue.processing_control import ProcessingCancelled
+from classcue.video_pipeline import process_saved_analysis_once, process_video_once
+from classcue.video_store import VideoStore
+from classcue.api_failure import ApiUnavailable
 
 
 class FakeClient:
@@ -200,7 +200,7 @@ def test_processing_reuses_asr_and_does_not_skip_legacy_completed_mode(saved, mo
     store, video_id, profile = saved
     store.set_status(video_id, "review_ready")
     store.set_analysis_run(video_id, "high_recall", "completed", 0)
-    monkeypatch.setattr("video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("ASR rerun"))
+    monkeypatch.setattr("classcue.video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("ASR rerun"))
     adapter, client = judge(profile, [{"candidates": []}], "high_recall")
     assert process_video_once(
         store, video_id, adapter, analysis_mode="high_recall", filter_formula_noise=False,
@@ -252,7 +252,7 @@ def test_api_jobs_publish_selected_mode_and_reuse_saved_asr(saved, monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
     import api.main as api_main
-    from ai_provider import ProviderSettings
+    from classcue.ai_provider import ProviderSettings
 
     store, video_id, profile = saved
     client = FakeClient([{"candidates": [candidate()]}] * 3)
@@ -261,7 +261,7 @@ def test_api_jobs_publish_selected_mode_and_reuse_saved_asr(saved, monkeypatch):
     monkeypatch.setattr(api_main, "create_judge", lambda p, key, provider, mode: create_judge(
         p, key, mode=mode, client=client,
     ))
-    monkeypatch.setattr("video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("ASR rerun"))
+    monkeypatch.setattr("classcue.video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("ASR rerun"))
     with TestClient(api_main.create_app(store)) as api:
         for mode in ("high_recall", "medium_recall", "low_recall", "medium_recall"):
             submitted = api.post(f"/api/videos/{video_id}/process", json={

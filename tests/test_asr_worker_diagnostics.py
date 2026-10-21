@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import qwen_vad
-import transcriber
-from processing_control import ProcessingCancelled
+import classcue.qwen_vad as qwen_vad
+import classcue.transcriber as transcriber
+from classcue.processing_control import ProcessingCancelled
 
 
 def worker(tmp_path, line):
@@ -86,7 +86,7 @@ def test_vad_always_uses_owned_runner(tmp_path, monkeypatch, with_stop):
         Path(output).write_text(json.dumps({"backend": "firered", "speech_intervals": []}))
         return 0
 
-    monkeypatch.setattr("qwen_process.run_process", run)
+    monkeypatch.setattr("classcue.qwen_process.run_process", run)
     stop = (lambda: False) if with_stop else None
     result = qwen_vad.detect_speech(
         tmp_path / "audio.wav", "firered", model_path=tmp_path / "model",

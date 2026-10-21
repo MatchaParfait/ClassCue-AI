@@ -7,7 +7,7 @@ import wave
 import numpy as np
 import pytest
 
-from qwen_vad_firered import DEFAULT_MODEL_PATH, _frame_windows, detect_firered, validate_intervals
+from classcue.qwen_vad_firered import DEFAULT_MODEL_PATH, _frame_windows, detect_firered, validate_intervals
 
 
 def test_standalone_default_model_is_relative_to_application():

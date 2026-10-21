@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from core import TranscriptSegment
-from deepseek_judge import DeepSeekJudge
+from classcue.core import TranscriptSegment
+from classcue.deepseek_judge import DeepSeekJudge
 
 
 class FakeCompletions:

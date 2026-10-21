@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def main() -> None:
-    from qwen_vad_firered import DEFAULT_MODEL_PATH, detect_firered
+    from classcue.qwen_vad_firered import DEFAULT_MODEL_PATH, detect_firered
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audio", type=Path, required=True)

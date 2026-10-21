@@ -6,9 +6,9 @@ import wave
 
 import pytest
 
-from core import TranscriptSegment
-from processing_control import ProcessingCancelled, ResourcePaused
-import qwen_resilience as qr
+from classcue.core import TranscriptSegment
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+import classcue.qwen_resilience as qr
 
 
 @pytest.fixture
@@ -406,7 +406,7 @@ def test_checkpointed_empty_asr_is_not_missing(job):
 def test_owned_process_cancellation_reaps_venv_children(tmp_path):
     import sys
     import time
-    from qwen_process import run_process
+    from classcue.qwen_process import run_process
 
     started = time.monotonic()
     with pytest.raises(ProcessingCancelled):
@@ -420,7 +420,7 @@ def test_owned_process_cancellation_reaps_venv_children(tmp_path):
 def test_native_parent_exit_reaps_child_holding_output_pipe():
     import sys
     import time
-    from qwen_process import run_process
+    from classcue.qwen_process import run_process
 
     started = time.monotonic()
     code = run_process([
@@ -438,7 +438,7 @@ def test_native_parent_exit_reaps_child_holding_output_pipe():
 def test_worker_reports_typed_cuda_oom_and_keeps_committed_batches(job, monkeypatch, capsys, phase, stream_preview):
     import sys
     from contextlib import nullcontext
-    import qwen_transcriber
+    import classcue.qwen_transcriber as qwen_transcriber
     from scripts import qwen_resilient_worker
 
     directory, manifest, options = job
@@ -501,8 +501,8 @@ def test_preparation_memory_error_pauses_instead_of_running_model(tmp_path, monk
 
 
 def test_subprocess_exit_without_failure_report_is_native_exit(tmp_path, job, monkeypatch):
-    import qwen_process
-    import qwen_runtime
+    import classcue.qwen_process as qwen_process
+    import classcue.qwen_runtime as qwen_runtime
     directory, manifest, options = job
     monkeypatch.setattr(qwen_process, "run_process", lambda *_args, **_kwargs: 7)
     monkeypatch.setattr(qwen_runtime, "runtime_python", lambda: "python")

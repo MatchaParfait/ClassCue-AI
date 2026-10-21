@@ -13,7 +13,7 @@ try {
     $State = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
     $ProcessId = [int]$State.pid
     $Process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
-    $ExpectedApp = Join-Path $ProjectRoot "video_app.py"
+    $ExpectedApp = Join-Path $ProjectRoot "classcue\video_app.py"
     if ($null -ne $Process -and $null -ne $Process.CommandLine -and $Process.CommandLine.Contains("streamlit") -and $Process.CommandLine.Contains($ExpectedApp)) {
         & taskkill.exe /PID $ProcessId /T /F | Out-Null
         if ($LASTEXITCODE -ne 0) {

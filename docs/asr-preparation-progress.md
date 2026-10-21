@@ -52,7 +52,7 @@ model-00001-of-00002.safetensors
 
 ## 实现与兼容
 
-- `preparation_progress.py` 提供结构化阶段事件、下载速度估计、安装命令监控和验证子进程事件转发。
+- `classcue/preparation_progress.py` 提供结构化阶段事件、下载速度估计、安装命令监控和验证子进程事件转发。
 - `scripts/prepare_asr_modelscope.py` 统一各引擎的 ModelScope 文件清单、固定版本、大小和 SHA-256 校验、分块传输与 aria2 进度。
 - `scripts/prepare_asr_huggingface.py` 在备用源逐文件下载时使用同一套进度；Hub 工作线程回调保留任务事件上下文。
 - 下载网络依赖在应用主环境执行，独立推理环境继续承担原有模型验证；不要求用户为已有推理环境额外安装 HTTP 客户端。

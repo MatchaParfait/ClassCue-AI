@@ -13,8 +13,8 @@ import time
 
 import pytest
 
-import asr_models
-from model_downloads import PreparationPaused
+import classcue.asr_models as asr_models
+from classcue.model_downloads import PreparationPaused
 from scripts import prepare_asr_modelscope as source
 
 
@@ -95,7 +95,7 @@ def test_real_process_death_recovers_without_publishing_a_partial_model(transfer
     script = """
 import json, pathlib, sys, os
 sys.path.insert(0, sys.argv[1])
-import asr_models
+from classcue import asr_models
 from scripts import prepare_asr_modelscope as source
 asr_models.MODEL_ROOT = pathlib.Path(sys.argv[2])
 launch = source.subprocess.Popen

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-import ai_provider
+import classcue.ai_provider as ai_provider
 import api.main as api_main
-from ai_provider import ProviderProfile, ProviderSettings, load_provider_settings
-from video_store import VideoStore
+from classcue.ai_provider import ProviderProfile, ProviderSettings, load_provider_settings
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

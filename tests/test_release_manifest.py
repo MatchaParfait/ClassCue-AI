@@ -92,7 +92,8 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
     files = set(entries)
     assert len(files) == len(entries)
     assert all((ROOT / name).is_file() for name in files)
-    assert {path.name for path in ROOT.glob("*.py")} <= files
+    assert not list(ROOT.glob("*.py"))
+    assert {path.relative_to(ROOT).as_posix() for path in (ROOT / "classcue").rglob("*.py")} <= files
     source_only_scripts = {
         "build_desktop_icon.py", "check_repository_hygiene.py",
         "prepare_settings_herons.py", "release.py",
@@ -108,7 +109,7 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
     assert {name for name in files if name.startswith("docs/")} == {"docs/dolphin_upstream_LICENSE.txt"}
     assert not any(name.startswith(("tests/", "experiments/", ".github/")) for name in files)
     assert not {f"scripts/{name}" for name in source_only_scripts} & files
-    assert {"LICENSE", "scripts/desktop_launcher.vbs", "api/main.py", "pages/review.py"} <= files
+    assert {"LICENSE", "scripts/desktop_launcher.vbs", "api/main.py", "classcue/pages/review.py"} <= files
 
     # Follow local static imports so a new runtime dependency cannot be silently omitted.
     for name in files:

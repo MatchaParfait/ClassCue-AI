@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from core import TranscriptSegment
-from openai_judge import OpenAICompatibleJudge
+from classcue.core import TranscriptSegment
+from classcue.openai_judge import OpenAICompatibleJudge
 
 
 def response(content='{"candidates":[]}', finish_reason="stop"):

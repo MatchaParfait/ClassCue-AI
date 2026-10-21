@@ -7,13 +7,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import batch_processing
-from core import TranscriptSegment
-from processing_control import ResourcePaused
-from video_store import VideoStore
-import video_pipeline
-import qwen_resilience
-import web_batch
+import classcue.batch_processing as batch_processing
+from classcue.core import TranscriptSegment
+from classcue.processing_control import ResourcePaused
+from classcue.video_store import VideoStore
+import classcue.video_pipeline as video_pipeline
+import classcue.qwen_resilience as qwen_resilience
+import classcue.web_batch as web_batch
 
 
 def wait_for(client, job_id, status):
@@ -93,7 +93,7 @@ def test_shared_batch_stops_new_asr_but_drains_ai(tmp_path, store, monkeypatch):
 
 
 def configure_judge(monkeypatch):
-    from ai_provider import ProviderProfile
+    from classcue.ai_provider import ProviderProfile
     monkeypatch.setattr(api_main, "load_provider_settings",
                         lambda: SimpleNamespace(active_profile=ProviderProfile(base_url="https://unused.example/v1", model="fixture-model")))
     monkeypatch.setattr(api_main, "resolve_interface_key", lambda *_: "key")

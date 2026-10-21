@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import asr_models
+import classcue.asr_models as asr_models
 
 
 @pytest.fixture
@@ -316,7 +316,7 @@ def test_direct_modelscope_source_does_not_contact_huggingface(cache, monkeypatc
 
 
 def test_cancelled_preparation_never_switches_download_sources(cache, monkeypatch):
-    from processing_control import ProcessingCancelled
+    from classcue.processing_control import ProcessingCancelled
     from scripts import prepare_asr_modelscope, prepare_asr_huggingface
     def stop(*_a):
         raise ProcessingCancelled("stop")

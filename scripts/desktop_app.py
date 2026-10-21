@@ -18,8 +18,8 @@ PROJECT = Path(__file__).resolve().parents[1]
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-from desktop_runtime import APP_NAME, Lifecycle, Services, SingleInstance
-from desktop_startup import startup_html, startup_transition_script
+from classcue.desktop_runtime import APP_NAME, Lifecycle, Services, SingleInstance
+from classcue.desktop_startup import startup_html, startup_transition_script
 from scripts.desktop_transition import install_startup_transition
 
 
@@ -33,8 +33,8 @@ class WindowUI:
     def __init__(self):
         self.window = None
         try:
-            from app_storage import load_data_root
-            from asr_storage import library_identity
+            from classcue.app_storage import load_data_root
+            from classcue.asr_storage import library_identity
             library_id = library_identity(PROJECT, load_data_root() / "project.db")
         except (OSError, ValueError):
             library_id = None
@@ -126,7 +126,7 @@ class NativeAPI:
 
     def describe(self):
         self._check_origin()
-        from desktop_windows import preferences
+        from classcue.desktop_windows import preferences
         return {
             "name": APP_NAME, "tray": self._lifecycle.tray_available,
             "dialog": self._lifecycle.dialog, "hotkey": preferences(PROJECT).get("hotkey", ""),
@@ -159,7 +159,7 @@ class NativeAPI:
 
     def retry(self):
         self._check_origin()
-        from application_data_migration import read_journal
+        from classcue.application_data_migration import read_journal
         migration = read_journal(PROJECT)
         if migration and migration.get("status") in {"pending", "copying", "committed"}:
             raise RuntimeError("应用数据正在迁移，请等待原重启流程完成。")
@@ -168,7 +168,7 @@ class NativeAPI:
 
     def set_hotkey(self, hotkey):
         self._check_origin()
-        from desktop_windows import install_shortcuts
+        from classcue.desktop_windows import install_shortcuts
         return install_shortcuts(PROJECT, hotkey)
 
     def hide_to_tray(self):
@@ -186,7 +186,7 @@ class NativeAPI:
 
     def open_logs(self):
         self._check_origin()
-        from asr_storage import log_directory
+        from classcue.asr_storage import log_directory
         os.startfile(str(log_directory(PROJECT)))
         return {"ok": True}
 
@@ -197,9 +197,9 @@ class NativeAPI:
             if lifecycle.unsaved_changes or not lifecycle.ready or lifecycle.starting or lifecycle.exiting:
                 raise RuntimeError("请先保存设置，并等待服务就绪。")
             lifecycle.exiting = True
-        from desktop_runtime import http_json, read_json
-        from app_update_install import prepare_helper, spawn_helper
-        from app_updates import updates_dir
+        from classcue.desktop_runtime import http_json, read_json
+        from classcue.app_update_install import prepare_helper, spawn_helper
+        from classcue.app_updates import updates_dir
         services = lifecycle.services
         process = None
         reserved = False
@@ -245,13 +245,13 @@ class NativeAPI:
 def main(action="activate"):
     if os.name != "nt":
         raise RuntimeError("当前桌面入口面向 Windows；其他平台请使用网页入口。")
-    from asr_storage import log_directory
+    from classcue.asr_storage import log_directory
     from scripts.launcher_process import BoundedLogStream, service_logger
     logger = service_logger(log_directory(PROJECT), "desktop")
     sys.stdout = BoundedLogStream(logger, logging.INFO)
     sys.stderr = BoundedLogStream(logger, logging.ERROR)
     ui = WindowUI()
-    from desktop_windows import preferences, save_close_behavior
+    from classcue.desktop_windows import preferences, save_close_behavior
     lifecycle = Lifecycle(Services(PROJECT), ui,
                           close_behavior=preferences(PROJECT).get("close_behavior", "ask"),
                           save_close_behavior=lambda value: save_close_behavior(PROJECT, value))
@@ -299,7 +299,7 @@ def main(action="activate"):
 
     try:
         import webview
-        from desktop_windows import Tray, install_shortcuts, preferences
+        from classcue.desktop_windows import Tray, install_shortcuts, preferences
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ClassroomVideoStudy.Desktop")
         webview.settings.update(ALLOW_DOWNLOADS=True, ALLOW_FILE_URLS=False)
         if os.getenv("CLASSROOM_DESKTOP_DEBUG_PORT"):

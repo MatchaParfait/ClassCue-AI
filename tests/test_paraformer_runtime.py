@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import asr_models
-import paraformer_runtime
+import classcue.asr_models as asr_models
+import classcue.paraformer_runtime as paraformer_runtime
 
 
 def test_cpu_runtime_installer_never_probes_gpu_or_installs_cuda(tmp_path, monkeypatch):
@@ -253,7 +253,7 @@ def test_model_catalog_uses_explicit_bicif_and_fsmn_without_punctuation_or_speak
 
 
 def test_weight_validation_rejects_standard_non_timestamp_predictor(tmp_path):
-    from paraformer_transcriber import _validate_component
+    from classcue.paraformer_transcriber import _validate_component
 
     for name in asr_models.PARAFORMER_REQUIRED_FILES["recognizer"]:
         (tmp_path / name).write_text("existing")

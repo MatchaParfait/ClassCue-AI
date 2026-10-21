@@ -8,10 +8,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import asr_storage
-from core import TranscriptSegment
-import storage_migration as migration
-from video_store import VideoStore
+import classcue.asr_storage as asr_storage
+from classcue.core import TranscriptSegment
+import classcue.storage_migration as migration
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

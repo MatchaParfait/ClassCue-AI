@@ -10,12 +10,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def main() -> None:
-    from preparation_progress import component_manifest, stage
-    from asr_models import (
+    from classcue.preparation_progress import component_manifest, stage
+    from classcue.asr_models import (
         PARAFORMER_REQUIRED_FILES, _managed_path, component_paths, get_model,
         model_directory,
     )
-    from paraformer_runtime import _validate_weights
+    from classcue.paraformer_runtime import _validate_weights
 
     model = get_model("paraformer-large-cpu")
     directory = model_directory(model.id)

@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import qwen_transcriber
-from qwen_silence import resolve_silence_skipping
-from transcriber import QwenWorker
+import classcue.qwen_transcriber as qwen_transcriber
+from classcue.qwen_silence import resolve_silence_skipping
+from classcue.transcriber import QwenWorker
 
 
 @pytest.mark.parametrize(("profile", "override", "expected"), [

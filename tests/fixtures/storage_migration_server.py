@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import api.main as api_main
-import storage_migration
-from video_store import VideoStore
+import classcue.storage_migration as storage_migration
+from classcue.video_store import VideoStore
 
 
 def application(directory):

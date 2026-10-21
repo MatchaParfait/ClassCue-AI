@@ -29,7 +29,7 @@ if (Test-Path -LiteralPath $Journal) {
 if ($Recovery) {
     & $Python $Recovery --root $ProjectRoot --recover
 } else {
-    & $Python -c "from app_update_install import recover_at_launch; from pathlib import Path; recover_at_launch(Path.cwd())"
+    & $Python -c "from classcue.app_update_install import recover_at_launch; from pathlib import Path; recover_at_launch(Path.cwd())"
 }
 if ($LASTEXITCODE -ne 0) { throw "Update recovery could not finish. See .runtime/updates/backups and docs/releases.md." }
 Write-Host "Checking the bundled GTCRN playback model..." -ForegroundColor Cyan

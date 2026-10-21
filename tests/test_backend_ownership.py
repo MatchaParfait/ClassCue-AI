@@ -11,8 +11,8 @@ import pytest
 
 import api.main as api_main
 from api.main import create_app
-from video_store import VideoStore
-from database_lease import DatabaseBusyError, DatabaseLease
+from classcue.video_store import VideoStore
+from classcue.database_lease import DatabaseBusyError, DatabaseLease
 
 
 def test_repeated_start_cannot_recover_live_servers_job(tmp_path):
@@ -62,7 +62,7 @@ def test_workspace_lock_is_cross_process(tmp_path):
         result = subprocess.run(
             [sys.executable, "-c",
              "from pathlib import Path; import sys;"
-             "from database_lease import DatabaseLease; DatabaseLease().acquire(Path(sys.argv[1]))",
+             "from classcue.database_lease import DatabaseLease; DatabaseLease().acquire(Path(sys.argv[1]))",
              str(database)],
             cwd=Path(__file__).resolve().parents[1],
             capture_output=True, text=True, timeout=20,

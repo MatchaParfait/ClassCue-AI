@@ -14,9 +14,9 @@ CHECKPOINT_SHA256 = "81fec8616083c69377f3ceef36aba3655660ee0ca69a5d4a1e9810cd340
 
 def main():
     import torch
-    from preparation_progress import component_manifest, stage
+    from classcue.preparation_progress import component_manifest, stage
     from funasr.models.fun_asr_nano.checkpoint_utils import normalize_checkpoint_state
-    from asr_models import NANO_REQUIRED_FILES, component_paths, get_model, model_directory
+    from classcue.asr_models import NANO_REQUIRED_FILES, component_paths, get_model, model_directory
 
     model = get_model("fun-asr-nano-2512")
     paths = component_paths(model.id)

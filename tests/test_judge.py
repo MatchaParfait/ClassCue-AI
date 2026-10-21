@@ -1,5 +1,5 @@
-from core import TranscriptSegment
-from judge import LocalJudge
+from classcue.core import TranscriptSegment
+from classcue.judge import LocalJudge
 
 
 class RepairingJudge(LocalJudge):

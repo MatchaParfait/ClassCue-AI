@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import asr_models
-import dolphin_runtime
-import transcriber
+import classcue.asr_models as asr_models
+import classcue.dolphin_runtime as dolphin_runtime
+import classcue.transcriber as transcriber
 
 
 @pytest.fixture

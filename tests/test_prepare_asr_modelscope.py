@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-import asr_models
-from preparation_progress import preparation_events
+import classcue.asr_models as asr_models
+from classcue.preparation_progress import preparation_events
 from scripts import prepare_asr_modelscope as downloader
 
 

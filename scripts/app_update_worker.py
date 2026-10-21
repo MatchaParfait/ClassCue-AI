@@ -7,8 +7,8 @@ import sys
 
 from filelock import FileLock
 
-from app_update_install import apply, launch, recover, recover_at_launch, stage
-from app_updates import read_json, updates_dir, write_json
+from classcue.app_update_install import apply, launch, recover, recover_at_launch, stage
+from classcue.app_updates import read_json, updates_dir, write_json
 
 
 def main(root, plan_id):

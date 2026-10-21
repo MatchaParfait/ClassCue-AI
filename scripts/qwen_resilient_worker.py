@@ -22,10 +22,10 @@ def main():
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    from qwen_resilience import (
+    from classcue.qwen_resilience import (
         Checkpoints, QwenOptions, atomic_json, classify_error, read_audio, read_json, validate_segments,
     )
-    from qwen_memory import memory_snapshot
+    from classcue.qwen_memory import memory_snapshot
 
     request = read_json(args.request)
     manifest, stage = request["manifest"], request["stage"]
@@ -51,7 +51,7 @@ def main():
 
     def monitor():
         while not stop.is_set():
-            from qwen_resilience import gpu_free_mib
+            from classcue.qwen_resilience import gpu_free_mib
             row = {"elapsed_seconds": time.perf_counter() - started, **snapshot(),
                    "device_free_mib": gpu_free_mib()}
             samples.append(row)
@@ -77,12 +77,12 @@ def main():
         with redirect_stdout(sys.stderr):
             import torch
             from qwen_asr import Qwen3ForcedAligner
-            from qwen_transcriber import load_qwen_model, _checkpoint_reader, aligned_segments
-            from qwen_loading import model_loading
-            from qwen_silence import restore_segments
+            from classcue.qwen_transcriber import load_qwen_model, _checkpoint_reader, aligned_segments
+            from classcue.qwen_loading import model_loading
+            from classcue.qwen_silence import restore_segments
 
             if not torch.cuda.is_available():
-                from qwen_resilience import QwenRunError
+                from classcue.qwen_resilience import QwenRunError
                 raise QwenRunError("Qwen GPU 模式需要可用的 CUDA；请检查驱动或选择其他模型")
             torch.set_num_threads(options.cpu_threads)
             paths = manifest["paths"]
@@ -131,7 +131,7 @@ def main():
                         for chunk in group:
                             checkpoints.save("asr", chunk, result.get(chunk["source_chunk_index"], ""))
                         if request.get("stream_preview"):
-                            from qwen_preview import chunk_preview
+                            from classcue.qwen_preview import chunk_preview
                             preview = [segment for chunk in group if (segment := chunk_preview(
                                 chunk, result.get(chunk["source_chunk_index"], ""), manifest["rate"],
                             )) is not None]

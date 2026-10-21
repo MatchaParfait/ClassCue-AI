@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import qwen_runtime
+import classcue.qwen_runtime as qwen_runtime
 
 
 def test_optional_runtime_is_installed_only_into_its_own_environment(tmp_path, monkeypatch):

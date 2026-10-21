@@ -8,15 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_provider import ProviderProfile
-from api_failure import ApiUnavailable
-from core import TranscriptSegment
-from early_extraction import early_analysis
-from exam_point_judge import ExamPointJudge
-from processing_control import ProcessingCancelled, ResourcePaused
-from transcript_events import emit_transcript, transcript_requested
-from video_pipeline import process_video_once
-from video_store import VideoStore
+from classcue.ai_provider import ProviderProfile
+from classcue.api_failure import ApiUnavailable
+from classcue.core import TranscriptSegment
+from classcue.early_extraction import early_analysis
+from classcue.exam_point_judge import ExamPointJudge
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+from classcue.transcript_events import emit_transcript, transcript_requested
+from classcue.video_pipeline import process_video_once
+from classcue.video_store import VideoStore
 
 
 def supplied_ids(request):
@@ -85,7 +85,7 @@ def adapter(lesson, client=None, mode="medium_recall"):
 
 
 def test_validated_chunk_preview_precedes_publication_and_retains_overlap(lesson):
-    from analysis_events import analysis_observer
+    from classcue.analysis_events import analysis_observer
     lesson.store.mark_transcribed(lesson.video_id, lesson.segments)
     events = []
     def preview(video_id, mode, **state):
@@ -106,7 +106,7 @@ def test_validated_chunk_preview_precedes_publication_and_retains_overlap(lesson
 
 
 def test_failed_chunk_keeps_only_previously_validated_preview(lesson):
-    from analysis_events import analysis_observer
+    from classcue.analysis_events import analysis_observer
     lesson.store.mark_transcribed(lesson.video_id, lesson.segments)
     client, events = Client(), []
     def respond(request):
@@ -123,7 +123,7 @@ def test_failed_chunk_keeps_only_previously_validated_preview(lesson):
 
 
 def test_empty_chunk_preview_is_real_progress_not_fake_hits(lesson):
-    from analysis_events import analysis_observer
+    from classcue.analysis_events import analysis_observer
     lesson.store.mark_transcribed(lesson.video_id, lesson.segments)
     events = []
     with analysis_observer(lambda *args, **state: events.append(copy.deepcopy(state))):
@@ -153,7 +153,7 @@ def markers(lesson):
 def test_request_begins_before_asr_finishes_and_final_requests_and_dedup_match_serial(
     lesson, monkeypatch,
 ):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     client = Client()
     asr_finished = Event()
@@ -205,7 +205,7 @@ def test_request_begins_before_asr_finishes_and_final_requests_and_dedup_match_s
     "whisper-turbo", "whisper-large-v3", "qwen3-asr-1.7b", "paraformer-large-cpu", "dolphin-small-cn",
 ])
 def test_other_asr_engines_do_not_enable_early_requests(lesson, monkeypatch, model):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client()
     def transcribe(*_args, **_kwargs):
         assert not transcript_requested()
@@ -216,7 +216,7 @@ def test_other_asr_engines_do_not_enable_early_requests(lesson, monkeypatch, mod
 
 
 def test_short_video_stays_on_normal_path(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client()
     short = lesson.segments[:50]
     def transcribe(*_args, **_kwargs):
@@ -294,7 +294,7 @@ def test_keyword_filter_does_not_mistake_last_selected_chunk_for_unfinished_tail
 
 
 def test_failed_early_request_preserves_transcript_and_is_not_automatically_sent_again(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client(lambda _request: (_ for _ in ()).throw(ConnectionError("fixture-secret offline")))
     def transcribe(*_args, **_kwargs):
         emit_transcript(lesson.segments[:140], 700000)
@@ -311,7 +311,7 @@ def test_failed_early_request_preserves_transcript_and_is_not_automatically_sent
 
 
 def test_early_malformed_response_uses_existing_format_repair(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client()
     def respond(request):
         return "not JSON" if len(client.requests) == 1 else Client.candidates(request)
@@ -334,7 +334,7 @@ def test_early_malformed_response_uses_existing_format_repair(lesson, monkeypatc
 def test_asr_interruption_does_not_publish_early_results_and_resume_reuses_calls(
     lesson, monkeypatch, failure,
 ):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client()
     def interrupted(*_args, **_kwargs):
         emit_transcript(lesson.segments[:140], 700000)
@@ -362,7 +362,7 @@ def test_asr_interruption_does_not_publish_early_results_and_resume_reuses_calls
 
 
 def test_abandoned_prefetch_log_is_reused_after_unexpected_exit(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     client = Client()
     judge = adapter(lesson, client)
     with early_analysis(
@@ -384,7 +384,7 @@ def test_abandoned_prefetch_log_is_reused_after_unexpected_exit(lesson, monkeypa
 
 
 def test_early_transport_retry_uses_existing_limit_and_preserves_logged_usage(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     lesson.profile = lesson.profile.model_copy(update={"max_retries": 1})
     client = Client()
     def respond(request):
@@ -409,7 +409,7 @@ def test_early_transport_retry_uses_existing_limit_and_preserves_logged_usage(le
 
 
 def test_cancel_during_early_request_never_publishes_or_sends_another_request(lesson, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     stopped = Event()
     client = Client()
     def respond(request):
@@ -474,7 +474,7 @@ def test_final_transcript_change_does_not_reuse_a_different_request(lesson):
 def test_forced_retranscription_starts_early_but_preserves_old_results_until_asr_succeeds(
     lesson, monkeypatch,
 ):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     lesson.store.mark_transcribed(lesson.video_id, lesson.segments, "fireredasr2-aed")
     before = Client()
@@ -523,9 +523,9 @@ def test_short_sentence_merging_and_formula_filter_match_full_transcript(lesson,
 
 @pytest.mark.parametrize("offline", [False, True])
 def test_web_batch_preserves_modes_and_saves_asr_when_early_api_fails(lesson, monkeypatch, offline):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     from api.main import VideoProcessPayload
-    from web_batch import make_batch, run_web_batch
+    from classcue.web_batch import make_batch, run_web_batch
 
     options = VideoProcessPayload(
         asr_model_id="fireredasr2-aed", analysis_modes=["medium_recall", "low_recall"],

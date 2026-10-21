@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-import preparation_progress as telemetry
+import classcue.preparation_progress as telemetry
 
 
 def test_transfer_eta_uses_new_bytes_and_expires_when_stalled(monkeypatch):
@@ -99,7 +99,7 @@ def test_callback_cancellation_stops_child_and_propagates():
 
 
 def test_validator_does_not_need_host_network_dependencies(tmp_path, monkeypatch):
-    import asr_models
+    import classcue.asr_models as asr_models
 
     monkeypatch.setattr(asr_models, "MODEL_ROOT", tmp_path)
     directory = asr_models.model_directory("paraformer-large-cpu")
@@ -116,8 +116,8 @@ def test_validator_does_not_need_host_network_dependencies(tmp_path, monkeypatch
     "paraformer-large-cpu", "dolphin-small-cn",
 ])
 def test_preparation_finishes_its_telemetry_before_transcription(monkeypatch, tmp_path, model_id):
-    import asr_models
-    import transcriber
+    import classcue.asr_models as asr_models
+    import classcue.transcriber as transcriber
     monkeypatch.setattr(asr_models, "MODEL_ROOT", tmp_path / "models")
     for name in ("install_runtime", "install_firered_runtime", "install_paraformer_runtime", "install_dolphin_runtime"):
         monkeypatch.setattr(transcriber, name, lambda *_a, **_kw: telemetry.stage(

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import paraformer_transcriber as paraformer
+import classcue.paraformer_transcriber as paraformer
 from scripts import paraformer_worker
 
 

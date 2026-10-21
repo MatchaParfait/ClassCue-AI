@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from playback_denoise import HOP_SIZE, SAMPLE_RATE, PlaybackDenoiser
+from classcue.playback_denoise import HOP_SIZE, SAMPLE_RATE, PlaybackDenoiser
 
 router = APIRouter()
 LOGGER = logging.getLogger(f"classroom.{__name__}")

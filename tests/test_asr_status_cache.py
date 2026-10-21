@@ -6,10 +6,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import asr_models
-import asr_status_cache
-from asr_status_cache import AsrStatusCache
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+import classcue.asr_status_cache as asr_status_cache
+from classcue.asr_status_cache import AsrStatusCache
+from classcue.video_store import VideoStore
 
 
 def test_directory_sizes_survive_expired_status_and_restart(tmp_path, monkeypatch):

@@ -9,7 +9,7 @@ import av
 import numpy as np
 import uvicorn
 from api.main import create_app
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 root = Path(sys.argv[1]) / "workspace"

@@ -1,6 +1,6 @@
 import pytest
 
-from core import (
+from classcue.core import (
     CandidateDecision,
     TranscriptSegment,
     build_candidate_window,
@@ -16,8 +16,8 @@ from core import (
     validate_decision,
     validate_trigger_groups,
 )
-from db import Database
-from runtime import select_whisper_backend
+from classcue.db import Database
+from classcue.runtime import select_whisper_backend
 
 
 @pytest.fixture

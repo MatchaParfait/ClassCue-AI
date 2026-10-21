@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.launcher_process import BoundedLogStream, service_logger
 from scripts.service_ports import API_BIND_FAILED, bind_server_socket
-from asr_storage import log_directory
+from classcue.asr_storage import log_directory
 
 
 def main() -> int:

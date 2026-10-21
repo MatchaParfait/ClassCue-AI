@@ -14,15 +14,13 @@ sys.path.insert(0, str(ROOT))
 def main():
     import av
     import numpy as np
-    from video_store import VideoStore
+    from classcue.video_store import VideoStore
 
     project = ROOT / ".runtime" / f"desktop-qa-{time.time_ns()}"
     project.mkdir(parents=True)
-    for source in ROOT.glob("*.py"):
-        shutil.copy2(source, project / source.name)
     for name in ("pyproject.toml", "release_config.json", "uv.lock"):
         shutil.copy2(ROOT / name, project / name)
-    for folder in ("api", "scripts"):
+    for folder in ("classcue", "api", "scripts"):
         shutil.copytree(ROOT / folder, project / folder, ignore=shutil.ignore_patterns(
             "__pycache__", "*.pyc", "*.ps1", "*.vbs", "*.cjs",
         ))
@@ -74,7 +72,7 @@ def main():
         return {"job_id": jobs.submit("desktop_qa", None, operation)}
 
 '''
-    text = text.replace("    from frontend_host import mount_frontend", qa_route + "    from frontend_host import mount_frontend")
+    text = text.replace("    from classcue.frontend_host import mount_frontend", qa_route + "    from classcue.frontend_host import mount_frontend")
     api_path.write_text(text, encoding="utf-8")
     print(json.dumps({"project": str(project), "data": str(data)}, ensure_ascii=True))
 

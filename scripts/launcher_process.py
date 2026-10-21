@@ -26,7 +26,7 @@ class RedactingRotatingFileHandler(RotatingFileHandler):
         )
 
     def format(self, record):
-        from diagnostics import redact_text
+        from classcue.diagnostics import redact_text
 
         text = redact_text(super().format(record))
         data = text.encode(self.encoding or "utf-8", errors="replace")
@@ -44,7 +44,7 @@ class RedactingRotatingFileHandler(RotatingFileHandler):
     def handleError(self, record):
         # stderr is itself captured while serving; never send logging errors there.
         try:
-            from diagnostics import redact_text
+            from classcue.diagnostics import redact_text
 
             stream = sys.__stderr__
             if stream is not None and not isinstance(stream, BoundedLogStream):
@@ -76,7 +76,7 @@ class BoundedLogStream:
         self.lock = RLock()
 
     def write(self, text: str) -> int:
-        from diagnostics import redact_text
+        from classcue.diagnostics import redact_text
 
         with self.lock:
             self.pending += text
@@ -94,7 +94,7 @@ class BoundedLogStream:
         return len(text)
 
     def _line(self, text: str) -> None:
-        from diagnostics import redact_text
+        from classcue.diagnostics import redact_text
 
         text = redact_text(text)
         for offset in range(0, len(text), 8192):

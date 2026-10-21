@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from playback_denoise import verify_model as verify, verify_model_assets
+from classcue.playback_denoise import verify_model as verify, verify_model_assets
 
 
 def main():

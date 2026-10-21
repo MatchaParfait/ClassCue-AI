@@ -1,7 +1,7 @@
 import sqlite3
 
-from core import TranscriptSegment, TriggerMatch
-from video_store import VideoStore
+from classcue.core import TranscriptSegment, TriggerMatch
+from classcue.video_store import VideoStore
 
 
 def test_video_store_persists_transcript_and_deletable_marker(tmp_path):

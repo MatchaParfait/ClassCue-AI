@@ -18,9 +18,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app_updates import write_json
-from app_version import VERSION
-from release_security import (
+from classcue.app_updates import write_json
+from classcue.app_version import VERSION
+from classcue.release_security import (
     MARKER, MAX_METADATA, MAX_PACKAGE, MAX_UNPACKED, asset_url, canonical, config, digest, managed_name,
     runtime_hash, safe_target, sign, validate_feed, validate_inventory, validate_zip_entry, verify, version,
 )
@@ -115,7 +115,7 @@ def build(root, output, tag=None, notes="", include_untracked=False):
         raise ValueError("请先构建 frontend")
     files = source_files(root, include_untracked=include_untracked)
     files.update(path.relative_to(root).as_posix() for path in (root / "frontend/dist").rglob("*") if path.is_file())
-    if not {"app_updates.py", "app_update_install.py", "app_version.py", "release_security.py",
+    if not {"classcue/app_updates.py", "classcue/app_update_install.py", "classcue/app_version.py", "classcue/release_security.py",
             "api/updates.py", "scripts/app_update_worker.py"}.issubset(files):
         raise ValueError("缺少已跟踪的更新模块，请先提交代码。本地未提交验收可显式使用 --include-untracked")
     for name in files:

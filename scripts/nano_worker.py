@@ -32,12 +32,12 @@ def main():
         try:
             request = json.loads(line)
             with redirect_stdout(sys.stderr):
-                from nano_transcriber import (
+                from classcue.nano_transcriber import (
                     DEFAULT_BATCH_SIZE, load_nano_model, transcribe_nano,
                     is_cuda_oom, release_cuda_memory,
                 )
-                from processing_control import ResourcePaused
-                from asr_cpu import cpu_thread_policy
+                from classcue.processing_control import ResourcePaused
+                from classcue.asr_cpu import cpu_thread_policy
 
                 policy = cpu_thread_policy(device, request.get("cpu_threads"))
                 audit.update(policy)
@@ -73,7 +73,7 @@ def main():
                   "duration_ms": duration, "audit": audit})
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            from processing_control import ResourcePaused
+            from classcue.processing_control import ResourcePaused
 
             if isinstance(exc, ResourcePaused):
                 model, key = None, None

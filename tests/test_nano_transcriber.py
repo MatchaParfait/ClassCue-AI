@@ -6,8 +6,8 @@ import wave
 import numpy as np
 import pytest
 
-import nano_transcriber as nano
-from processing_control import ResourcePaused
+import classcue.nano_transcriber as nano
+from classcue.processing_control import ResourcePaused
 
 
 class CharacterTokenizer:

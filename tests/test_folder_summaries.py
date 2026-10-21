@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import path_picker
-from picker_manager import PickerManager
+import classcue.path_picker as path_picker
+from classcue.picker_manager import PickerManager
 
 
 def make_manager(*, ttl=900):

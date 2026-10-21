@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_provider import ProviderProfile
-from core import TranscriptSegment
-from llm_experiments import (
+from classcue.ai_provider import ProviderProfile
+from classcue.core import TranscriptSegment
+from classcue.llm_experiments import (
     LabCandidate, LabConfig, execute_run, load_prompt_bundle, numbered_transcript,
     prepare_snapshot, register_run, require_approval, validate_candidates,
 )
-from processing_control import ProcessingCancelled
-from video_store import VideoStore
+from classcue.processing_control import ProcessingCancelled
+from classcue.video_store import VideoStore
 
 
 class FakeClient:
@@ -309,7 +309,7 @@ def test_all_few_shot_examples_match_the_local_output_contract(variant):
 
 
 def test_precision_variant_preserves_default_and_freezes_separate_criteria(fixture):
-    from llm_experiments import PROMPT_DIRECTORY, digest
+    from classcue.llm_experiments import PROMPT_DIRECTORY, digest
 
     original = {
         name: (PROMPT_DIRECTORY / f"{name}.md").read_text(encoding="utf-8").strip()
@@ -345,7 +345,7 @@ def test_precision_variant_preserves_default_and_freezes_separate_criteria(fixtu
 
 
 def test_low_recall_variant_is_separate_and_keeps_high_effort_and_original_contract(fixture):
-    from llm_experiments import render_messages
+    from classcue.llm_experiments import render_messages
 
     strict = load_prompt_bundle(variant="low_recall")
     baseline = load_prompt_bundle()
@@ -777,7 +777,7 @@ def test_transcript_data_cannot_close_prompt_delimiters(fixture):
 def test_preview_api_is_offline_and_execution_requires_approval(fixture, monkeypatch):
     import api.main as api_main
     from fastapi.testclient import TestClient
-    from ai_provider import ProviderSettings
+    from classcue.ai_provider import ProviderSettings
 
     store, video_id, profile = fixture
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: ProviderSettings(profile=profile))
@@ -803,7 +803,7 @@ def test_preview_api_is_offline_and_execution_requires_approval(fixture, monkeyp
 def test_approved_api_run_freezes_config_and_exposes_all_logs(fixture, monkeypatch):
     import api.main as api_main
     from fastapi.testclient import TestClient
-    from ai_provider import ProviderSettings
+    from classcue.ai_provider import ProviderSettings
 
     store, video_id, profile = fixture
     settings = {"current": ProviderSettings(profile=profile)}
@@ -844,7 +844,7 @@ def test_approved_api_run_freezes_config_and_exposes_all_logs(fixture, monkeypat
 def test_api_exposes_format_statistics_even_when_repair_limit_is_exhausted(fixture, monkeypatch):
     import api.main as api_main
     from fastapi.testclient import TestClient
-    from ai_provider import ProviderSettings
+    from classcue.ai_provider import ProviderSettings
 
     store, video_id, profile = fixture
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: ProviderSettings(profile=profile))

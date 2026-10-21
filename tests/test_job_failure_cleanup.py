@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from api.main import JobManager
-from diagnostics import register_secret
-from processing_control import ProcessingCancelled
-from video_store import VideoStore
+from classcue.diagnostics import register_secret
+from classcue.processing_control import ProcessingCancelled
+from classcue.video_store import VideoStore
 
 
 @pytest.mark.parametrize("phase", ["initial_state", "request_state", "executor"])

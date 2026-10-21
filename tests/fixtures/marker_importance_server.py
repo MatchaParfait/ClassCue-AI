@@ -6,9 +6,9 @@ import sys
 sys.path.insert(0, str(Path.cwd()))
 
 import api.main as api_main
-from core import TranscriptSegment
+from classcue.core import TranscriptSegment
 import uvicorn
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 root = Path(sys.argv[1])

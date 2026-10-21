@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qwen_boundaries import plan_spans, quietest_sample
+from classcue.qwen_boundaries import plan_spans, quietest_sample
 
 
 def test_energy_matches_qwen_window_search_for_unambiguous_minimum():

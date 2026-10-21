@@ -46,7 +46,7 @@ GET /api/videos/{video_id}/preview-frame?time_ms=1877520&library_id=...
 - `frontend/src/components/VideoPanel.tsx`：元数据加载后消费导航时间。
 - `frontend/src/api/client.ts` / `types.ts`：接口及响应类型。
 - `frontend/src/components/SearchFramePreview.tsx` / `searchPreviewPlacement.ts`：悬停延迟、图片状态和避让定位。
-- `video_thumbnail.py` / `api/main.py`：按时间取帧及本地缓存接口。
+- `classcue/video_thumbnail.py` / `api/main.py`：按时间取帧及本地缓存接口。
 
 ## 验证
 

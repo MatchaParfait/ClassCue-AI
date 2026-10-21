@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import qwen_transcriber
+import classcue.qwen_transcriber as qwen_transcriber
 
 
 def test_batch_calls_official_api_with_list_and_restores_model_setting(monkeypatch):

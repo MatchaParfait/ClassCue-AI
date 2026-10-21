@@ -9,9 +9,9 @@ from threading import Barrier
 
 import pytest
 
-from core import TranscriptSegment
-import video_store
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+import classcue.video_store as video_store
+from classcue.video_store import VideoStore
 
 
 LEGACY_MARKERS = """
@@ -241,7 +241,7 @@ def test_process_exit_mid_migration_is_recoverable(legacy_database, stage):
     code = """
 import os
 import sys
-import video_store
+from classcue import video_store
 
 class InterruptedConnection(video_store.ClosingConnection):
     def execute(self, sql, *args, **kwargs):

@@ -6,11 +6,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import application_data_migration as migration
-import asr_storage
-from core import TranscriptSegment
-from database_lease import DatabaseBusyError, DatabaseLease
-from video_store import VideoStore
+import classcue.application_data_migration as migration
+import classcue.asr_storage as asr_storage
+from classcue.core import TranscriptSegment
+from classcue.database_lease import DatabaseBusyError, DatabaseLease
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

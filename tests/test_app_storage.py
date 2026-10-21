@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-import app_storage
+import classcue.app_storage as app_storage
 from api.main import StoreProvider
 
 

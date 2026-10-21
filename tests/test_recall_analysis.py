@@ -6,10 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-import video_pipeline
+import classcue.video_pipeline as video_pipeline
 from api.main import VideoProcessPayload
-from core import TranscriptSegment
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

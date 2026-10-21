@@ -47,9 +47,9 @@ async function main() {
   api = `http://127.0.0.1:${apiPort}`;
   const seed = spawnSync(python, ["-c", `
 from pathlib import Path
-from video_store import VideoStore
-from asr_storage import library_identity, audio_directory
-from desktop_startup import save_library_snapshot
+from classcue.video_store import VideoStore
+from classcue.asr_storage import library_identity, audio_directory
+from classcue.desktop_startup import save_library_snapshot
 import video_thumbnail
 import os
 project=Path.cwd()

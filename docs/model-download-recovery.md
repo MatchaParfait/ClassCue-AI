@@ -16,7 +16,7 @@
 
 ## 数据与恢复
 
-`model_downloads.py` 在应用管理的各模型目录内原子写入 `.preparation-state.json`，保留设备、阶段、当前文件和接收字节量。正常完成后移除；上次状态为准备中、但不存在运行任务时解释为异常中断。
+`classcue/model_downloads.py` 在应用管理的各模型目录内原子写入 `.preparation-state.json`，保留设备、阶段、当前文件和接收字节量。正常完成后移除；上次状态为准备中、但不存在运行任务时解释为异常中断。
 
 原有任务状态保持兼容：主动暂停使用 `status=interrupted`、`stage=download_paused`；保存续传记录时使用 `stage=pausing`。前端据此显示暂停状态，不弹出任务失败错误。
 

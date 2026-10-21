@@ -2,9 +2,9 @@ import sqlite3
 
 import pytest
 
-from db import Database
-from sqlite_connection import ClosingConnection
-from video_store import VideoStore
+from classcue.db import Database
+from classcue.sqlite_connection import ClosingConnection
+from classcue.video_store import VideoStore
 
 
 def assert_closed(connection):

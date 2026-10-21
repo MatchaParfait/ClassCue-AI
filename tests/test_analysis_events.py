@@ -1,6 +1,6 @@
 from threading import Event
 
-from analysis_events import LiveAnalysisBuffer, analysis_observer, emit_analysis
+from classcue.analysis_events import LiveAnalysisBuffer, analysis_observer, emit_analysis
 
 
 def result(start=0, title="考点"):
@@ -45,7 +45,7 @@ def test_buffer_is_bounded_deduplicated_and_isolated():
 def test_job_endpoint_retains_preview_without_publishing_markers(tmp_path):
     from api.main import create_app
     from fastapi.testclient import TestClient
-    from video_store import VideoStore
+    from classcue.video_store import VideoStore
 
     store = VideoStore(tmp_path / "test.db")
     video_id = store.create_video("hash", "lesson.mp4", "lesson.mp4", "lesson.wav", 1000)

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import api.denoise as transport
-from playback_denoise import HOP_SIZE, MODEL_PATH, PlaybackDenoiser
+from classcue.playback_denoise import HOP_SIZE, MODEL_PATH, PlaybackDenoiser
 from scripts.prepare_gtcrn import verify
 
 

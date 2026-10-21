@@ -6,10 +6,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import asr_models
-import cleanup_progress
-import dolphin_runtime
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+import classcue.cleanup_progress as cleanup_progress
+import classcue.dolphin_runtime as dolphin_runtime
+from classcue.video_store import VideoStore
 
 
 def wait_job(client, job_id):

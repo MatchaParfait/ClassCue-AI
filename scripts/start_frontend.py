@@ -22,9 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app_storage import load_data_root
-from asr_storage import log_directory, library_identity
-import application_data_migration
+from classcue.app_storage import load_data_root
+from classcue.asr_storage import log_directory, library_identity
+import classcue.application_data_migration as application_data_migration
 from scripts.launcher_process import (
     attach_cleanup_job, launcher_logger, release_cleanup_job, resume_owned_process,
     terminate_owned_tree,

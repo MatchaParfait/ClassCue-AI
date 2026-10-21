@@ -5,7 +5,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app_updates import write_json
+from classcue.app_updates import write_json
 
 
 class Preferences(BaseModel):

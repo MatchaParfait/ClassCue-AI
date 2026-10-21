@@ -1,6 +1,6 @@
-from batch_processing import estimate_remaining, format_eta, run_batch
-from core import SemanticSelection, TranscriptSegment
-from video_store import VideoStore
+from classcue.batch_processing import estimate_remaining, format_eta, run_batch
+from classcue.core import SemanticSelection, TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 def test_eta_uses_recorded_stage_speed_and_pipeline_bottleneck(tmp_path):

@@ -2,11 +2,11 @@
 
 应用现在固定使用一个视频库，课程通过现有视频库文件夹分类。已移除 React 设置页、旧版 Streamlit 管理页及 CLI 中的工作区创建／切换入口，也删除了相应 API、可切换的数据访问对象和工作区配置模块。
 
-`app_storage.py` 管理唯一的数据目录。新安装默认使用 `data/library/project.db`；现有安装通过 `data/asr_storage.json` 的 `library_data_dir` 沿用当前数据位置。数据库、字幕、考点、人工修改、复习状态和视频文件不会因此被重建、合并或删除。`CLASSROOM_DATA_ROOT` 只用于隔离开发／测试实例，不提供运行期间切换能力。
+`classcue/app_storage.py` 管理唯一的数据目录。新安装默认使用 `data/library/project.db`；现有安装通过 `data/asr_storage.json` 的 `library_data_dir` 沿用当前数据位置。数据库、字幕、考点、人工修改、复习状态和视频文件不会因此被重建、合并或删除。`CLASSROOM_DATA_ROOT` 只用于隔离开发／测试实例，不提供运行期间切换能力。
 
 目录配置现在直接保存 `audio_cache_dir`、`video_library_dir`、`delete_source_after_import`，不再维护按工作区路径索引的多份设置。后续已补充[保守的目录迁移](storage-migration.md)：视频和音频绑定到同一父目录并统一迁移；模型权重和缓存可另行迁移，运行环境和历史日志保留。较小的数据库、设置和加密凭据使用独立的“应用数据”入口，确认弹窗后迁移并立即重启，仍使用同一个视频库。
 
-`StoreProvider` 在首次访问时固定一个数据库，运行期间不会跟随配置变化切换。`database_lease.py` 保留跨进程独占锁和启动恢复保护，移除了数据库切换和锁转移机制。
+`StoreProvider` 在首次访问时固定一个数据库，运行期间不会跟随配置变化切换。`classcue/database_lease.py` 保留跨进程独占锁和启动恢复保护，移除了数据库切换和锁转移机制。
 
 `GET /api/library/status` 取代原工作区状态查询。`library_id` 初始由数据库绝对路径计算，应用数据迁移后保存原值，用于缩略图版本、搜索画面、搜索跳转与播放进度的身份校验；`library_scope` 同样保留迁移前的导航作用域。二者不表示可选择的项目。所有工作区创建／切换接口均不存在。
 

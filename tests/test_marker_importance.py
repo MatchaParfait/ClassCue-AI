@@ -4,8 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from core import TranscriptSegment
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

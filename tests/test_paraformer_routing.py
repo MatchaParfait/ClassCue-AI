@@ -1,6 +1,6 @@
 import pytest
 
-from paraformer_routing import gpu_batch_size, select_batch_size
+from classcue.paraformer_routing import gpu_batch_size, select_batch_size
 
 
 @pytest.mark.parametrize("total,batch", [

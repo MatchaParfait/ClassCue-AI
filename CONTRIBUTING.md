@@ -2,6 +2,12 @@
 
 ## Development setup
 
+Application Python modules live in `classcue/`; `api/` contains HTTP routes and
+`scripts/` contains executable launch, preparation, and release tools. Use
+package imports such as `from classcue.video_store import VideoStore` and keep
+new application modules out of the repository root. See the directory map in
+the development guide for entry points and installation-relative resources.
+
 See [the development guide](docs/development.md) for local setup, startup
 commands, API and model implementation details, and tests. Maintainers should
 also read [the release and announcement guide](docs/releases.md).

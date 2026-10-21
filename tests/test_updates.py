@@ -17,10 +17,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from app_update_install import apply, inventory, recover, stage
-from app_updates import UpdateCenter, read_json, write_json
-from app_version import VERSION
-from release_security import (
+from classcue.app_update_install import apply, inventory, recover, stage
+from classcue.app_updates import UpdateCenter, read_json, write_json
+from classcue.app_version import VERSION
+from classcue.release_security import (
     MARKER, asset_url, canonical, digest, managed_name, runtime_hash, sign,
     validate_feed, validate_inventory, verify,
 )
@@ -179,7 +179,7 @@ def test_sqlite_snapshot_is_consistent_and_never_restored_over_user_data(distrib
 
 
 def test_busy_database_is_not_touched_by_installer(distribution):
-    from database_lease import DatabaseLease, DatabaseBusyError
+    from classcue.database_lease import DatabaseLease, DatabaseBusyError
     d = distribution
     database = d.root / "data/project.db"
     plan = d.center.reserve_install()
@@ -196,7 +196,7 @@ def test_busy_database_is_not_touched_by_installer(distribution):
 
 
 def test_failed_replacement_rolls_back_all_touched_program_files(distribution, monkeypatch):
-    import app_update_install as installer
+    import classcue.app_update_install as installer
     d = distribution
     plan = d.center.reserve_install()
     staged, old, new = stage(d.root, plan)
@@ -219,7 +219,7 @@ def test_failed_replacement_rolls_back_all_touched_program_files(distribution, m
 
 
 def test_interrupted_replacement_is_recoverable(distribution, monkeypatch):
-    import app_update_install as installer
+    import classcue.app_update_install as installer
     d = distribution
     plan = d.center.reserve_install()
     staged, old, new = stage(d.root, plan)
@@ -360,7 +360,7 @@ def test_missing_or_damaged_configuration_disables_updates_without_breaking_loca
 
 
 def test_native_install_rejects_unsaved_busy_and_foreign_pages():
-    from desktop_runtime import Lifecycle
+    from classcue.desktop_runtime import Lifecycle
     from scripts.desktop_app import NativeAPI
     ui = SimpleNamespace(window=SimpleNamespace(get_current_url=lambda: "http://127.0.0.1:8765/"))
     services = SimpleNamespace(origin="http://127.0.0.1:8765")
@@ -378,17 +378,20 @@ def test_native_install_rejects_unsaved_busy_and_foreign_pages():
 
 
 def test_detached_helper_preflights_then_waits_for_native_host_before_replacing(distribution):
-    from app_update_install import prepare_helper, spawn_helper
+    from classcue.app_update_install import prepare_helper, spawn_helper
     from filelock import FileLock
     d = distribution
     source_root = Path(__file__).resolve().parents[1]
-    for name in ["app_update_install.py", "app_updates.py", "app_version.py", "release_security.py", "database_lease.py"]:
-        shutil.copy2(source_root / name, d.root / name)
+    package = d.root / "classcue"
+    package.mkdir()
+    for name in ["__init__.py", "paths.py", "app_update_install.py", "app_updates.py",
+                 "app_version.py", "release_security.py", "database_lease.py"]:
+        shutil.copy2(source_root / "classcue" / name, package / name)
     shutil.copy2(source_root / "scripts/app_update_worker.py", d.root / "scripts/app_update_worker.py")
     plan = d.center.reserve_install()
     helper = prepare_helper(d.root, plan)
     # The production worker runs unchanged; replace only its final GUI launch.
-    installer = helper / "app_update_install.py"
+    installer = helper / "classcue" / "app_update_install.py"
     installer.write_text(installer.read_text(encoding="utf-8") +
                          "\n\ndef launch(root):\n    write_json(updates_dir(root) / 'qa-launched.json', {'ok': True})\n",
                          encoding="utf-8")
@@ -416,7 +419,7 @@ def test_publisher_includes_only_tracked_program_files_and_prebuilt_frontend(dis
     from scripts.release import build, verify_package
     d = distribution
     monkeypatch.setenv("RELEASE_SIGNING_KEY", d.private)
-    required = ["app_updates.py", "app_update_install.py", "app_version.py", "release_security.py",
+    required = ["classcue/app_updates.py", "classcue/app_update_install.py", "classcue/app_version.py", "classcue/release_security.py",
                 "api/updates.py", "scripts/app_update_worker.py"]
     for name in required:
         target = d.root / name

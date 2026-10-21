@@ -7,13 +7,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import batch_processing
-from core import TranscriptSegment
-import firered_resilience as fr
-from processing_control import ResourcePaused
+import classcue.batch_processing as batch_processing
+from classcue.core import TranscriptSegment
+import classcue.firered_resilience as fr
+from classcue.processing_control import ResourcePaused
 from tests.test_qwen_resource_integration import configure_judge, wait_for
-import video_pipeline
-from video_store import VideoStore
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture
@@ -133,8 +133,8 @@ def test_shared_batch_retains_firered_limits_and_resets_next_queue(tmp_path, sto
 
 
 def test_api_batch_resume_resets_firered_limits_and_supports_skip(store, monkeypatch, tmp_path):
-    import web_batch
-    from ai_provider import ProviderProfile
+    import classcue.web_batch as web_batch
+    from classcue.ai_provider import ProviderProfile
     configure_judge(monkeypatch)
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: SimpleNamespace(
         active_profile=ProviderProfile(base_url="https://unused.example/v1", model="fixture"),

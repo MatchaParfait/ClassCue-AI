@@ -9,9 +9,9 @@ import wave
 import numpy as np
 import pytest
 
-from core import TranscriptSegment
-import paraformer_transcriber as paraformer
-import transcriber
+from classcue.core import TranscriptSegment
+import classcue.paraformer_transcriber as paraformer
+import classcue.transcriber as transcriber
 
 
 def test_official_timestamp_units_map_to_absolute_word_and_subtitle_times():
@@ -218,7 +218,7 @@ def test_invalid_vad_device_is_rejected_before_loading(tmp_path, device, vad_dev
 
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
 def test_worker_launch_selects_matching_runtime_and_hides_cuda_only_for_cpu(tmp_path, monkeypatch, device):
-    import paraformer_runtime
+    import classcue.paraformer_runtime as paraformer_runtime
 
     monkeypatch.setattr(transcriber, "ROOT", tmp_path)
     monkeypatch.setattr(transcriber, "paraformer_runtime_is_ready", lambda value: value == device)
@@ -243,7 +243,7 @@ def test_worker_launch_selects_matching_runtime_and_hides_cuda_only_for_cpu(tmp_
 
 
 def test_switching_paraformer_device_rebuilds_worker_and_closes_old_process(tmp_path, monkeypatch):
-    import asr_models
+    import classcue.asr_models as asr_models
 
     devices = iter(["cpu", "cpu", "gpu"])
     launched, closed = [], []

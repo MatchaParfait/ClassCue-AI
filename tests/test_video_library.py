@@ -8,11 +8,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-from core import TranscriptSegment
-import video_library
-import video_pipeline
-from video_library import register_managed_video, video_filename
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+import classcue.video_library as video_library
+import classcue.video_pipeline as video_pipeline
+from classcue.video_library import register_managed_video, video_filename
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

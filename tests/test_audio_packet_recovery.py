@@ -7,8 +7,8 @@ import av
 import numpy as np
 import pytest
 
-from qwen_transcriber import stream_decode_audio_to_wav
-from processing_control import ProcessingCancelled
+from classcue.qwen_transcriber import stream_decode_audio_to_wav
+from classcue.processing_control import ProcessingCancelled
 
 
 def packet(start, duration=.02, *, corrupt=False, untimed=False):

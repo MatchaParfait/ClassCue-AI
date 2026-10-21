@@ -1,11 +1,11 @@
 from dataclasses import asdict
 import json
 
-from core import TranscriptSegment
-from live_transcript import LiveTranscriptBuffer
-from qwen_preview import chunk_preview, publish_cached_preview
-from qwen_resilience import Checkpoints, run_attempt
-from transcript_events import transcript_listener, transcript_observer, emit_transcript_preview
+from classcue.core import TranscriptSegment
+from classcue.live_transcript import LiveTranscriptBuffer
+from classcue.qwen_preview import chunk_preview, publish_cached_preview
+from classcue.qwen_resilience import Checkpoints, run_attempt
+from classcue.transcript_events import transcript_listener, transcript_observer, emit_transcript_preview
 
 
 def chunk(start=16000, end=48000):
@@ -31,8 +31,8 @@ def test_preview_only_never_reaches_early_llm_and_failure_is_best_effort():
 
 
 def test_worker_events_reach_ui_before_exit_without_progress_callback(tmp_path, monkeypatch):
-    import qwen_process
-    import qwen_runtime
+    import classcue.qwen_process as qwen_process
+    import classcue.qwen_runtime as qwen_runtime
     buffer, analysis = LiveTranscriptBuffer(), []
     row = chunk_preview(chunk(), "真实 Qwen 文字", 16000)
     def worker(_command, **kwargs):

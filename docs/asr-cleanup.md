@@ -18,7 +18,7 @@ DELETE /api/asr/models/{model_id}/runtime?device=cpu|gpu
 
 ## 性能与安全
 
-原实现对每个后代重复 `Path.resolve()`，随后再遍历统计容量、递归遍历删除。`cleanup_progress.py` 将目录安全检查、文件数量和容量统计合并为一份清单，删除时直接消费清单。
+原实现对每个后代重复 `Path.resolve()`，随后再遍历统计容量、递归遍历删除。`classcue/cleanup_progress.py` 将目录安全检查、文件数量和容量统计合并为一份清单，删除时直接消费清单。
 
 - 先确认所有绝对目标都位于应用管理根目录，拒绝重叠目标。
 - 扫描使用 `os.scandir` 和不跟随链接的文件元数据，不对每个文件反复解析整条路径。

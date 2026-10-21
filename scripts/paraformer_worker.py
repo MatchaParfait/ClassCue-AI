@@ -35,13 +35,13 @@ def main() -> None:
         try:
             request = json.loads(line)
             with redirect_stdout(sys.stderr):
-                from paraformer_transcriber import (
+                from classcue.paraformer_transcriber import (
                     is_cuda_oom, load_paraformer_model,
                     release_cuda_memory, transcribe_paraformer,
                 )
-                from paraformer_routing import select_batch_size
-                from processing_control import ResourcePaused
-                from asr_cpu import cpu_thread_policy
+                from classcue.paraformer_routing import select_batch_size
+                from classcue.processing_control import ResourcePaused
+                from classcue.asr_cpu import cpu_thread_policy
 
                 policy = cpu_thread_policy(device, request.get("cpu_threads"))
                 audit.update(policy)
@@ -107,7 +107,7 @@ def main() -> None:
                   "duration_ms": duration_ms, "audit": audit})
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            from processing_control import ResourcePaused
+            from classcue.processing_control import ResourcePaused
 
             if isinstance(exc, ResourcePaused):
                 # Release the resident model before the paused worker waits for another request.

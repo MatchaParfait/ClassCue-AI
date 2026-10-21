@@ -4,10 +4,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 import api.main as api_main
-import asr_models
-import model_downloads
-from preparation_progress import checkpoint, stage
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+import classcue.model_downloads as model_downloads
+from classcue.preparation_progress import checkpoint, stage
+from classcue.video_store import VideoStore
 
 
 def wait_job(client, job_id):

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import httpx
-import asr_models
+import classcue.asr_models as asr_models
 from scripts import prepare_asr_modelscope as downloader
 
 

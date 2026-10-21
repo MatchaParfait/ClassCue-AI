@@ -5,13 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from video_store import VideoStore
-from video_thumbnail import video_preview_frame
+from classcue.video_store import VideoStore
+from classcue.video_thumbnail import video_preview_frame
 from tests.test_video_thumbnail import make_video, decoded_image, np
 
 
 def test_preview_seeks_to_requested_frame_and_shares_cache(tmp_path, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
 
     source = tmp_path / "lesson.mkv"
     make_video(source)
@@ -43,7 +43,7 @@ def test_preview_keeps_aspect_ratio_limits_size_and_invalidates_changed_source(t
 
 def test_endpoint_validates_workspace_time_and_reuses_configured_cache(tmp_path, monkeypatch):
     import api.main as api_main
-    import asr_storage
+    import classcue.asr_storage as asr_storage
 
     project, workspace, cache = tmp_path / "application", tmp_path / "workspace", tmp_path / "cache"
     monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", project)

@@ -1,4 +1,4 @@
-from local_credentials import delete_api_key, load_api_key, save_api_key
+from classcue.local_credentials import delete_api_key, load_api_key, save_api_key
 
 
 def test_api_key_memory_is_encrypted_and_deletable(tmp_path):

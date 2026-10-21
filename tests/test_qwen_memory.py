@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from qwen_memory import ensure_memory_headroom, memory_snapshot
-import transcriber
+from classcue.qwen_memory import ensure_memory_headroom, memory_snapshot
+import classcue.transcriber as transcriber
 
 
 def test_safety_guard_checks_both_physical_and_commit_headroom():

@@ -6,8 +6,8 @@ import wave
 import numpy as np
 import pytest
 
-import dolphin_transcriber as dolphin
-from processing_control import ResourcePaused
+import classcue.dolphin_transcriber as dolphin
+from classcue.processing_control import ResourcePaused
 
 
 def output(text="\u4f60", start=.06):
@@ -75,7 +75,7 @@ def pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(dolphin, "release_cuda_memory", lambda: None)
     monkeypatch.setattr(dolphin, "trim_cuda_cache", lambda _model, _audit: None)
     monkeypatch.setattr(dolphin, "is_cuda_oom", lambda exc: isinstance(exc, OOM))
-    monkeypatch.setattr("qwen_memory.ensure_memory_headroom", lambda **_kw: None)
+    monkeypatch.setattr("classcue.qwen_memory.ensure_memory_headroom", lambda **_kw: None)
     calls, active = [], []
 
     @contextmanager
@@ -247,7 +247,7 @@ def test_system_memory_guard_pauses_before_inference(pipeline, tmp_path, monkeyp
     def fail(**_kwargs):
         raise RuntimeError("insufficient system commit")
 
-    monkeypatch.setattr("qwen_memory.ensure_memory_headroom", fail)
+    monkeypatch.setattr("classcue.qwen_memory.ensure_memory_headroom", fail)
     with pytest.raises(ResourcePaused, match="system commit") as error:
         dolphin.transcribe_dolphin(pipeline.model, "source", temporary_directory=tmp_path)
     assert error.value.failure == {"stage": "memory_headroom"}
@@ -263,7 +263,7 @@ def test_headroom_recovery_frees_cache_once_then_requires_the_same_threshold(mon
             raise RuntimeError("insufficient commit")
 
     released = []
-    monkeypatch.setattr("qwen_memory.ensure_memory_headroom", check)
+    monkeypatch.setattr("classcue.qwen_memory.ensure_memory_headroom", check)
     monkeypatch.setattr(dolphin, "release_cuda_memory", lambda: released.append(True))
     audit = {"headroom_recovery": []}
     dolphin.ensure_dolphin_headroom(SimpleNamespace(device="gpu"), audit)
@@ -276,7 +276,7 @@ def test_cpu_headroom_failure_never_probes_or_releases_cuda(monkeypatch):
     def check(**kwargs):
         raise RuntimeError("insufficient commit")
 
-    monkeypatch.setattr("qwen_memory.ensure_memory_headroom", check)
+    monkeypatch.setattr("classcue.qwen_memory.ensure_memory_headroom", check)
     monkeypatch.setattr(dolphin, "release_cuda_memory", lambda: pytest.fail("CPU must not release CUDA"))
     audit = {"headroom_recovery": []}
     with pytest.raises(ResourcePaused):
@@ -286,7 +286,7 @@ def test_cpu_headroom_failure_never_probes_or_releases_cuda(monkeypatch):
 
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
 def test_low_physical_memory_with_adequate_commit_does_not_pause(monkeypatch, device):
-    monkeypatch.setattr("qwen_memory.memory_snapshot", lambda: {
+    monkeypatch.setattr("classcue.qwen_memory.memory_snapshot", lambda: {
         "system_available_physical_mib": 128,
         "system_available_commit_mib": 4096,
     })

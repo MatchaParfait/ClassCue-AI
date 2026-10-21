@@ -6,8 +6,8 @@ import wave
 import numpy as np
 import pytest
 
-import firered_transcriber
-from firered_transcriber import TimedToken, _segments_from_tokens, _tokens
+import classcue.firered_transcriber as firered_transcriber
+from classcue.firered_transcriber import TimedToken, _segments_from_tokens, _tokens
 
 
 class NativeSystem:
@@ -89,7 +89,7 @@ def test_malformed_entries_are_not_mistaken_for_empty_boundary_tokens(timestamp)
 
 
 def test_empty_boundary_normalization_survives_native_merge_streaming_and_resume(monkeypatch, tmp_path):
-    from firered_resilience import FireRedCheckpoints
+    from classcue.firered_resilience import FireRedCheckpoints
     patch_stream(monkeypatch, np.zeros(3 * 16000, dtype=np.float32))
     checkpoints = FireRedCheckpoints(tmp_path, "boundary-test", 3 * 16000)
     spans = [(1, 2), (2, 3)]
@@ -151,7 +151,7 @@ def test_silent_output_has_no_cues():
 @pytest.mark.parametrize("gpu", [True, False])
 @pytest.mark.parametrize("explicit_cpu", [True, False])
 def test_model_loader_uses_official_aed_api_and_requests_timestamps(monkeypatch, gpu, explicit_cpu):
-    import qwen_memory
+    import classcue.qwen_memory as qwen_memory
 
     monkeypatch.setattr(qwen_memory, "ensure_memory_headroom", lambda **_: None)
     requests = []
@@ -218,7 +218,7 @@ def test_model_loader_rejects_invalid_batch_size():
 
 
 def test_cpu_processing_rechecks_memory_before_batches(monkeypatch):
-    import qwen_memory
+    import classcue.qwen_memory as qwen_memory
 
     calls = []
     monkeypatch.setattr(qwen_memory, "ensure_memory_headroom", lambda **kw: calls.append(kw))
@@ -519,8 +519,8 @@ def test_upstream_swallowed_exception_is_rethrown_and_all_proxies_restored(monke
 
 
 def test_native_pipeline_resumes_committed_silence_and_speech_without_repeat(monkeypatch, tmp_path):
-    from firered_resilience import FireRedCheckpoints
-    from processing_control import ProcessingCancelled
+    from classcue.firered_resilience import FireRedCheckpoints
+    from classcue.processing_control import ProcessingCancelled
 
     timeline = tmp_path / "timeline.wav"
     with wave.open(str(timeline), "wb") as output:
@@ -559,7 +559,7 @@ def test_native_pipeline_resumes_committed_silence_and_speech_without_repeat(mon
 
 
 def test_invalid_batch_does_not_commit_any_partial_result(tmp_path):
-    from firered_resilience import FireRedCheckpoints
+    from classcue.firered_resilience import FireRedCheckpoints
     checkpoints = FireRedCheckpoints(tmp_path, "job", 16000)
     checkpoints.save_vad({"timestamps": [[0, 1]]})
     timeline = tmp_path / "timeline.wav"

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from api.main import create_app
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 def test_library_folder_api_contract(tmp_path: Path):

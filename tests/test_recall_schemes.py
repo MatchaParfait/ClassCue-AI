@@ -7,12 +7,12 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import api.main as api_main
-from ai_provider import ProviderSettings, create_judge
-from core import TranscriptSegment
-from llm_experiments import LabConfig, render_messages
-from recall_schemes import RecallSchemeInput, custom_prompt_bundle, freeze_schemes
+from classcue.ai_provider import ProviderSettings, create_judge
+from classcue.core import TranscriptSegment
+from classcue.llm_experiments import LabConfig, render_messages
+from classcue.recall_schemes import RecallSchemeInput, custom_prompt_bundle, freeze_schemes
 from tests.test_exam_point_judge import FakeClient, candidate, run, saved
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 def config(**changes):
@@ -32,7 +32,7 @@ def scheme_api(saved, monkeypatch):
     monkeypatch.setattr(api_main, "create_judge", lambda p, key, provider, mode, **kwargs: create_judge(
         p, key, mode=mode, client=remote, **kwargs,
     ))
-    monkeypatch.setattr("video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("must reuse ASR"))
+    monkeypatch.setattr("classcue.video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("must reuse ASR"))
     application = api_main.create_app(store)
     with TestClient(application) as client:
         yield client, store, video_id, remote, application

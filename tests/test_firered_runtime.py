@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import firered_runtime
+import classcue.firered_runtime as firered_runtime
 
 
 @pytest.mark.parametrize("gpu, device, wheel_index", [
@@ -79,7 +79,7 @@ def test_failed_import_probe_does_not_mark_runtime_ready(tmp_path, monkeypatch):
 
 
 def test_runtime_requirements_include_native_fbank_and_worker_dependencies():
-    requirements = (Path(firered_runtime.__file__).parent / "scripts" / "firered_requirements.txt").read_text()
+    requirements = (firered_runtime.ROOT / "scripts" / "firered_requirements.txt").read_text(encoding="utf-8")
     assert "kaldi-native-fbank==" in requirements
     assert "pydantic>=" in requirements
     assert "4e7d9aaf4482a47cec1724807026b9b151926eb5" in requirements

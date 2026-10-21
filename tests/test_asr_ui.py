@@ -1,11 +1,11 @@
 from streamlit.testing.v1 import AppTest
 import pytest
 
-import asr_models
-import asr_ui
-from core import TranscriptSegment
-import app_storage
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+import classcue.asr_ui as asr_ui
+from classcue.core import TranscriptSegment
+import classcue.app_storage as app_storage
+from classcue.video_store import VideoStore
 
 
 def test_switching_model_only_persists_selection_without_downloading(tmp_path, monkeypatch):
@@ -15,7 +15,7 @@ def test_switching_model_only_persists_selection_without_downloading(tmp_path, m
     monkeypatch.setattr(asr_ui, "runtime_is_ready", lambda: False)
     calls = []
     monkeypatch.setattr(asr_ui, "prepare_asr_model", lambda *args: calls.append(args[0]))
-    app = AppTest.from_string("from asr_ui import render_asr_settings\nrender_asr_settings()").run()
+    app = AppTest.from_string("from classcue.asr_ui import render_asr_settings\nrender_asr_settings()").run()
     assert not app.exception
     app.selectbox(key="asr_model_id").select("qwen3-asr-1.7b").run()
     assert not app.exception
@@ -40,7 +40,7 @@ def test_rendering_model_settings_does_not_scan_model_cache(tmp_path, monkeypatc
         "cache_size",
         lambda _model_id: (_ for _ in ()).throw(AssertionError("页面重跑不应扫描缓存")),
     )
-    app = AppTest.from_string("from asr_ui import render_asr_settings\nrender_asr_settings()").run()
+    app = AppTest.from_string("from classcue.asr_ui import render_asr_settings\nrender_asr_settings()").run()
     assert not app.exception
 
 
@@ -50,7 +50,7 @@ def test_firered_ui_disables_cpu_and_explicitly_migrates_legacy_selection(tmp_pa
     asr_models.SETTINGS_PATH.write_text(
         '{"model_id": "fireredasr2-aed", "firered_device": "cpu"}', encoding="utf-8",
     )
-    app = AppTest.from_string("from asr_ui import render_asr_settings\nrender_asr_settings()").run()
+    app = AppTest.from_string("from classcue.asr_ui import render_asr_settings\nrender_asr_settings()").run()
     assert not app.exception
     assert not any(item.key == "firered_device" for item in app.radio)
     assert asr_models.selected_firered_device() == "cpu"
@@ -69,7 +69,7 @@ def test_retired_model_in_existing_session_falls_back(tmp_path, monkeypatch):
         "st.session_state.setdefault('asr_model_id', 'paraformer-large-vad-punc')\n"
         "st.session_state.setdefault('clear_asr_target', 'paraformer-large-vad-punc')\n"
         "st.session_state.setdefault('confirm_clear_asr', True)\n"
-        "from asr_ui import render_asr_settings\n"
+        "from classcue.asr_ui import render_asr_settings\n"
         "render_asr_settings()"
     ).run()
     assert not app.exception
@@ -88,7 +88,7 @@ def test_nano_removed_from_streamlit_without_retirement_notice_or_file_changes(t
         "st.session_state.setdefault('asr_model_id', 'fun-asr-nano-2512')\n"
         "st.session_state.setdefault('clear_asr_target', 'fun-asr-nano-2512')\n"
         "st.session_state.setdefault('_asr_nano_runtime_size', 12345)\n"
-        "from asr_ui import render_asr_settings\n"
+        "from classcue.asr_ui import render_asr_settings\n"
         "render_asr_settings()"
     ).run()
     assert not app.exception
@@ -103,7 +103,7 @@ def test_nano_removed_from_streamlit_without_retirement_notice_or_file_changes(t
 
 @pytest.mark.parametrize("available", [False, True])
 def test_paraformer_streamlit_devices_follow_cuda_availability(tmp_path, monkeypatch, available):
-    import paraformer_runtime
+    import classcue.paraformer_runtime as paraformer_runtime
 
     monkeypatch.setattr(asr_models, "SETTINGS_PATH", tmp_path / "asr.json")
     monkeypatch.setattr(asr_ui, "paraformer_cuda_status", lambda: {
@@ -112,7 +112,7 @@ def test_paraformer_streamlit_devices_follow_cuda_availability(tmp_path, monkeyp
     monkeypatch.setattr(paraformer_runtime, "require_cuda", lambda: None)
     monkeypatch.setattr(asr_ui, "prepare_asr_model", lambda *_a, **_kw: pytest.fail("No preparation"))
     asr_models.select_model("paraformer-large-cpu", paraformer_device="cpu")
-    app = AppTest.from_string("from asr_ui import render_asr_settings\nrender_asr_settings()").run()
+    app = AppTest.from_string("from classcue.asr_ui import render_asr_settings\nrender_asr_settings()").run()
     assert not app.exception
     assert app.radio(key="paraformer_device").options == (["CPU", "GPU"] if available else ["CPU"])
     if available:
@@ -138,7 +138,7 @@ def test_management_and_review_pages_expose_same_model_settings(tmp_path, monkey
     video_id = store.create_video("hash", path.name, str(path), str(tmp_path / "audio.wav"), 1000)
     store.mark_transcribed(video_id, [TranscriptSegment(1, 0, 1000, "单纯形法。")], "whisper-turbo")
     store.set_status(video_id, "review_ready")
-    app = AppTest.from_file(str(asr_models.ROOT / "video_app.py")).run(timeout=30)
+    app = AppTest.from_file(str(asr_models.ROOT / "classcue" / "video_app.py")).run(timeout=30)
     assert not app.exception
     expected_models = [model.label for model in asr_models.MODELS.values()]
     assert app.selectbox(key="asr_model_id").options == expected_models

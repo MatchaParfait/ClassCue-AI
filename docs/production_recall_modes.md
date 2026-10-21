@@ -47,7 +47,7 @@ Submit to `POST /api/videos/{video_id}/process` or the existing retry endpoint.
 Changing recall mode reuses persisted ASR. CLI example:
 
 ```powershell
-.\.venv\Scripts\python.exe batch_process.py --videos "D:\example-videos" --mode low_recall --reasoning-effort high --no-formula-noise-filter
+.\.venv\Scripts\python.exe -m classcue.batch_process --videos "D:\example-videos" --mode low_recall --reasoning-effort high --no-formula-noise-filter
 ```
 
 ## Evidence And Logs

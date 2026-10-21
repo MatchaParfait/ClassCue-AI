@@ -7,9 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-import video_store
-from core import TranscriptSegment
-from video_store import VideoStore
+import classcue.video_store as video_store
+from classcue.core import TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 def add_video(store, name, texts, *, status="transcribed"):

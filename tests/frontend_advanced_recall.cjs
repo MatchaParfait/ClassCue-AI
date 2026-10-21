@@ -10,7 +10,7 @@ const output = path.join(root, ".runtime", `advanced-recall-qa-${Date.now()}`);
 const origin = process.env.FRONTEND_URL || "http://127.0.0.1:5175";
 const builder = [
   "import json,sys",
-  "from recall_schemes import RecallPromptInput,preview_recall_prompt",
+  "from classcue.recall_schemes import RecallPromptInput,preview_recall_prompt",
   "print(json.dumps(preview_recall_prompt(RecallPromptInput.model_validate_json(sys.stdin.buffer.read())),ensure_ascii=True))",
 ].join("\n");
 function preview(payload) {

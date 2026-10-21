@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import asr_cpu
-import qwen_process
-from processing_control import ProcessingCancelled
+import classcue.asr_cpu as asr_cpu
+import classcue.qwen_process as qwen_process
+from classcue.processing_control import ProcessingCancelled
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows worker priority and job flags")

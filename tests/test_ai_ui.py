@@ -3,13 +3,13 @@ from types import SimpleNamespace
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import ai_provider
-import ai_ui
-import asr_models
-import asr_ui
-from core import TranscriptSegment
-import app_storage
-from video_store import VideoStore
+import classcue.ai_provider as ai_provider
+import classcue.ai_ui as ai_ui
+import classcue.asr_models as asr_models
+import classcue.asr_ui as asr_ui
+from classcue.core import TranscriptSegment
+import classcue.app_storage as app_storage
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def isolated_settings(tmp_path, monkeypatch):
 
 def settings_app():
     return AppTest.from_string(
-        "from ai_ui import render_ai_settings\n"
+        "from classcue.ai_ui import render_ai_settings\n"
         "provider, profile, key = render_ai_settings()\n"
     ).run()
 
@@ -180,7 +180,7 @@ def test_management_and_review_share_unsaved_unified_profile(isolated_settings, 
     video_id = store.create_video("hash", path.name, str(path), str(tmp_path / "audio.wav"), 1000)
     store.mark_transcribed(video_id, [TranscriptSegment(1, 0, 1000, "课堂字幕")])
     store.set_status(video_id, "review_ready")
-    app = AppTest.from_file(str(app_storage.ROOT / "video_app.py")).run(timeout=30)
+    app = AppTest.from_file(str(app_storage.ROOT / "classcue" / "video_app.py")).run(timeout=30)
     app.text_input(key="ai_interface_management_base_url").set_value("https://relay.example/v1").run()
     app.text_input(key="ai_interface_management_model").set_value("relay-gpt").run()
     app.session_state.review_video_id = video_id

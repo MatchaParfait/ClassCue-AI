@@ -6,8 +6,8 @@ import wave
 import numpy as np
 import pytest
 
-from core import transcript_to_vtt
-import qwen_transcriber
+from classcue.core import transcript_to_vtt
+import classcue.qwen_transcriber as qwen_transcriber
 
 
 def word(text, start, end):

@@ -7,9 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-import asr_storage
-import video_pipeline
-from video_store import VideoStore
+import classcue.asr_storage as asr_storage
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ def test_save_preserves_old_files_and_existing_preferences(directories):
     assert restarted.get("/api/settings/directories").json()["audio_cache_dir"] == payload["audio_cache_dir"]
     result = subprocess.run(
         [sys.executable, "-c",
-         "from pathlib import Path; from asr_storage import active_storage_root, log_directory; "
+         "from pathlib import Path; from classcue.asr_storage import active_storage_root, log_directory; "
          "import sys,json; p=Path(sys.argv[1]); print(json.dumps([str(active_storage_root(p)),str(log_directory(p))]))",
          str(project)], capture_output=True, text=True, check=True,
     )
@@ -183,7 +183,7 @@ def test_model_runtime_paths_stay_at_startup_location_until_restart(tmp_path, mo
                                 audio_cache_dir=None, log_dir=str(tmp_path / "logs"))
     assert asr_storage.storage_root(project) == tmp_path / "assets"
     assert asr_storage.active_storage_root(project) == project
-    import qwen_runtime
+    import classcue.qwen_runtime as qwen_runtime
     environment = project / ".runtime" / "qwen-asr"
     environment.mkdir(parents=True)
     (environment / "fixture.bin").write_bytes(b"runtime")

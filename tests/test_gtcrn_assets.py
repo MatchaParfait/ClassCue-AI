@@ -5,16 +5,20 @@ import sys
 
 import pytest
 
-import playback_denoise
+import classcue.playback_denoise as playback_denoise
 from scripts import prepare_gtcrn
+from classcue.paths import PROJECT_ROOT
 
 
 def test_fresh_distribution_prepares_and_loads_offline_without_runtime_data(tmp_path):
     """Only release source/assets are present; no cached weights or experiment."""
     release = tmp_path / "release"
     (release / "scripts").mkdir(parents=True)
-    root = Path(playback_denoise.__file__).resolve().parent
-    shutil.copyfile(root / "playback_denoise.py", release / "playback_denoise.py")
+    root = PROJECT_ROOT
+    package = release / "classcue"
+    package.mkdir()
+    for name in ("__init__.py", "paths.py", "playback_denoise.py"):
+        shutil.copyfile(root / "classcue" / name, package / name)
     shutil.copyfile(root / "scripts" / "prepare_gtcrn.py", release / "scripts" / "prepare_gtcrn.py")
     shutil.copytree(root / "assets" / "gtcrn", release / "assets" / "gtcrn")
     code = """
@@ -26,7 +30,7 @@ socket.create_connection = forbidden
 urllib.request.urlopen = forbidden
 script = Path(sys.argv[1])
 runpy.run_path(str(script), run_name="__main__")
-import playback_denoise
+from classcue import playback_denoise
 import numpy as np
 denoiser = playback_denoise.PlaybackDenoiser()
 pcm = np.random.default_rng(42).normal(0, .1, (20, 256)).astype("<f4")

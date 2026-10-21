@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dolphin_decode import _TopKBatch, decoding_context, default_decoder_mode, host_ctc_search
+from classcue.dolphin_decode import _TopKBatch, decoding_context, default_decoder_mode, host_ctc_search
 
 
 def test_gpu_defaults_to_host_search_but_cpu_keeps_official_search():

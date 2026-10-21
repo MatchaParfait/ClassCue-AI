@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from desktop_startup import (
+from classcue.desktop_startup import (
     MAX_BYTES, MAX_ITEMS, MAX_COVERS, MAX_COVER_BYTES,
     load_library_snapshot, save_library_snapshot, save_startup_cover, startup_html,
     startup_transition_script,
@@ -94,7 +94,7 @@ def test_nested_directory_cannot_replace_root_preview_and_disk_failure_is_nonfat
 
 def test_desktop_library_response_saves_preview_after_returning_without_model_checks(project, monkeypatch):
     import api.main as api
-    from video_store import VideoStore
+    from classcue.video_store import VideoStore
     database = project / "library" / "project.db"
     store = VideoStore(database)
     store.create_video("test", "lesson.mp4", "unused.mp4", "unused.wav", 3000)
@@ -111,8 +111,8 @@ def test_desktop_library_response_saves_preview_after_returning_without_model_ch
 
 def test_window_uses_expected_library_snapshot_and_replays_early_progress(project, monkeypatch):
     from scripts import desktop_app
-    import app_storage
-    import asr_storage
+    import classcue.app_storage as app_storage
+    import classcue.asr_storage as asr_storage
     monkeypatch.setattr(desktop_app, "PROJECT", project)
     monkeypatch.setattr(app_storage, "load_data_root", lambda: project / "library")
     monkeypatch.setattr(asr_storage, "library_identity", lambda *_args: IDENTITY)
@@ -237,7 +237,7 @@ def test_startup_view_bridge_is_read_only_until_acknowledged_and_origin_checked(
 
 
 def test_delayed_start_cannot_create_services_after_the_window_has_closed():
-    from desktop_runtime import Lifecycle
+    from classcue.desktop_runtime import Lifecycle
     services = SimpleNamespace(start=Mock())
     ui = SimpleNamespace(destroy=Mock())
     lifecycle = Lifecycle(services, ui)
@@ -248,7 +248,7 @@ def test_delayed_start_cannot_create_services_after_the_window_has_closed():
 
 def cached_cover(project, source):
     from PIL import Image
-    from video_thumbnail import _thumbnail_path
+    from classcue.video_thumbnail import _thumbnail_path
     directory = project / "cache" / "thumbnails"
     path, _identity = _thumbnail_path(source, directory)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,7 +257,7 @@ def cached_cover(project, source):
 
 
 def test_snapshot_reuses_existing_cover_and_startup_never_needs_source_or_decoder(project, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
     from PIL import Image
     source = project / "source.mp4"
     source.write_bytes(b"not a real video")
@@ -285,7 +285,7 @@ def test_snapshot_reuses_existing_cover_and_startup_never_needs_source_or_decode
 
 
 def test_missing_or_invalid_cover_is_only_a_placeholder_and_cannot_block_startup(project, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
     source = project / "source.mp4"
     source.write_bytes(b"not a real video")
     record = listing()
@@ -320,7 +320,7 @@ def test_embedded_covers_have_a_count_and_byte_limit(project):
 
 def test_normal_thumbnail_response_updates_startup_cover_even_after_snapshot_was_saved(project, monkeypatch):
     import api.main as api
-    from video_store import VideoStore
+    from classcue.video_store import VideoStore
     source = project / "source.mp4"
     source.write_bytes(b"not a real video")
     _directory, jpeg = cached_cover(project, source)

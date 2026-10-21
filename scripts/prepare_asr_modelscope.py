@@ -18,11 +18,11 @@ from urllib.parse import quote
 
 import httpx
 
-from asr_models import (
+from classcue.asr_models import (
     HUB_ALLOW_PATTERNS, ROOT, _managed_path, component_paths, get_model,
     model_directory, model_operation,
 )
-from preparation_progress import DownloadProgress, stage, checkpoint
+from classcue.preparation_progress import DownloadProgress, stage, checkpoint
 
 
 def _verified(path: Path, item: dict, tracker=None) -> bool:
@@ -104,7 +104,7 @@ def _aria_download(command, report, size, *, timeout=7200):
         last_size = 0
         try:
             if os.name == "nt":
-                from qwen_process import WindowsJob
+                from classcue.qwen_process import WindowsJob
                 # A backend crash must not leave an orphan writing this cache
                 # while the restarted backend attempts to continue the file.
                 owned_job = WindowsJob(process)
@@ -249,7 +249,7 @@ def download_components(model_id: str, progress=None) -> dict:
     """Download the same pinned repositories for every engine; callers validate formats."""
     model = get_model(model_id)
     paths = component_paths(model.id)
-    from asr_models import FIRERED_REQUIRED_FILES, PARAFORMER_REQUIRED_FILES, DOLPHIN_REQUIRED_FILES, NANO_REQUIRED_FILES
+    from classcue.asr_models import FIRERED_REQUIRED_FILES, PARAFORMER_REQUIRED_FILES, DOLPHIN_REQUIRED_FILES, NANO_REQUIRED_FILES
     required = {"firered": FIRERED_REQUIRED_FILES, "paraformer": PARAFORMER_REQUIRED_FILES,
                 "dolphin": DOLPHIN_REQUIRED_FILES, "nano": NANO_REQUIRED_FILES}.get(model.engine)
     metadata = {}

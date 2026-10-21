@@ -6,14 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-from ai_provider import ProviderProfile
-from api_failure import ApiUnavailable, api_failure
-from core import TranscriptSegment
-from processing_control import ProcessingCancelled, ResourcePaused
-import video_pipeline
-from video_library import register_managed_video
-from video_store import VideoStore
-from web_batch import make_batch, preview_directories
+from classcue.ai_provider import ProviderProfile
+from classcue.api_failure import ApiUnavailable, api_failure
+from classcue.core import TranscriptSegment
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+import classcue.video_pipeline as video_pipeline
+from classcue.video_library import register_managed_video
+from classcue.video_store import VideoStore
+from classcue.web_batch import make_batch, preview_directories
 
 
 @pytest.fixture

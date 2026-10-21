@@ -3,8 +3,8 @@ import sys
 
 import pytest
 
-import ai_provider
-import batch_process
+import classcue.ai_provider as ai_provider
+import classcue.batch_process as batch_process
 
 
 @pytest.fixture

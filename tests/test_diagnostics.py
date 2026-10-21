@@ -1,7 +1,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from diagnostics import RedactingFormatter, get_logger, log_exception, redact_text, register_secret
+from classcue.diagnostics import RedactingFormatter, get_logger, log_exception, redact_text, register_secret
 
 
 def test_redaction_covers_keys_headers_env_and_traceback(tmp_path, monkeypatch):

@@ -8,8 +8,8 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from api.main import VideoProcessPayload, create_app
-from core import TranscriptSegment
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 def test_new_processing_requests_default_to_unfiltered_subtitles():
@@ -143,7 +143,7 @@ def test_retired_asr_cannot_be_prepared_or_selected(api_fixture, monkeypatch):
 
 def test_firered_device_selection_roundtrip_does_not_scan_cache(api_fixture, tmp_path, monkeypatch):
     import api.main as api_main
-    import asr_models
+    import classcue.asr_models as asr_models
 
     client, *_ = api_fixture
     monkeypatch.setattr(asr_models, "SETTINGS_PATH", tmp_path / "asr.json")
@@ -164,7 +164,7 @@ def test_firered_device_selection_roundtrip_does_not_scan_cache(api_fixture, tmp
 
 def test_firered_api_reports_saved_device_and_cpu_notice(api_fixture, tmp_path, monkeypatch):
     import api.main as api_main
-    import asr_models
+    import classcue.asr_models as asr_models
 
     client, *_ = api_fixture
     monkeypatch.setattr(asr_models, "SETTINGS_PATH", tmp_path / "asr.json")
@@ -187,8 +187,8 @@ def test_firered_api_reports_saved_device_and_cpu_notice(api_fixture, tmp_path, 
 
 
 def test_paraformer_api_device_selection_checks_cuda_and_preserves_previous_selection(api_fixture, tmp_path, monkeypatch):
-    import asr_models
-    import paraformer_runtime
+    import classcue.asr_models as asr_models
+    import classcue.paraformer_runtime as paraformer_runtime
 
     client, *_ = api_fixture
     monkeypatch.setattr(asr_models, "SETTINGS_PATH", tmp_path / "settings.json")
@@ -212,7 +212,7 @@ def test_paraformer_api_device_selection_checks_cuda_and_preserves_previous_sele
 
 
 def test_paraformer_status_reports_runtime_cuda_capability(api_fixture, tmp_path, monkeypatch):
-    import asr_models
+    import classcue.asr_models as asr_models
     import api.main as api_main
 
     client, *_ = api_fixture
@@ -234,8 +234,8 @@ def test_paraformer_status_reports_runtime_cuda_capability(api_fixture, tmp_path
 
 
 def test_nano_api_retirement_blocks_selection_preparation_and_transcription(api_fixture, tmp_path, monkeypatch):
-    import asr_models
-    import nano_runtime
+    import classcue.asr_models as asr_models
+    import classcue.nano_runtime as nano_runtime
     import api.main as api_main
 
     client, store, video_id, *_ = api_fixture
@@ -289,8 +289,8 @@ def test_nano_api_retirement_blocks_selection_preparation_and_transcription(api_
 
 def test_dolphin_api_reports_batch_and_gates_gpu_selection(api_fixture, tmp_path, monkeypatch):
     import api.main as api_main
-    import asr_models
-    import dolphin_runtime
+    import classcue.asr_models as asr_models
+    import classcue.dolphin_runtime as dolphin_runtime
 
     client, *_ = api_fixture
     monkeypatch.setattr(asr_models, "SETTINGS_PATH", tmp_path / "asr-settings.json")
@@ -321,7 +321,7 @@ def test_dolphin_api_reports_batch_and_gates_gpu_selection(api_fixture, tmp_path
 
 
 def test_paraformer_gpu_preparation_does_not_change_saved_device(api_fixture, tmp_path, monkeypatch):
-    import asr_models
+    import classcue.asr_models as asr_models
     import api.main as api_main
     import time
 
@@ -353,7 +353,7 @@ def test_model_preparation_telemetry_survives_readers_and_identifies_the_active_
     import time
     from threading import Event
     import api.main as api_main
-    from preparation_progress import publish
+    from classcue.preparation_progress import publish
 
     client, store, *_ = api_fixture
     ready, release = Event(), Event()
@@ -589,7 +589,7 @@ def test_missing_video_returns_clear_404(api_fixture, path):
 @pytest.fixture
 def ai_key_client(api_fixture, monkeypatch):
     import api.main as api_main
-    from ai_provider import ProviderProfile, ProviderSettings
+    from classcue.ai_provider import ProviderProfile, ProviderSettings
 
     settings = ProviderSettings(profile=ProviderProfile(base_url="https://example.test/v1", model="test-model"))
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: settings)

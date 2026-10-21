@@ -11,9 +11,9 @@ CHECKPOINT_SHA256 = "1cee2b8d2133cabb36567625a832d4033569e27eaf5f98df9be1139ec60
 
 
 def main():
-    from preparation_progress import component_manifest, stage
-    from asr_models import DOLPHIN_REQUIRED_FILES, component_paths, get_model, model_directory
-    from dolphin_runtime import SOURCE_COMMIT
+    from classcue.preparation_progress import component_manifest, stage
+    from classcue.asr_models import DOLPHIN_REQUIRED_FILES, component_paths, get_model, model_directory
+    from classcue.dolphin_runtime import SOURCE_COMMIT
 
     model = get_model("dolphin-small-cn")
     paths = component_paths(model.id)

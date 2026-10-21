@@ -7,18 +7,18 @@ import json
 
 import pytest
 
-import firered_resilience as fr
-from core import TranscriptSegment
-from processing_control import ProcessingCancelled, ResourcePaused
-from transcript_events import transcript_listener
+import classcue.firered_resilience as fr
+from classcue.core import TranscriptSegment
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+from classcue.transcript_events import transcript_listener
 
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_worker_transcript_notifications_are_optional_and_reach_parent_without_changing_manifest(
     tmp_path, monkeypatch, stream,
 ):
-    import firered_runtime
-    import qwen_process
+    import classcue.firered_runtime as firered_runtime
+    import classcue.qwen_process as qwen_process
 
     manifest = {"job_id": "test", "total_samples": 16000, "paths": {}}
     monkeypatch.setattr(firered_runtime, "runtime_python", lambda: Path("worker-python"))

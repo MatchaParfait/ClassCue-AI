@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from qwen_boundaries import AudioSpan
-from qwen_silence import build_silence_plan, compact_audio, restore_segments, source_time
-from qwen_transcriber import aligned_segments
-import qwen_transcriber
-import qwen_vad
+from classcue.qwen_boundaries import AudioSpan
+from classcue.qwen_silence import build_silence_plan, compact_audio, restore_segments, source_time
+from classcue.qwen_transcriber import aligned_segments
+import classcue.qwen_transcriber as qwen_transcriber
+import classcue.qwen_vad as qwen_vad
 
 
 def plan(intervals, enabled=True, total=2000, rate=100, spans=None, **kwargs):
@@ -144,7 +144,7 @@ def test_empty_chunks_never_produce_timestamps():
     {"audio_profile": "mostly-silent"},
 ])
 def test_internal_transcriber_skips_silence_and_returns_source_times(monkeypatch, routing):
-    import qwen_memory
+    import classcue.qwen_memory as qwen_memory
     monkeypatch.setattr(qwen_memory, "ensure_memory_headroom", lambda: None)
     monkeypatch.setattr(qwen_transcriber, "decode_audio", lambda _: np.zeros(20 * 16000, dtype="float32"))
     monkeypatch.setattr(qwen_vad, "detect_speech", lambda *_args: {
@@ -174,7 +174,7 @@ def test_internal_transcriber_skips_silence_and_returns_source_times(monkeypatch
 
 
 def test_internal_skip_restores_batch_setting_after_failure(monkeypatch):
-    import qwen_memory
+    import classcue.qwen_memory as qwen_memory
     monkeypatch.setattr(qwen_memory, "ensure_memory_headroom", lambda: None)
     monkeypatch.setattr(qwen_transcriber, "decode_audio", lambda _: np.zeros(20 * 16000, dtype="float32"))
     monkeypatch.setattr(qwen_vad, "detect_speech", lambda *_args: {

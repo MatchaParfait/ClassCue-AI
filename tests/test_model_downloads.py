@@ -4,9 +4,9 @@ from threading import Event
 
 import pytest
 
-import asr_models
-import model_downloads as downloads
-from preparation_progress import preparation_events, stage
+import classcue.asr_models as asr_models
+import classcue.model_downloads as downloads
+from classcue.preparation_progress import preparation_events, stage
 
 
 @pytest.fixture

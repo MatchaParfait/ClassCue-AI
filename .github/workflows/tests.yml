@@ -41,11 +41,7 @@ jobs:
       - name: Check syntax
         shell: pwsh
         run: |
-          Get-ChildItem -File -Filter *.py | ForEach-Object {
-            python -m py_compile $_.FullName
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          python -m py_compile pages\review.py
+          python -m compileall -q classcue api scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   frontend:

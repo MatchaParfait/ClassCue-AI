@@ -2,6 +2,24 @@
 
 本文保留开发环境、启动方式、接口、模型适配和测试等技术资料。面向用户的软件介绍与使用入口见 [README](../README.md)；发行签名、自动更新及公告维护见 [发行维护指南](releases.md)。
 
+## 源码目录
+
+```text
+classcue/    Python 应用模块：转写、考点提取、存储、桌面与更新
+  paths.py   安装根目录定位，资源和用户数据仍在原位置
+  pages/     旧版 Streamlit 复习页面
+api/         本地 HTTP API
+scripts/     启动、模型准备、发行及维护入口
+frontend/    React 界面
+tests/       合成数据与自动化回归
+```
+
+Python 模块使用 `from classcue.video_store import VideoStore` 等包导入。
+不要把应用模块重新放回根目录，也不依赖修改 `PYTHONPATH` 或复制兼容转发文件。
+手动 CLI 从项目根目录用 `python -m classcue.batch_process` 等形式执行；
+桌面和网页的一键启动命令保持不变。
+源码位置调整不会移动 `data/`、`models/`、`.runtime/`、`assets/` 或 `prompts/`。
+
 一个 Windows 本地运行的桌面应用，同时保留网页开发入口：使用可切换的本地 ASR 模型转写课堂视频，通过统一的 OpenAI 兼容接口筛选期末考点，并生成可反复使用的重点导航。默认使用 DeepSeek 官方 API，也可以改成第三方中转站。复习时可以快速跳转、标记已掌握，或顺手移除误判。
 
 ## 一键开始
@@ -77,7 +95,7 @@ uv run --locked --group dev python -m pytest tests -q
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python setup_environment.py
+python -m classcue.setup_environment
 ```
 
 开发安装脚本不会安装 PyTorch、torchvision 或本地大语言模型；视频转写由 faster-whisper/CTranslate2 独立使用 GPU。脚本结束时会显示实际转写后端。
@@ -87,7 +105,7 @@ python setup_environment.py
 如果必须确认 GPU 可用，可以运行：
 
 ```powershell
-python setup_environment.py --require-gpu
+python -m classcue.setup_environment --require-gpu
 ```
 
 检测失败时程序仍可以使用 CPU；`--require-gpu` 仅让安装检查返回失败，便于排查 NVIDIA 驱动、CUDA/cuDNN 运行库或老显卡兼容问题。
@@ -130,7 +148,7 @@ OPENAI_MODEL=your-model-name
 ## 开发启动
 
 ```powershell
-python -m streamlit run video_app.py --server.port 8503
+python -m streamlit run classcue/video_app.py --server.port 8503
 ```
 
 在浏览器打开 `http://localhost:8503`。扫描本机视频文件夹，勾选需要的视频开始批量处理。完成后从“复习视频库”进入重点复习页。
@@ -154,20 +172,20 @@ npm install
 npm run dev
 ```
 
-API 默认只监听 `127.0.0.1:8765`，前端默认地址为 `http://127.0.0.1:5173`。打开前端根路径进入视频库；`http://127.0.0.1:5173/demo` 使用显式 mock 数据验证复习交互。API 与旧版 Streamlit 共用应用的唯一视频库；`app_storage.py` 统一管理数据路径。
+API 默认只监听 `127.0.0.1:8765`，前端默认地址为 `http://127.0.0.1:5173`。打开前端根路径进入视频库；`http://127.0.0.1:5173/demo` 使用显式 mock 数据验证复习交互。API 与旧版 Streamlit 共用应用的唯一视频库；`classcue/app_storage.py` 统一管理数据路径。
 
 Windows 也可以先执行一次 `cd frontend; npm install`，之后直接双击仓库根目录的 `启动本地前端.cmd`，它会同时启动 API 和 Vite。
 
 如果要关闭浏览器，让任务在终端中连续运行，可以使用独立批处理入口：
 
 ```powershell
-python batch_process.py --videos "D:\课堂视频"
+python -m classcue.batch_process --videos "D:\课堂视频"
 ```
 
 命令行默认使用页面保存的统一接口配置；尚未保存时使用 DeepSeek 官方 API 默认值。可以直接覆盖中转站地址和模型：
 
 ```powershell
-python batch_process.py --videos "D:\课堂视频" --base-url "https://your-relay.example/v1" --model "your-model-name"
+python -m classcue.batch_process --videos "D:\课堂视频" --base-url "https://your-relay.example/v1" --model "your-model-name"
 ```
 
 该命令使用中转站的本机密钥记忆或 `OPENAI_API_KEY`。还可用 `--max-tokens 4096`、`--token-parameter max_completion_tokens`、`--api-timeout 120`、`--no-json-mode` 覆盖参数；CLI 覆盖不会修改已保存配置。可用 `--mode high_recall` 选择扩展重点，默认是 `strict_exam_intent`。同一时间只运行一个批处理任务，避免多个任务同时争用 GPU 和 API 限额。
@@ -221,9 +239,9 @@ React 单视频处理页同时勾选“期末考点”和“扩展重点”时�
 命令行也支持选择、准备和清除模型，无需先打开页面：
 
 ```powershell
-python batch_process.py --asr-model qwen3-asr-1.7b --download-asr-model
-python batch_process.py --videos "D:\课堂视频" --asr-model qwen3-asr-1.7b
-python batch_process.py --asr-model qwen3-asr-1.7b --clear-asr-model --clear-qwen-runtime
+python -m classcue.batch_process --asr-model qwen3-asr-1.7b --download-asr-model
+python -m classcue.batch_process --videos "D:\课堂视频" --asr-model qwen3-asr-1.7b
+python -m classcue.batch_process --asr-model qwen3-asr-1.7b --clear-asr-model --clear-qwen-runtime
 ```
 
 准备 Qwen 时，NVIDIA 机器默认安装 PyTorch 2.7.1 CUDA 12.8 运行包，需要兼容的驱动；其他机器使用 CPU 运行包。安装失败可查看 `.runtime/logs/qwen-install.log`，推理失败查看 `.runtime/logs/qwen-worker.log`。

@@ -31,8 +31,8 @@ def main():
         try:
             request = json.loads(line)
             with redirect_stdout(sys.stderr):
-                from asr_cpu import cpu_thread_policy
-                from firered_transcriber import load_firered_model, transcribe_firered
+                from classcue.asr_cpu import cpu_thread_policy
+                from classcue.firered_transcriber import load_firered_model, transcribe_firered
 
                 policy = cpu_thread_policy(device)
                 if request.get("device", "gpu") != device:
@@ -40,7 +40,7 @@ def main():
                 requested_path = (request["recognizer"], request["vad"], policy["cpu_threads"])
                 if model is None or model_path != requested_path:
                     if device == "cpu":
-                        from paraformer_transcriber import runtime_environment
+                        from classcue.paraformer_transcriber import runtime_environment
 
                         os.environ.update(runtime_environment(device, policy["cpu_threads"]))
                         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"

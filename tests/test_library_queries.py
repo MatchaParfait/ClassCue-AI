@@ -4,9 +4,9 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from core import TranscriptSegment
-import video_store
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+import classcue.video_store as video_store
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture

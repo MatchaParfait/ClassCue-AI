@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import firered_transcriber
+import classcue.firered_transcriber as firered_transcriber
 from scripts import firered_direct_worker as firered_worker
 
 

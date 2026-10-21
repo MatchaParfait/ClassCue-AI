@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import asr_gpu_status
+import classcue.asr_gpu_status as asr_gpu_status
 
 
 def test_device_identity_uses_the_requested_runtime_without_loading_a_model(monkeypatch):

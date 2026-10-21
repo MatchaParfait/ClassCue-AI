@@ -7,7 +7,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 def create_video(store, label):

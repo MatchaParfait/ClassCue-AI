@@ -9,11 +9,11 @@ import time
 sys.path.insert(0, str(Path.cwd()))
 
 import api.main as api_main
-from ai_provider import ProviderProfile
-from api_failure import ApiUnavailable
-from core import TranscriptSegment
-import video_pipeline
-from video_store import VideoStore
+from classcue.ai_provider import ProviderProfile
+from classcue.api_failure import ApiUnavailable
+from classcue.core import TranscriptSegment
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 import uvicorn
 
 
@@ -96,7 +96,7 @@ def seed_markers():
 
 
 if frontend_project := os.environ.get("QA_FRONTEND_PROJECT_ROOT"):
-    from frontend_host import mount_frontend
+    from classcue.frontend_host import mount_frontend
     mount_frontend(application, Path(frontend_project))
 
 uvicorn.run(application, host="127.0.0.1", port=int(sys.argv[2]), log_level="warning")

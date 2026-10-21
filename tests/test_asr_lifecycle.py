@@ -6,13 +6,13 @@ import weakref
 
 import pytest
 
-import asr_models
-import batch_processing
-from core import SemanticSelection, TranscriptSegment
-from processing_control import ProcessingCancelled, ResourcePaused
-import transcriber
-import video_pipeline
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+import classcue.batch_processing as batch_processing
+from classcue.core import SemanticSelection, TranscriptSegment
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+import classcue.transcriber as transcriber
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture(params=["dolphin", "paraformer"])

@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-import asr_models
-import nano_runtime
-import transcriber
+import classcue.asr_models as asr_models
+import classcue.nano_runtime as nano_runtime
+import classcue.transcriber as transcriber
 
 
 @pytest.fixture

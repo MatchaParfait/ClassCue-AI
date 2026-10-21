@@ -424,7 +424,7 @@ def test_failed_readiness_cleans_new_pair(frontend_launch, monkeypatch, failure)
 
 
 def test_python_service_output_rotates_and_redacts(tmp_path):
-    from diagnostics import register_secret
+    from classcue.diagnostics import register_secret
 
     secret = "launcher-secret-value"
     register_secret(secret)
@@ -504,7 +504,7 @@ def test_log_disk_failure_does_not_recurse_into_captured_stderr(tmp_path, monkey
 
 @pytest.mark.parametrize("newline", [True, False])
 def test_python_output_redacts_secret_across_chunks_and_writes(tmp_path, newline):
-    from diagnostics import register_secret
+    from classcue.diagnostics import register_secret
 
     secret = "private-split-launcher-api-key"
     register_secret(secret)

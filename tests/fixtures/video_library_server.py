@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path.cwd()))
 
 import api.main as api_main
 import uvicorn
-import video_pipeline
-from video_store import VideoStore
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 
 root = Path(sys.argv[1])
 source = root / "downloads" / "lesson.mp4"

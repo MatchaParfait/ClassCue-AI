@@ -29,68 +29,68 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-import asr_storage
-import storage_migration
-import application_data_migration
-from asr_status_cache import AsrStatusCache
-from asr_gpu_status import inspect_cuda_device
-from diagnostics import LOG_DIR as ACTIVE_LOG_DIR
-from processing_control import ProcessingCancelled, ResourcePaused
-from model_downloads import PreparationPaused, cleanup_incomplete, download_snapshot
-from qwen_resilience import qwen_queue
-from firered_resilience import firered_queue, resource_events, resource_profile
-from ai_provider import (
+import classcue.asr_storage as asr_storage
+import classcue.storage_migration as storage_migration
+import classcue.application_data_migration as application_data_migration
+from classcue.asr_status_cache import AsrStatusCache
+from classcue.asr_gpu_status import inspect_cuda_device
+from classcue.diagnostics import LOG_DIR as ACTIVE_LOG_DIR
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
+from classcue.model_downloads import PreparationPaused, cleanup_incomplete, download_snapshot
+from classcue.qwen_resilience import qwen_queue
+from classcue.firered_resilience import firered_queue, resource_events, resource_profile
+from classcue.ai_provider import (
     DEFAULT_OUTPUT_TOKENS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES, DEFAULT_REASONING_EFFORT,
     ProviderProfile, ProviderSettings, create_judge, interface_key_path,
     interface_provider, load_provider_settings, resolve_interface_key,
     save_provider_settings,
     SavedConnection, provider_settings_lock,
 )
-from asr_models import (
+from classcue.asr_models import (
     MODELS, MODEL_ROOT, OPERATION_LOCK, ModelBusyError, cache_size, format_size, get_model, model_is_downloaded,
     FIRERED_CPU_NOTICE, NANO_RETIRED_NOTICE, RETIRED_MODELS, require_selectable_model,
     select_model, selected_model_id, selected_firered_device,
     selected_paraformer_device, selected_nano_device, selected_dolphin_device,
 )
-from local_credentials import delete_api_key, save_api_key
-from path_picker import discard_path_picker, read_path_picker_result, start_path_picker
-from picker_manager import PickerManager
-from diagnostics import configure_logging, get_logger, log_exception, redact_text
-from database_lease import DatabaseLease
-from desktop_startup import save_library_snapshot, save_startup_cover
-from qwen_runtime import clear_runtime, runtime_is_ready, runtime_size, runtime_python as qwen_runtime_python
-from firered_runtime import (
+from classcue.local_credentials import delete_api_key, save_api_key
+from classcue.path_picker import discard_path_picker, read_path_picker_result, start_path_picker
+from classcue.picker_manager import PickerManager
+from classcue.diagnostics import configure_logging, get_logger, log_exception, redact_text
+from classcue.database_lease import DatabaseLease
+from classcue.desktop_startup import save_library_snapshot, save_startup_cover
+from classcue.qwen_runtime import clear_runtime, runtime_is_ready, runtime_size, runtime_python as qwen_runtime_python
+from classcue.firered_runtime import (
     runtime_is_ready as firered_runtime_is_ready, runtime_size as firered_runtime_size,
     runtime_python as firered_runtime_python,
 )
-from paraformer_runtime import (
+from classcue.paraformer_runtime import (
     runtime_is_ready as paraformer_runtime_is_ready, runtime_size as paraformer_runtime_size,
     cuda_status as paraformer_cuda_status,
 )
-from nano_runtime import (
+from classcue.nano_runtime import (
     runtime_is_ready as nano_runtime_is_ready, runtime_size as nano_runtime_size,
     cuda_status as nano_cuda_status,
 )
-from dolphin_runtime import (
+from classcue.dolphin_runtime import (
     runtime_is_ready as dolphin_runtime_is_ready, runtime_size as dolphin_runtime_size,
     cuda_status as dolphin_cuda_status,
 )
-from transcriber import asr_session, clear_asr_model, clear_asr_runtime, prepare_asr_model
-from cleanup_progress import cleanup_events, CleanupProgress
-from video_pipeline import (
+from classcue.transcriber import asr_session, clear_asr_model, clear_asr_runtime, prepare_asr_model
+from classcue.cleanup_progress import cleanup_events, CleanupProgress
+from classcue.video_pipeline import (
     MAX_VIDEO_BYTES, MAX_VIDEO_DURATION_MS, SUPPORTED_VIDEO_SUFFIXES,
     prepare_video_for_analysis, process_video_once, process_saved_analysis_once,
 )
-from app_storage import load_data_root
-from video_store import VideoStore
-from recall_schemes import ModeId, RecallPromptInput, RecallSchemeInput, freeze_schemes, preview_recall_prompt
-from subtitle_search import MAX_PAGE_SIZE, MAX_QUERY_LENGTH, MAX_SQLITE_INTEGER, validate_query
+from classcue.app_storage import load_data_root
+from classcue.video_store import VideoStore
+from classcue.recall_schemes import ModeId, RecallPromptInput, RecallSchemeInput, freeze_schemes, preview_recall_prompt
+from classcue.subtitle_search import MAX_PAGE_SIZE, MAX_QUERY_LENGTH, MAX_SQLITE_INTEGER, validate_query
 from api.denoise import router as denoise_router
-from video_library import register_managed_video, video_filename
-from video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
-from api_failure import ApiUnavailable
-from web_batch import batch_summary, make_batch, normalize_batch, preview_directories, run_web_batch
-from llm_experiments import (
+from classcue.video_library import register_managed_video, video_filename
+from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
+from classcue.api_failure import ApiUnavailable
+from classcue.web_batch import batch_summary, make_batch, normalize_batch, preview_directories, run_web_batch
+from classcue.llm_experiments import (
     LabConfig, execute_run, prepare_snapshot, register_run, require_approval,
 )
 
@@ -355,11 +355,11 @@ class JobManager:
     """Single local worker with durable status rows and restart recovery."""
 
     def __init__(self, provider: "StoreProvider") -> None:
-        from live_transcript import LiveTranscriptBuffer
+        from classcue.live_transcript import LiveTranscriptBuffer
 
         self.provider = provider
         self.live_transcripts = LiveTranscriptBuffer()
-        from analysis_events import LiveAnalysisBuffer
+        from classcue.analysis_events import LiveAnalysisBuffer
         self.live_analysis = LiveAnalysisBuffer()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="classroom-job")
         self._lock = RLock()
@@ -522,7 +522,7 @@ class JobManager:
                 store.update_job(job_id, resource_json=json.dumps(resource, ensure_ascii=False),
                                  stage="recovering" if resource.get("status") == "recovering" else None)
 
-            from preparation_progress import preparation_events
+            from classcue.preparation_progress import preparation_events
 
             def report_preparation(detail):
                 checkpoint()
@@ -537,8 +537,8 @@ class JobManager:
                                  progress=fraction if fraction is not None else 0,
                                  stage="cleaning", message=detail["message"])
 
-            from transcript_events import transcript_observer
-            from analysis_events import analysis_observer
+            from classcue.transcript_events import transcript_observer
+            from classcue.analysis_events import analysis_observer
 
             preview = (
                 (lambda segments, watermark: self.live_transcripts.publish(job_id, video_id, segments, watermark))
@@ -839,8 +839,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     )
     storage_migrating = Event()
     updating = Event()
-    from app_updates import UpdateCenter, read_json as read_update_json, write_json as write_update_json
-    from app_version import VERSION
+    from classcue.app_updates import UpdateCenter, read_json as read_update_json, write_json as write_update_json
+    from classcue.app_version import VERSION
     from api.updates import router as update_router
     update_center = UpdateCenter(DIRECTORY_PROJECT_ROOT)
     recovery_needs_restart = Event()
@@ -2567,7 +2567,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             should_cancel: Callable[[], bool],
         ) -> object:
             if options.force_retranscribe:
-                from video_pipeline import retranscribe_video
+                from classcue.video_pipeline import retranscribe_video
 
                 count = retranscribe_video(
                     video_store,
@@ -3012,7 +3012,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    from frontend_host import mount_frontend
+    from classcue.frontend_host import mount_frontend
     mount_frontend(api, Path(__file__).resolve().parents[1])
     return api
 

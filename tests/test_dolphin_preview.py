@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from core import TranscriptSegment
-from live_transcript import LiveTranscriptBuffer
-from transcript_events import transcript_observer, transcript_listener
-from transcriber import DolphinWorker
+from classcue.core import TranscriptSegment
+from classcue.live_transcript import LiveTranscriptBuffer
+from classcue.transcript_events import transcript_observer, transcript_listener
+from classcue.transcriber import DolphinWorker
 
 
 @pytest.mark.parametrize("observe", [False, True])
@@ -42,7 +42,7 @@ def test_preview_protocol_reaches_buffer_before_result_without_early_llm(tmp_pat
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
 @pytest.mark.parametrize("stream", [False, True])
 def test_worker_emits_preview_only_when_requested(monkeypatch, capsys, device, stream):
-    import dolphin_transcriber
+    import classcue.dolphin_transcriber as dolphin_transcriber
     from scripts import dolphin_worker
     row = TranscriptSegment(-1, 0, 1000, "Recognized speech")
     def transcribe(*_args, on_preview=None, **_kwargs):
@@ -53,7 +53,7 @@ def test_worker_emits_preview_only_when_requested(monkeypatch, capsys, device, s
     monkeypatch.setattr(dolphin_transcriber, "load_dolphin_model", lambda *_a, **_k: object())
     monkeypatch.setattr(dolphin_transcriber, "release_cuda_memory", lambda: None)
     monkeypatch.setattr(dolphin_transcriber, "transcribe_dolphin", transcribe)
-    monkeypatch.setattr("asr_cpu.cpu_thread_policy", lambda *_a: {"cpu_threads": 2})
+    monkeypatch.setattr("classcue.asr_cpu.cpu_thread_policy", lambda *_a: {"cpu_threads": 2})
     monkeypatch.setattr(sys, "argv", ["dolphin_worker", "--device", device])
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"recognizer": "model", "vad": "vad",
                                                              "audio_path": "source.wav", "stream_preview": stream}) + "\n"))

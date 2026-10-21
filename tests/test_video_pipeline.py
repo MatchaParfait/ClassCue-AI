@@ -3,9 +3,9 @@ import time
 
 import pytest
 
-from core import SemanticCandidate, SemanticSelection, TranscriptSegment
-from judge import SemanticResponseError
-from video_pipeline import (
+from classcue.core import SemanticCandidate, SemanticSelection, TranscriptSegment
+from classcue.judge import SemanticResponseError
+from classcue.video_pipeline import (
     MAX_CONCURRENT_AI_REQUESTS,
     analyze_prepared_video_once,
     build_screening_chunks,
@@ -15,7 +15,7 @@ from video_pipeline import (
     _transcribe_video_with_fallback,
     register_local_video,
 )
-from video_store import VideoStore
+from classcue.video_store import VideoStore
 
 
 class FakeSemanticJudge:
@@ -84,7 +84,7 @@ def test_semantic_pipeline_preserves_bad_json_chunk_for_review(tmp_path):
 
 
 def test_semantic_pipeline_limits_api_screening_to_four_parallel_requests(tmp_path, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     store = VideoStore(tmp_path / "video.db")
     video_id = store.create_video("hash", "lesson.mp4", "lesson.mp4", "lesson.wav", 10000)
@@ -97,7 +97,7 @@ def test_semantic_pipeline_limits_api_screening_to_four_parallel_requests(tmp_pa
 
 
 def test_keyword_prefilter_skips_chunks_without_configured_signals(monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     segments = [
         TranscriptSegment(1, 0, 1000, "普通讲解。"),
@@ -115,7 +115,7 @@ def test_keyword_prefilter_skips_chunks_without_configured_signals(monkeypatch):
 
 
 def test_keyword_prefilter_uses_custom_trigger_library(monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     segments = [
         TranscriptSegment(1, 0, 1000, "普通讲解。"),
@@ -130,7 +130,7 @@ def test_keyword_prefilter_uses_custom_trigger_library(monkeypatch):
 
 
 def test_screening_chunks_filter_formula_noise_by_default(monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     segments = [
         TranscriptSegment(1, 0, 1000, "x加y"),
@@ -232,7 +232,7 @@ def test_review_ready_video_can_run_a_new_analysis_mode_with_saved_subtitles(tmp
 
 
 def test_semantic_pipeline_reuses_successful_ai_chunk_cache(tmp_path, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     store = VideoStore(tmp_path / "video.db")
     video_id = store.create_video("hash", "lesson.mp4", "lesson.mp4", "temporary.wav", 10000)
@@ -247,7 +247,7 @@ def test_semantic_pipeline_reuses_successful_ai_chunk_cache(tmp_path, monkeypatc
 
 
 def test_video_transcription_reads_original_media_without_creating_wav(tmp_path, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     monkeypatch.setattr(video_pipeline, "selected_model_id", lambda: "whisper-turbo")
 
     video_path = tmp_path / "lesson.mp4"
@@ -262,7 +262,7 @@ def test_video_transcription_reads_original_media_without_creating_wav(tmp_path,
 
 
 def test_video_transcription_uses_and_cleans_temporary_wav_on_decode_failure(tmp_path, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
     monkeypatch.setattr(video_pipeline, "selected_model_id", lambda: "whisper-turbo")
 
     video_path = tmp_path / "lesson.mp4"
@@ -286,7 +286,7 @@ def test_video_transcription_uses_and_cleans_temporary_wav_on_decode_failure(tmp
 
 
 def test_register_local_video_uses_size_and_mtime_before_rehashing(tmp_path, monkeypatch):
-    import video_pipeline
+    import classcue.video_pipeline as video_pipeline
 
     video_path = tmp_path / "lesson.mp4"
     video_path.write_bytes(b"video fixture")

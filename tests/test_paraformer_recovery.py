@@ -6,9 +6,9 @@ import wave
 
 import pytest
 
-import paraformer_transcriber as paraformer
-from processing_control import ResourcePaused
-from transcriber import ParaformerWorker
+import classcue.paraformer_transcriber as paraformer
+from classcue.processing_control import ResourcePaused
+from classcue.transcriber import ParaformerWorker
 
 
 def validate_output(segments, duration_ms, audit):

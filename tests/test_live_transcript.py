@@ -1,8 +1,8 @@
 from threading import Event
 
-from core import TranscriptSegment
-from live_transcript import LiveTranscriptBuffer
-from transcript_events import emit_transcript, transcript_listener, transcript_observer, transcript_requested
+from classcue.core import TranscriptSegment
+from classcue.live_transcript import LiveTranscriptBuffer
+from classcue.transcript_events import emit_transcript, transcript_listener, transcript_observer, transcript_requested
 
 
 def test_preview_coexists_with_analysis_and_restores_context():
@@ -44,7 +44,7 @@ def test_preview_is_bounded_deduplicated_and_isolated():
 def test_api_preview_taps_job_without_publishing_durable_subtitles(tmp_path):
     from api.main import create_app
     from fastapi.testclient import TestClient
-    from video_store import VideoStore
+    from classcue.video_store import VideoStore
 
     store = VideoStore(tmp_path / "test.db")
     video_id = store.create_video("hash", "lesson.mp4", "lesson.mp4", "lesson.wav", 1000)

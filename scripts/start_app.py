@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.launcher_process import windows_process_is_alive
-from asr_storage import log_directory
+from classcue.asr_storage import log_directory
 
 
 RUNTIME_ROOT = PROJECT_ROOT / ".runtime"
@@ -104,7 +104,7 @@ def start_server(port: int) -> subprocess.Popen[bytes]:
         "-m",
         "streamlit",
         "run",
-        str(PROJECT_ROOT / "video_app.py"),
+        str(PROJECT_ROOT / "classcue" / "video_app.py"),
         "--server.address",
         "127.0.0.1",
         "--server.port",

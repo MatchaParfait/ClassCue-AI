@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from dolphin_checkpoint import load_verified_dolphin_checkpoint
-import dolphin_transcriber
+from classcue.dolphin_checkpoint import load_verified_dolphin_checkpoint
+import classcue.dolphin_transcriber as dolphin_transcriber
 
 
 @pytest.fixture
@@ -107,9 +107,9 @@ def test_global_mvn_and_v1_checkpoint_conversion_are_preserved(checkpoint):
 
 
 def test_production_checksum_is_streamed_and_verified_before_any_model_load(tmp_path, monkeypatch):
-    from asr_models import DOLPHIN_REQUIRED_FILES
+    from classcue.asr_models import DOLPHIN_REQUIRED_FILES
     from scripts import prepare_dolphin
-    import dolphin_checkpoint
+    import classcue.dolphin_checkpoint as dolphin_checkpoint
 
     for name in DOLPHIN_REQUIRED_FILES["recognizer"]:
         (tmp_path / name).write_bytes(b"checkpoint")
@@ -144,9 +144,9 @@ def test_verified_loader_never_reads_checkpoint_as_bytes(checkpoint, monkeypatch
 
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
 def test_production_loader_stream_checks_once_then_loads_asr_and_cpu_vad(tmp_path, monkeypatch, device):
-    from asr_models import DOLPHIN_REQUIRED_FILES
+    from classcue.asr_models import DOLPHIN_REQUIRED_FILES
     from scripts import prepare_dolphin
-    import dolphin_checkpoint
+    import classcue.dolphin_checkpoint as dolphin_checkpoint
 
     for name in DOLPHIN_REQUIRED_FILES["recognizer"]:
         (tmp_path / name).write_bytes(b"checkpoint")

@@ -12,8 +12,8 @@ import av
 import numpy as np
 import uvicorn
 from api.main import create_app
-from core import TranscriptSegment
-from video_store import VideoStore
+from classcue.core import TranscriptSegment
+from classcue.video_store import VideoStore
 
 
 root = Path(sys.argv[1])

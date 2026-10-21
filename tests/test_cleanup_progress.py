@@ -5,9 +5,9 @@ import subprocess
 
 import pytest
 
-import cleanup_progress as cleanup
-from preparation_progress import preparation_events
-from processing_control import ProcessingCancelled
+import classcue.cleanup_progress as cleanup
+from classcue.preparation_progress import preparation_events
+from classcue.processing_control import ProcessingCancelled
 
 
 def make_files(root, count=24):
@@ -141,9 +141,9 @@ def test_readonly_package_can_be_removed(tmp_path):
 
 
 def test_runtime_device_cleanup_preserves_other_environment_and_weights(tmp_path, monkeypatch):
-    import asr_models
-    import dolphin_runtime
-    import transcriber
+    import classcue.asr_models as asr_models
+    import classcue.dolphin_runtime as dolphin_runtime
+    import classcue.transcriber as transcriber
     root = tmp_path / "assets"
     monkeypatch.setattr(asr_models, "MODEL_ROOT", root / "models/asr")
     monkeypatch.setattr(dolphin_runtime, "RUNTIME_ROOT", root / ".runtime")
@@ -166,7 +166,7 @@ def test_runtime_device_cleanup_preserves_other_environment_and_weights(tmp_path
 ])
 def test_every_runtime_uses_inventory_sizes_and_device_scope(tmp_path, monkeypatch, module_name, dual):
     import importlib
-    module = importlib.import_module(module_name)
+    module = importlib.import_module(f"classcue.{module_name}")
     root = tmp_path / "app"
     runtime = root / ".runtime"
     monkeypatch.setattr(module, "ROOT", root)

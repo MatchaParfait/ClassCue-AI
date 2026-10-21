@@ -7,9 +7,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from desktop_runtime import Lifecycle, Services, SingleInstance, http_json
-from desktop_windows import normalize_hotkey
-from frontend_host import mount_frontend
+from classcue.desktop_runtime import Lifecycle, Services, SingleInstance, http_json
+from classcue.desktop_windows import normalize_hotkey
+from classcue.frontend_host import mount_frontend
 
 
 class UI:
@@ -64,7 +64,7 @@ def exit_timers(monkeypatch):
             # Also simulate a callback already queued when cancel() runs.
             self.callback()
 
-    monkeypatch.setattr("desktop_runtime.Timer", ControlledTimer)
+    monkeypatch.setattr("classcue.desktop_runtime.Timer", ControlledTimer)
     return timers
 
 
@@ -277,7 +277,7 @@ def test_static_frontend_has_spa_fallback_without_masking_api_errors_or_leaking_
 
 
 def test_shutdown_cancels_job_and_waits_for_idle_before_owned_launcher_stops(tmp_path, monkeypatch):
-    import desktop_runtime
+    import classcue.desktop_runtime as desktop_runtime
     from scripts import start_frontend
     service = Services(tmp_path)
     service.origin = "http://127.0.0.1:8765"
@@ -321,7 +321,7 @@ def test_busy_shutdown_without_explicit_cancel_never_stops_service(tmp_path, mon
 
 
 def test_migration_status_waits_for_owned_launcher_identity_commit(tmp_path, monkeypatch):
-    import desktop_runtime
+    import classcue.desktop_runtime as desktop_runtime
     service = Services(tmp_path)
     service.origin = "http://127.0.0.1:8765"
     records = iter([
@@ -376,7 +376,7 @@ def test_unknown_listening_server_is_not_treated_as_stopped(tmp_path):
 
 
 def test_network_timeout_does_not_authorize_offline_shutdown(tmp_path, monkeypatch):
-    import desktop_runtime
+    import classcue.desktop_runtime as desktop_runtime
     monkeypatch.setattr(desktop_runtime.socket, "create_connection", lambda *_a, **_kw:
                         (_ for _ in ()).throw(TimeoutError("unreachable")))
     service = Services(tmp_path)
@@ -399,7 +399,7 @@ def test_loopback_ipc_ignores_system_proxy(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("phase", ["cancel", "poll"])
 def test_backend_death_during_cancel_still_finishes_owned_cleanup(tmp_path, monkeypatch, phase):
-    import desktop_runtime
+    import classcue.desktop_runtime as desktop_runtime
     from scripts import start_frontend
     service = Services(tmp_path)
     service.origin = "http://127.0.0.1:8765"
@@ -482,7 +482,7 @@ def test_preference_write_failure_keeps_window_visible(lifecycle):
 
 
 def test_close_preference_persists_without_overwriting_hotkey(tmp_path, monkeypatch):
-    import desktop_windows
+    import classcue.desktop_windows as desktop_windows
     monkeypatch.setattr(desktop_windows, "application_config_directory", lambda _project: tmp_path)
     path = tmp_path / "desktop_settings.json"
     path.write_text(json.dumps({"hotkey": "CTRL+ALT+K", "shortcuts_installed": True}))

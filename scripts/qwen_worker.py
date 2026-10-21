@@ -28,7 +28,7 @@ def main() -> None:
         try:
             request = json.loads(line)
             with redirect_stdout(sys.stderr):
-                from qwen_transcriber import (
+                from classcue.qwen_transcriber import (
                     load_qwen_model, transcribe_qwen, transcribe_qwen_batch,
                 )
 

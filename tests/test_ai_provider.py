@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-import ai_provider
-from ai_provider import (
+import classcue.ai_provider as ai_provider
+from classcue.ai_provider import (
     ProviderProfile, ProviderSettings, create_judge, load_provider_settings,
     provider_key_path, resolve_api_key, save_provider_settings,
 )
-from deepseek_judge import DeepSeekJudge
+from classcue.deepseek_judge import DeepSeekJudge
 
 
 @pytest.fixture(autouse=True)

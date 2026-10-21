@@ -34,11 +34,9 @@ def free_port():
 def test_real_frontend_api_start_reuse_restart_stop(tmp_path, occupied_mode, desktop):
     root = tmp_path / "application"
     root.mkdir()
-    for source in start_frontend.PROJECT_ROOT.glob("*.py"):
-        shutil.copy2(source, root / source.name)
     for name in ("pyproject.toml", "release_config.json", "uv.lock"):
         shutil.copy2(start_frontend.PROJECT_ROOT / name, root / name)
-    for directory in ("api", "scripts"):
+    for directory in ("classcue", "api", "scripts"):
         shutil.copytree(
             start_frontend.PROJECT_ROOT / directory, root / directory,
             ignore=shutil.ignore_patterns("__pycache__"),

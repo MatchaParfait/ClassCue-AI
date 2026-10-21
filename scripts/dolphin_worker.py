@@ -30,13 +30,13 @@ def main():
         try:
             request = json.loads(line)
             with redirect_stdout(sys.stderr):
-                from dolphin_transcriber import (
+                from classcue.dolphin_transcriber import (
                     DEFAULT_BATCH_SIZE, load_dolphin_model,
                     transcribe_dolphin, is_cuda_oom, release_cuda_memory,
                 )
-                from processing_control import ResourcePaused
-                from asr_cpu import cpu_thread_policy
-                from transcript_events import worker_preview_callback
+                from classcue.processing_control import ResourcePaused
+                from classcue.asr_cpu import cpu_thread_policy
+                from classcue.transcript_events import worker_preview_callback
 
                 policy = cpu_thread_policy(device, request.get("cpu_threads"))
                 audit.update(policy)
@@ -72,7 +72,7 @@ def main():
                   "duration_ms": duration, "audit": audit})
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            from processing_control import ResourcePaused
+            from classcue.processing_control import ResourcePaused
 
             if isinstance(exc, ResourcePaused):
                 model, key = None, None

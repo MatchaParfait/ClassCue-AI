@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from asr_checkpoint import reuse_funasr_checkpoint_tensors
+from classcue.asr_checkpoint import reuse_funasr_checkpoint_tensors
 
 
 class AutoModel:

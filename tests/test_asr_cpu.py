@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import asr_cpu
-import transcriber
+import classcue.asr_cpu as asr_cpu
+import classcue.transcriber as transcriber
 
 
 @pytest.mark.parametrize("available,expected", [
@@ -91,7 +91,7 @@ def test_windows_cpu_and_gpu_priority_is_normal_and_keeps_hidden_window(monkeypa
 def test_worker_startup_sets_budget_and_normal_priority_before_torch_import(
     tmp_path, monkeypatch, worker_name, ready_name, device,
 ):
-    import paraformer_runtime
+    import classcue.paraformer_runtime as paraformer_runtime
 
     monkeypatch.setattr(asr_cpu, "available_cpu_count", lambda: 4)
     monkeypatch.setattr(transcriber, "ROOT", tmp_path)
@@ -165,7 +165,7 @@ def test_child_automatically_resolves_budget_and_reloads_if_affinity_changes(
     from importlib import import_module
 
     worker = import_module(f"scripts.{engine}_worker")
-    model_module = import_module(f"{engine}_transcriber")
+    model_module = import_module(f"classcue.{engine}_transcriber")
     counts = iter([8, 4] if restricted else [8, 8])
     monkeypatch.setattr(asr_cpu, "available_cpu_count", lambda: next(counts))
     monkeypatch.setattr(sys, "argv", [f"{engine}_worker.py", "--device", "cpu"])

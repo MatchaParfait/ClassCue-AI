@@ -9,11 +9,11 @@ root = Path(sys.argv[1]).resolve()
 root.mkdir(parents=True, exist_ok=True)
 os.environ["CLASSROOM_DATA_ROOT"] = str(root / "workspace")
 
-import ai_provider
+import classcue.ai_provider as ai_provider
 import api.main as api_main
-import app_storage
-from local_credentials import save_api_key
-from video_store import VideoStore
+import classcue.app_storage as app_storage
+from classcue.local_credentials import save_api_key
+from classcue.video_store import VideoStore
 import uvicorn
 
 for variable in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):

@@ -8,11 +8,11 @@ import sqlite3
 
 import pytest
 
-import asr_models
-from core import SemanticSelection, TranscriptSegment
-import transcriber
-import video_pipeline
-from video_store import VideoStore
+import classcue.asr_models as asr_models
+from classcue.core import SemanticSelection, TranscriptSegment
+import classcue.transcriber as transcriber
+import classcue.video_pipeline as video_pipeline
+from classcue.video_store import VideoStore
 
 
 @pytest.fixture
@@ -113,7 +113,7 @@ def test_default_processing_does_not_replace_review_results(video, monkeypatch):
 
 
 def test_cancelled_retranscription_preserves_previous_results(video, monkeypatch):
-    from processing_control import ProcessingCancelled
+    from classcue.processing_control import ProcessingCancelled
 
     store, video_id = video
     monkeypatch.setattr(video_pipeline, "_transcribe_video_with_fallback",
@@ -233,7 +233,7 @@ def test_interrupted_qwen_transcription_unloads_worker_before_next_request(tmp_p
     transcriber.unload_model()
     monkeypatch.setattr(asr_models, "MODEL_ROOT", tmp_path / "models")
     monkeypatch.setattr(transcriber, "prepare_asr_model", lambda *_args: None)
-    import qwen_resilience
+    import classcue.qwen_resilience as qwen_resilience
     monkeypatch.setattr(transcriber, "QwenWorker", Worker)
     transcriber._loaded_model = Worker()
     transcriber._loaded_key = ("qwen3-asr-1.7b", "legacy")
@@ -321,7 +321,7 @@ def test_firered_worker_launch_sets_device_and_cpu_hides_cuda(tmp_path, monkeypa
 
 
 def test_firered_cpu_is_blocked_before_preparation_without_gpu_fallback(tmp_path, monkeypatch):
-    import firered_resilience
+    import classcue.firered_resilience as firered_resilience
 
     monkeypatch.setattr(transcriber, "FireRedWorker", lambda *_a, **_k: pytest.fail("No CPU worker"))
     monkeypatch.setattr(transcriber, "prepare_asr_model", lambda *_: pytest.fail("No preparation"))
@@ -343,7 +343,7 @@ def test_legacy_firered_cpu_preparation_cannot_install_or_download(tmp_path, mon
 
 
 def test_firered_orchestration_receives_native_vad_and_workspace_cache(tmp_path, monkeypatch):
-    import firered_resilience
+    import classcue.firered_resilience as firered_resilience
     paths = {"recognizer": tmp_path / "asr", "vad": tmp_path / "vad"}
     monkeypatch.setattr(transcriber, "prepare_asr_model", lambda *_args: None)
     monkeypatch.setattr(transcriber, "component_paths", lambda _id: paths)
@@ -359,8 +359,8 @@ def test_firered_orchestration_receives_native_vad_and_workspace_cache(tmp_path,
 
 
 def test_firered_cancel_is_not_wrapped_as_setup_or_media_error(tmp_path, monkeypatch):
-    from processing_control import ProcessingCancelled
-    import firered_resilience
+    from classcue.processing_control import ProcessingCancelled
+    import classcue.firered_resilience as firered_resilience
     monkeypatch.setattr(transcriber, "prepare_asr_model", lambda *_args: None)
     monkeypatch.setattr(transcriber, "selected_firered_device", lambda: "gpu")
     monkeypatch.setattr(transcriber, "component_paths", lambda _id: {
@@ -373,7 +373,7 @@ def test_firered_cancel_is_not_wrapped_as_setup_or_media_error(tmp_path, monkeyp
 
 
 def test_firered_cpu_cancel_during_vad_closes_worker(tmp_path):
-    from processing_control import ProcessingCancelled
+    from classcue.processing_control import ProcessingCancelled
 
     worker = transcriber.FireRedWorker.__new__(transcriber.FireRedWorker)
     worker.device = "cpu"

@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from api.main import VideoProcessPayload
-from core import SemanticSelection, TranscriptSegment
-from video_pipeline import build_screening_chunks, create_semantic_markers
-from video_store import VideoStore
+from classcue.core import SemanticSelection, TranscriptSegment
+from classcue.video_pipeline import build_screening_chunks, create_semantic_markers
+from classcue.video_store import VideoStore
 
 
 @pytest.mark.parametrize("exam, extension, mode", [

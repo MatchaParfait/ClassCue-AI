@@ -11,8 +11,8 @@ av = pytest.importorskip("av")
 np = pytest.importorskip("numpy")
 
 from api.main import create_app
-from video_store import VideoStore
-from video_thumbnail import ThumbnailUnavailable, cached_video_thumbnail, video_thumbnail
+from classcue.video_store import VideoStore
+from classcue.video_thumbnail import ThumbnailUnavailable, cached_video_thumbnail, video_thumbnail
 
 
 def make_video(path, frames=30, target_color=(200, 30, 50), width=640, height=360, target_pixels=None):
@@ -37,7 +37,7 @@ def decoded_image(data):
 
 
 def test_exact_frame_24_native_and_cached_without_touching_source(tmp_path, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
 
     source = tmp_path / "source.mkv"
     make_video(source)
@@ -58,7 +58,7 @@ def test_exact_frame_24_native_and_cached_without_touching_source(tmp_path, monk
 
 
 def test_cache_only_lookup_never_decodes_or_creates_missing_cache(tmp_path, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
     source = tmp_path / "source.mkv"
     make_video(source)
     cache = tmp_path / "cache"
@@ -114,7 +114,7 @@ def test_preserves_single_pixel_color_detail(tmp_path):
 
 
 def test_legacy_thumbnail_is_not_reused_and_version_changes_invalidate_cache(tmp_path, monkeypatch):
-    import video_thumbnail as thumbnails
+    import classcue.video_thumbnail as thumbnails
 
     source = tmp_path / "source.mkv"
     make_video(source)
@@ -133,7 +133,7 @@ def test_legacy_thumbnail_is_not_reused_and_version_changes_invalidate_cache(tmp
 
 def test_endpoint_uses_configured_cache_and_survives_new_app(tmp_path, monkeypatch):
     import api.main as api_main
-    import asr_storage
+    import classcue.asr_storage as asr_storage
 
     project = tmp_path / "application"
     workspace = tmp_path / "workspace"

@@ -8,7 +8,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
 try:
-    from desktop_runtime import SingleInstance
+    from classcue.desktop_runtime import SingleInstance
     SingleInstance(PROJECT / ".runtime", lambda _action: None).send("activate", attempts=2)
 except Exception:
     subprocess.Popen(
