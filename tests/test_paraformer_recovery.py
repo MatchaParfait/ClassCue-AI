@@ -8,8 +8,35 @@ import pytest
 
 import paraformer_transcriber as paraformer
 from processing_control import ResourcePaused
-from scripts.benchmark_paraformer_cpu import validate_output
 from transcriber import ParaformerWorker
+
+
+def validate_output(segments, duration_ms, audit):
+    expected = audit["batch_size"]
+    targets = [batch.get("target_batch_size", expected) for batch in audit.get("batches", [])]
+    sizes = audit["batch_sizes"]
+    if not targets:
+        targets = [expected] * len(sizes)
+    assert len(targets) == len(sizes)
+    assert all(1 <= target <= expected for target in targets)
+    assert sizes[:-1] == targets[:-1]
+    assert not sizes or 1 <= sizes[-1] <= targets[-1]
+    if "input_order" in audit:
+        order = audit["input_order"]
+        assert sorted(order) == list(range(len(audit["speech_intervals_ms"])))
+        assert [index for batch in audit["batches"] for index in batch["original_indices"]] == order
+    last_start = -1
+    for index, segment in enumerate(segments, 1):
+        assert segment.id == index
+        assert last_start <= segment.start_ms < segment.end_ms <= duration_ms + 1
+        assert segment.start_ms >= 0
+        assert segment.words
+        for word in segment.words:
+            assert word["start"] * 1000 >= segment.start_ms - 2
+            assert word["end"] * 1000 <= segment.end_ms + 2
+        last_start = segment.start_ms
+    assert not audit["speech_intervals_ms"] or segments
+    return {"subtitle_count": len(segments)}
 
 
 class CudaOOM(RuntimeError):

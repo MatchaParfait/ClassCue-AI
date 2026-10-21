@@ -16,29 +16,13 @@ import subprocess
 import sys
 
 
-HISTORICAL_ASR_RUNS = frozenset({
-    "firered-bs-20261011-2020",
-    "firered-bs-20261011-rerun",
-    "firered-bs-20261011-validated",
-    "firered-bs8-20261011",
-    "firered-bs8-20261011-unguarded",
-    "firered-routing-20261011",
-    "qwen-bs1-30s-20261011",
-    "qwen-resilience-20261011",
-})
 LOCAL_ROOTS = frozenset({
     ".runtime", ".venv", "data", "models", "output", "outputs", "projects",
     "recovered-images",
 })
 CACHE_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache", "node_modules"})
 EXAMPLE_ENV_FILES = frozenset({".env.example", ".env.sample", ".env.template"})
-EXPERIMENT_OUTPUT_NAMES = frozenset({
-    "raw_outputs.json", "progress.json", "resource_samples.json",
-    "vad_segments.json", "subtitles.json", "transcript.json",
-    "transcript.txt", "transcription.json", "transcription.txt",
-    "firered.json", "firered.txt", "qwen3-asr-1.7b.json",
-    "qwen3-asr-1.7b.txt", "qwen-no-skip.json", "qwen-no-skip.txt",
-})
+PRIVATE_INSTRUCTIONS = frozenset({"agent.md", "agents.md", "前端开发.md"})
 SECRET_PATTERNS = (
     ("OpenAI API key", re.compile(
         rb"(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}"
@@ -63,6 +47,8 @@ def path_violations(path: str) -> list[str]:
     name = parts[-1]
     suffix = PurePosixPath(name).suffix
     reasons = []
+    if name in PRIVATE_INSTRUCTIONS:
+        reasons.append("internal collaboration instructions")
     if parts[0] in LOCAL_ROOTS or any(part in CACHE_DIRECTORIES for part in parts):
         reasons.append("local runtime, backup, or dependency directory")
     if parts[:2] == ("frontend", "dist"):
@@ -71,18 +57,13 @@ def path_violations(path: str) -> list[str]:
         reasons.append("local environment credentials")
     if suffix in {".pyc", ".db", ".sqlite", ".sqlite3", ".dpapi", ".p12", ".pfx", ".key"}:
         reasons.append("local database, bytecode, or private credential file")
-    if not parts or parts[0] != "experiments":
-        return reasons
-    if "jobs" in parts or "acceptance-workspace" in parts or parts[1:2] == ("llm-lab",):
-        reasons.append("private experiment workspace or job cache")
-    if suffix in {".log", ".wav", ".srt", ".lock"}:
-        reasons.append("generated experiment audio, log, subtitle, or lock")
-    if name in EXPERIMENT_OUTPUT_NAMES:
-        reasons.append("raw experiment output or transcript")
-    if len(parts) > 1 and parts[1] in HISTORICAL_ASR_RUNS and suffix in {
-        ".json", ".srt", ".txt", ".log",
-    }:
-        reasons.append("historical ASR run data belongs in private backup")
+    if parts[0] == "experiments" and parts != ("experiments", "readme.md"):
+        scene_source = (
+            parts[:3] == ("experiments", "subtitle-cyberspace", "src")
+            and suffix in {".js", ".ts"} and name != "main.js"
+        )
+        if not scene_source:
+            reasons.append("private experiment material outside the shared scene source")
     return reasons
 
 

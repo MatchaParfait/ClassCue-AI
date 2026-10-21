@@ -65,6 +65,9 @@
 ```powershell
 python -m pip install uv
 uv sync --locked --group dev
+Push-Location frontend
+npm ci
+Pop-Location
 uv run --locked --group dev python -m pytest tests -q
 ```
 
@@ -192,7 +195,7 @@ python batch_process.py --videos "D:\课堂视频" --base-url "https://your-rela
 - Paraformer CPU 使用官方 BiCIF 时间戳增强权重和 FSMN-VAD，独立环境只安装 CPU 版 PyTorch，并屏蔽 CUDA。音频分块解码到临时 WAV，VAD 使用官方离线文件调用，只接收完整语音区间；结束静音阈值为 800 毫秒，最长语音段 30 秒在模型构建时设置。ASR 按片段长度稳定排序组批，不合并或重切原片段，每批实际处理最多 4 个语音片段，默认使用 16 个 CPU 计算线程；不加载标点、说话人或语言模型。识别后按原片段索引恢复字幕顺序和连续编号，字词时间戳映射回原视频时间轴，缺失或无效时拒绝生成字幕。基准脚本可用 `--batch-order time` 对照原时间顺序组批。模型 ID 为 `paraformer-large-cpu`，不是 Hugging Face 普通版 `paraformer-zh`。
 - Paraformer 现在可以在设置页选择 CPU / GPU，默认仍为 CPU，原模型 ID 和权重缓存保持兼容。GPU 使用单独的 `paraformer-gpu` 环境（PyTorch 2.7.1 + CUDA 12.8），不覆盖 `paraformer-cpu` 环境。CUDA 未通过 GPU 环境中的实际张量分配与同步检查时，页面禁用 GPU，后端也拒绝保存 GPU 选择；GPU ASR 推理失败不会静默降级到 CPU。首次点击“准备 GPU 环境”只准备依赖，不更改已保存的设备。设备切换后工作进程重建，ASR 加载到所选设备，FSMN-VAD 固定在 CPU，以避免逐帧 CUDA 标量读取；权重、切分阈值和原生 BiCIF 时间戳保持不变。
 - Paraformer GPU 默认参考 Qwen 按原生总显存选档，不使用当前空闲显存或共享显存：至少 3 GiB 使用 BS16，2 GiB 至不足 3 GiB 使用 BS8，低于 2 GiB 或容量检测失败时禁止 GPU 选择，CPU 默认 BS4。分档沿用 64 MiB 容量预留容差；2/3 GiB 显卡尚未实机验证。每个视频任务重新选档；仅真实 CUDA OOM 才按 BS16 → 8 → 4 → 2 → 1 有限降级，重试失败批次并保留当前任务的低档。BS1 仍失败时进入资源暂停，不切换设备或精度。模型加载 OOM 只清理并重试一次；显式传入的 BS 保留作为手动测试参数。暂停后继续会重新处理当前未完成的视频，尚未新增视频内持久化检查点。
-- 接口：`PUT /api/asr/selection` 接受 `{"model_id":"paraformer-large-cpu","paraformer_device":"cpu"}` 或 `"gpu"`；模型状态返回 `device`、`gpu_available`、`gpu_runtime_ready`、`gpu_prepare_available` 和 `gpu_name`。可通过 `POST /api/asr/models/paraformer-large-cpu/prepare?device=gpu` 单独准备 GPU 环境。基准脚本 `scripts/benchmark_paraformer_cpu.py` 兼容 CPU 默认模式，也支持 `--device gpu --batch-size 8`；默认 VAD 使用 CPU，`--vad-device gpu` 仅用于 GPU ASR 下的性能对照。GPU 模式记录设备级利用率、设备级显存和本进程 PyTorch 分配器峰值，计时边界显式同步 CUDA，并分别审计 ASR/VAD 参数设备和实际编码器批次。单文件 VAD 的实际批次仍为 1，不随 ASR 的 BS 增大而并行处理内部计算块。
+- 接口：`PUT /api/asr/selection` 接受 `{"model_id":"paraformer-large-cpu","paraformer_device":"cpu"}` 或 `"gpu"`；模型状态返回 `device`、`gpu_available`、`gpu_runtime_ready`、`gpu_prepare_available` 和 `gpu_name`。可通过 `POST /api/asr/models/paraformer-large-cpu/prepare?device=gpu` 单独准备 GPU 环境。默认 VAD 使用 CPU。单文件 VAD 的实际批次仍为 1，不随 ASR 的 BS 增大而并行处理内部计算块。
 - 权重统一保存在 `models/asr/<模型标识>/`，Qwen 识别模型和时间对齐模型一起准备、一起清除。
 - 磁盘空间不足时可在本机 `data/asr_storage.json` 配置 `{"storage_root": "D:\\codex-models\\classroom-agent"}`，将权重和 Qwen/FireRed 环境及依赖缓存放到该专用目录下。此配置不提交到 Git，不会移动已有文件；使用过其他位置的模型需回到原位置清除。目录必须是绝对路径且不能经过链接或联接。
 - “模型缓存”中可选择清除对象并确认；正在下载或转写的模型不能清除。
@@ -302,15 +305,11 @@ GPU OOM 将实际批次减半重试，BS1 仍失败或系统内存不足则暂�
 GPU 默认启用项目适配层的 `host-search`：CUDA 整批计算 top-k 后集中搬到 CPU，
 仍调用原样官方 CTC 搜索；重打分输出也集中搬运，减少逐标量同步。CPU 路径不变。
 beam10、FP32、官方字词对齐和默认 BS8 均不变，官方源码及安装文件不修改。
-基准脚本支持 `--dolphin-decoder official` 回退对照，`--dolphin-profile` 拆分计时，
-`--seed 0` 固定特征提取随机种子。原始实机优化记录不随公开源码分发。
 GPU 批次前内存余量不足时仅回收一次未使用缓存，再按原阈值复查；仍不足则暂停。
 
 `PUT /api/asr/selection` 接受 `{"model_id":"dolphin-small-cn","dolphin_device":"cpu"}` 或 `"gpu"`。
 `POST /api/asr/models/dolphin-small-cn/prepare?device=gpu` 只准备环境，不改变已保存设备。
-性能测试使用对应环境的 Python 运行
-`scripts/benchmark_nano.py <audio-or-video> --engine dolphin --device gpu --batch-size 8 --output <new-directory>`。
-请用自己有权处理的输入运行基准脚本；原始课堂字幕和历史部署记录不随公开源码分发。
+原始课堂字幕、独立性能实验工具和历史部署记录不随公开源码分发。
 
 ### Fun-ASR-Nano 离线转写
 
@@ -323,14 +322,8 @@ FSMN-VAD 在 CPU 运行，单段最长 30 秒，原生短段保留；字幕保�
 GPU OOM 依次尝试缩小输入组 6→3→1，BS1 仍失败则暂停；不自动切换设备或伪造时间戳。
 恢复暂停任务时会重新转写当前未完成视频。
 
-部署和实测见 `docs/nano_deployment_2026-10-13.md`。基准入口：
-
 ```powershell
-& D:/codex-models/classroom-agent/.runtime/fun-asr-nano-gpu/Scripts/python.exe scripts/benchmark_nano.py <audio-or-video> --device gpu --batch-size 6 --output <new-result-directory>
-```
-
-```powershell
-python -m pytest -q
+uv run --locked --group dev python -m pytest -q
 ```
 
 GitHub Actions 会在 Windows 上运行测试。贡献说明见 [CONTRIBUTING.md](../CONTRIBUTING.md)。

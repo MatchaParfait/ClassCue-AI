@@ -12,6 +12,7 @@ from scripts import check_repository_hygiene as hygiene
     "frontend/node_modules/package/index.js", "frontend/dist/assets/index.js",
     "nested/__pycache__/cached.pyc", ".env.local", "nested/.env.production",
     "data/classroom.db", "private.pem.key", "api_key.dpapi",
+    "Agent.md", "agent.md", "AGENTS.md", "nested/AGENTS.md", "前端开发.md",
     "experiments/new-run/jobs/id/request.json", "experiments/new-run/worker.log",
     "experiments/new-run/transcript.txt", "experiments/new-run/subtitles.json",
     "experiments/new-run/firered.txt", "experiments/new-run/qwen3-asr-1.7b.json",
@@ -19,6 +20,10 @@ from scripts import check_repository_hygiene as hygiene
     "experiments/firered-bs8-20261011/summary.json",
     "experiments/qwen-resilience-20261011/qwen3-asr-1.7b.txt",
     "experiments/llm-lab/seed.json", "experiments/new-run/acceptance-workspace/data.json",
+    "experiments/new-run/summarize.py", "experiments/new-run/report.md",
+    "experiments/subtitle-cyberspace/package-lock.json",
+    "experiments/subtitle-cyberspace/src/main.js",
+    "experiments/subtitle-cyberspace/src/style.css",
 ])
 def test_rejects_local_and_generated_paths(path):
     assert hygiene.path_violations(path)
@@ -29,12 +34,9 @@ def test_rejects_local_and_generated_paths(path):
     "frontend/package-lock.json", "uv.lock", "assets/gtcrn/gtcrn_simple.onnx",
     "docs/images/library.png", "tests/fixtures/synthetic.json",
     "experiments/subtitle-cyberspace/src/scene.js",
-    "experiments/subtitle-cyberspace/package-lock.json",
-    "experiments/qwen-bs1-30s-20261011/summarize.py",
-    "experiments/firered-bs8-20261011/report.md",
-    "experiments/new-run/synthetic-fixture.json",
+    "experiments/subtitle-cyberspace/src/fixture.d.ts", "experiments/README.md",
 ])
-def test_keeps_code_fixtures_dependencies_and_public_reports(path):
+def test_keeps_public_code_fixtures_dependencies_and_shared_scene(path):
     assert not hygiene.path_violations(path)
 
 
@@ -136,22 +138,25 @@ def test_gitignore_covers_local_artifacts_without_hiding_scene_code(repository):
     (repository / ".gitignore").write_bytes((source_root / ".gitignore").read_bytes())
     ignored = [
         "output/image.png", "outputs/image.png", "recovered-images/image.png", ".env.local",
+        "Agent.md", "agent.md", "AGENTS.md", "前端开发.md",
         "experiments/new-run/jobs/id/state.json", "experiments/new-run/worker.log",
         "experiments/firered-bs8-20261011/summary.json",
         "experiments/firered-routing-20261011/verified-telemetry/subtitles.json",
+        "experiments/new-run/summarize.py", "experiments/new-run/report.md",
+        "experiments/subtitle-cyberspace/src/main.js",
+        "experiments/subtitle-cyberspace/src/style.css",
     ]
     result = subprocess.run(
-        ["git", "-C", str(repository), "check-ignore", "--stdin"],
+        ["git", "-c", "core.quotepath=false", "-C", str(repository), "check-ignore", "--stdin"],
         input="\n".join(ignored).encode(), capture_output=True, check=False,
     )
     assert set(result.stdout.decode().splitlines()) == set(ignored)
     allowed = [
         ".env.example", "experiments/subtitle-cyberspace/src/scene.js",
-        "experiments/qwen-bs1-30s-20261011/summarize.py",
-        "experiments/firered-bs8-20261011/report.md",
+        "experiments/subtitle-cyberspace/src/fixture.d.ts", "experiments/README.md",
     ]
     result = subprocess.run(
-        ["git", "-C", str(repository), "check-ignore", "--stdin"],
+        ["git", "-c", "core.quotepath=false", "-C", str(repository), "check-ignore", "--stdin"],
         input="\n".join(allowed).encode(), capture_output=True, check=False,
     )
     assert not result.stdout

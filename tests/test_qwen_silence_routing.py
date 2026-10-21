@@ -1,13 +1,10 @@
 from types import SimpleNamespace
-import sys
-import wave
 
 import numpy as np
 import pytest
 
 import qwen_transcriber
 from qwen_silence import resolve_silence_skipping
-from scripts import benchmark_qwen_silence, qwen_chunked
 from transcriber import QwenWorker
 
 
@@ -87,49 +84,6 @@ def test_invalid_scene_fails_before_decoding(monkeypatch):
         qwen_transcriber.transcribe_qwen(object(), "source.wav", audio_profile="auto")
 
 
-@pytest.mark.parametrize(("flags", "expected"), [
-    ([], False),
-    (["--audio-profile", "general"], False),
-    (["--audio-profile", "mostly-silent"], True),
-    (["--audio-profile", "mostly-silent", "--keep-non-speech"], False),
-    (["--skip-non-speech"], True),
-    (["--keep-non-speech"], False),
-])
-def test_cli_route_and_existing_chunk_defaults(flags, expected):
-    args = qwen_chunked._parse_args(["source.mp4", "--output", "output", *flags])
-    assert args.skip_non_speech is expected
-    assert (args.chunk_seconds, args.batch_size, args.boundary_mode) == (300, 1, "fixed")
-
-
-@pytest.mark.parametrize("flags", [
-    ["--audio-profile", "auto"],
-    ["--skip-non-speech", "--keep-non-speech"],
-])
-def test_cli_rejects_invalid_or_conflicting_choices(flags):
-    with pytest.raises(SystemExit):
-        qwen_chunked._parse_args(["source.mp4", "--output", "output", *flags])
-
-
-@pytest.mark.parametrize(("profile", "condition"), [
-    ("general", "no-skip"), ("mostly-silent", "skip"),
-])
-def test_staged_cli_passes_route_without_loading_any_model(monkeypatch, profile, condition):
-    calls = []
-    monkeypatch.setattr(sys, "argv", [
-        "qwen_chunked.py", "source.mp4", "--output", "output",
-        "--boundary-mode", "firered", "--chunk-seconds", "90", "--batch-size", "2",
-        "--audio-profile", profile, "--staged",
-    ])
-    import qwen_resilience
-    monkeypatch.setattr(qwen_resilience, "run_qwen",
-                        lambda *_args, **kwargs: calls.append(kwargs["options"]) or ([], 1000))
-    monkeypatch.setattr(qwen_chunked, "_write_result", lambda *_args: None)
-    assert qwen_chunked.main() == 0
-    assert calls[0].audio_profile == profile
-    assert calls[0].skip_non_speech is (condition == "skip")
-    assert (calls[0].chunk_seconds, calls[0].batch_size) == (90, 2)
-
-
 def test_worker_forwards_profile_through_existing_small_interface(tmp_path):
     worker = QwenWorker.__new__(QwenWorker)
     requests = []
@@ -143,28 +97,3 @@ def test_worker_forwards_profile_through_existing_small_interface(tmp_path):
     ) == ([], 2000)
     assert requests[0]["silence_options"] == options
     assert requests[0]["silence_audit_output"] == str(tmp_path / "audit.json")
-
-
-def test_staged_preparation_records_scene_and_keeps_original_samples(monkeypatch, tmp_path):
-    import json
-
-    source = tmp_path / "source.wav"
-    with wave.open(str(source), "wb") as target:
-        target.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
-        target.writeframes(b"\0\0" * 32000)
-    monkeypatch.setattr(benchmark_qwen_silence, "detect_speech", lambda *_: {
-        "speech_intervals": [[.5, 1]],
-        "worker_wall_seconds": 0, "load_seconds": 0, "inference_seconds": 0,
-    })
-    output = tmp_path / "output"
-    args = SimpleNamespace(
-        video=tmp_path / "source.mp4", output=output, audio=source,
-        sample_start=0, sample_seconds=None, chunk_seconds=90, batch_size=2,
-        speech_padding_seconds=.3, min_removed_seconds=1.5,
-        condition="no-skip", audio_profile="general", prepare_only=True,
-    )
-    assert benchmark_qwen_silence.run_trial(args) == 0
-    payload = json.loads((output / "inference_plan.json").read_text(encoding="utf-8"))
-    assert payload["routing"] == {"audio_profile": "general", "skip_non_speech": False}
-    assert payload["sample_silence_plans"]["no-skip"]["removed_samples"] == 0
-    assert sum(c["input_samples"] for c in payload["modes"][0]["chunks"]) == 32000

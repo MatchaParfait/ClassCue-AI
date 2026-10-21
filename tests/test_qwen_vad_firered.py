@@ -7,7 +7,12 @@ import wave
 import numpy as np
 import pytest
 
-from qwen_vad_firered import _frame_windows, detect_firered, validate_intervals
+from qwen_vad_firered import DEFAULT_MODEL_PATH, _frame_windows, detect_firered, validate_intervals
+
+
+def test_standalone_default_model_is_relative_to_application():
+    root = Path(__file__).resolve().parents[1]
+    assert DEFAULT_MODEL_PATH == root / "models" / "asr" / "fireredasr2-aed" / "vad" / "VAD"
 
 
 def test_native_intervals_are_seconds_not_milliseconds():

@@ -13,8 +13,8 @@ import wave
 SAMPLE_RATE = 16000
 FRAME_SHIFT_SAMPLES = 160
 FRAME_LENGTH_SAMPLES = 400
-DEFAULT_MODEL_PATH = Path(
-    "D:/codex-models/classroom-agent/models/asr/fireredasr2-aed/vad/VAD"
+DEFAULT_MODEL_PATH = (
+    Path(__file__).resolve().parent / "models" / "asr" / "fireredasr2-aed" / "vad" / "VAD"
 )
 
 
