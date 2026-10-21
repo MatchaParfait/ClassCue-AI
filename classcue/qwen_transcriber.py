@@ -16,6 +16,21 @@ import unicodedata
 from classcue.core import TranscriptSegment
 
 
+class QwenAlignmentError(ValueError):
+    """Numerical alignment failure with transcript-free diagnostic context."""
+
+    def __init__(self, reason, index, start, end, previous_start, duration):
+        self.details = {
+            "reason": reason, "word_index": index, "start": start, "end": end,
+            "previous_start": previous_start, "duration_seconds": duration,
+        }
+        super().__init__(
+            "Qwen 时间对齐超出音频范围或顺序错误。"
+            f" reason={reason}, word_index={index}, start={start}, end={end},"
+            f" previous_start={previous_start}, duration_seconds={duration}"
+        )
+
+
 def aligned_segments(
     text: str,
     items: list,
@@ -38,13 +53,15 @@ def aligned_segments(
     matched = []
     cursor = 0
     previous_start = 0.0
-    for item in items:
+    for index, item in enumerate(items):
         token = item.text.strip()
         start, end = float(item.start_time), float(item.end_time)
         if not token or not math.isfinite(start) or not math.isfinite(end):
             raise ValueError("Qwen 时间对齐包含无效字词或时间。")
-        if start < -0.05 or end < start or start < previous_start - 0.05 or end > duration_seconds + 0.25:
-            raise ValueError("Qwen 时间对齐超出音频范围或顺序错误。")
+        if start < -0.05 or end < start or start < previous_start - 0.05:
+            raise QwenAlignmentError("order", index, start, end, previous_start, duration_seconds)
+        if end > duration_seconds + 0.25:
+            raise QwenAlignmentError("audio_end", index, start, end, previous_start, duration_seconds)
         if not normalized.startswith(token, cursor):
             raise ValueError("Qwen 时间对齐字词与转写文本不一致。")
         position = text_positions[cursor]
@@ -86,6 +103,55 @@ def aligned_segments(
             finish()
     finish()
     return result
+
+
+def recover_aligned_segments(
+    model, text, items, waveform, *, allow_recovery=True, diagnostic=None,
+) -> list[TranscriptSegment]:
+    """Retry only end-boundary failures once, without changing the source timeline."""
+    audio, rate = waveform
+    duration = len(audio) / rate
+    try:
+        return aligned_segments(text, items, 0, duration)
+    except QwenAlignmentError as error:
+        if not allow_recovery or error.details["reason"] != "audio_end":
+            raise
+        original_error = error.details
+
+    import numpy as np
+
+    # Changing the trailing acoustic boundary can resolve the aligner's end drift.
+    # Recovered timestamps must fit the ORIGINAL audio even before normalization.
+    padding_samples = round(rate * .25)
+    context = {"original_error": original_error, "padding_samples": padding_samples,
+               "sample_rate": rate}
+    if diagnostic:
+        diagnostic({**context, "status": "retrying"})
+    try:
+        outputs = model.align(
+            audio=[(np.pad(audio, (0, padding_samples)), rate)],
+            text=[text], language="Chinese",
+        )
+        if len(outputs) != 1:
+            raise ValueError("Unexpected alignment recovery output count")
+        recovered = list(outputs[0].items)
+        cues = aligned_segments(text, recovered, 0, duration)
+        previous = 0.0
+        for index, item in enumerate(recovered):
+            start, end = float(item.start_time), float(item.end_time)
+            if start < 0 or end > duration:
+                raise QwenAlignmentError("recovery_bounds", index, start, end, previous, duration)
+            previous = start
+    except Exception as error:
+        if diagnostic:
+            diagnostic({**context, "status": "failed", "error_type": type(error).__name__,
+                        "error": str(error)})
+        raise
+    if diagnostic:
+        diagnostic({**context, "status": "recovered", "word_count": len(recovered),
+                    "max_end_seconds": max((float(item.end_time) for item in recovered), default=0),
+                    "zero_duration_words": sum(item.start_time == item.end_time for item in recovered)})
+    return cues
 
 
 def decode_audio(path: str | Path):

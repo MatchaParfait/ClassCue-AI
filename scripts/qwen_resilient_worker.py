@@ -1,4 +1,4 @@
-"""One isolated Qwen stage; every successful batch is committed before progress."""
+"""One isolated Qwen stage; validated chunks are committed before progress."""
 
 import argparse
 from contextlib import redirect_stdout
@@ -73,11 +73,20 @@ def main():
     metrics = {"stage": stage, "attempt_id": attempt_id, "batches": batches,
                "memory_guard_enabled": False, "batch_size": request["batch_size"],
                "process_id": os.getpid(), "device": "cuda:0", "dtype": "float16"}
+    alignment_context = None
+    alignment_diagnostics = []
+
+    def record_alignment(event):
+        alignment_diagnostics.append({**alignment_context, **event})
+        atomic_json(args.output / f"alignment-diagnostics-{attempt_id}.json", alignment_diagnostics)
+
     try:
         with redirect_stdout(sys.stderr):
             import torch
             from qwen_asr import Qwen3ForcedAligner
-            from classcue.qwen_transcriber import load_qwen_model, _checkpoint_reader, aligned_segments
+            from classcue.qwen_transcriber import (
+                load_qwen_model, _checkpoint_reader, recover_aligned_segments,
+            )
             from classcue.qwen_loading import model_loading
             from classcue.qwen_silence import restore_segments
 
@@ -153,20 +162,31 @@ def main():
                         if len(outputs) != len(nonempty):
                             raise ValueError("Unexpected alignment output count")
                         result = {}
-                        for (chunk, _), output in zip(nonempty, outputs):
+                        for (chunk, waveform), output in zip(nonempty, outputs):
+                            alignment_context = {
+                                "source_chunk_index": chunk["source_chunk_index"],
+                                "start_sample": chunk["start_sample"], "end_sample": chunk["end_sample"],
+                                "input_samples": chunk["input_samples"],
+                            }
                             text = texts[chunk["source_chunk_index"]]
-                            cues = aligned_segments(text, list(output.items), 0,
-                                                    chunk["input_samples"] / manifest["rate"])
+                            cues = recover_aligned_segments(
+                                model, text, list(output.items), waveform,
+                                allow_recovery=options.auto_recovery, diagnostic=record_alignment,
+                            )
                             warnings = []
                             restored = restore_segments(cues, chunk, manifest["rate"],
                                                         manifest["total_samples"], warnings=warnings)
                             validate_segments(restored, chunk["end_sample"] / manifest["rate"] * 1000,
                                               chunk["start_sample"] / manifest["rate"] * 1000)
                             result[chunk["source_chunk_index"]] = [asdict(s) for s in restored]
+                            phase = "checkpoint"
+                            checkpoints.save("align", chunk, result[chunk["source_chunk_index"]], text)
+                            phase = "inference"
+                            alignment_context = None
                         phase = "checkpoint"
                         for chunk in group:
-                            checkpoints.save("align", chunk, result.get(chunk["source_chunk_index"], []),
-                                             texts[chunk["source_chunk_index"]])
+                            if chunk["source_chunk_index"] not in result:
+                                checkpoints.save("align", chunk, [], texts[chunk["source_chunk_index"]])
                     batches.append({"seconds": time.perf_counter() - begin, "memory": snapshot()})
                     phase = "inference"
                     fraction = (index + len(group)) / max(1, len(pending))
@@ -185,6 +205,10 @@ def main():
         failure = {"kind": kind, "phase": phase, "stage": stage, "message": str(error),
                    "error_type": type(error).__name__, "traceback": traceback.format_exc(),
                    "memory": snapshot()}
+        if alignment_context is not None:
+            failure["alignment_chunk"] = alignment_context
+        if hasattr(error, "details"):
+            failure["alignment_error"] = error.details
         atomic_json(args.output / f"failure-{attempt_id}.json", failure)
         traceback.print_exc(file=sys.stderr)
         return 1
