@@ -1,0 +1,102 @@
+[
+  {
+    "label": "合成正例：考试提示在前，明确对象在后，仍须提取",
+    "transcript": [
+      {"id": 1, "text": "我们这门课考试会出类似的题，下面说的就是这种题。"},
+      {"id": 2, "text": "请按字典序生成这个序列所有可能的全排列。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "explicit_exam", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "按字典序生成全排列", "reason": "教师明确将随后给出的全排列题与课程考试联系起来。", "evidence_quote": "我们这门课考试会出类似的题，下面说的就是这种题。请按字典序生成这个序列所有可能的全排列。"}
+    ]}
+  },
+  {
+    "label": "合成正例：不说会考，但明确要求掌握具体方法",
+    "transcript": [
+      {"id": 1, "text": "循环不变式证明有初始化、保持和终止三个步骤。"},
+      {"id": 2, "text": "这个证明方法是重点，这三个步骤大家必须掌握。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "emphasis", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "循环不变式证明的三个步骤", "reason": "教师明确将证明方法列为重点，并要求掌握三个步骤。", "evidence_quote": "循环不变式证明有初始化、保持和终止三个步骤。这个证明方法是重点，这三个步骤大家必须掌握。"}
+    ]}
+  },
+  {
+    "label": "合成正例：易错条件有明确记忆要求",
+    "transcript": [
+      {"id": 1, "text": "二分查找开区间和闭区间的边界更新规则容易混淆。"},
+      {"id": 2, "text": "这两种规则是需要掌握的知识点，大家一定要分清并记住。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "easy_error", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "二分查找开闭区间的边界更新规则", "reason": "教师明确要求掌握并记住容易混淆的边界更新规则。", "evidence_quote": "二分查找开区间和闭区间的边界更新规则容易混淆。这两种规则是需要掌握的知识点，大家一定要分清并记住。"}
+    ]}
+  },
+  {
+    "label": "合成正例：具体步骤有明确备考要求",
+    "transcript": [
+      {"id": 1, "text": "分治算法先判断子问题是否独立。"},
+      {"id": 2, "text": "复习时重点准备这个独立性的判断步骤，考试要求写出来。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "explicit_exam", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "子问题独立性的判断步骤", "reason": "教师明确要求重点复习该判断步骤，并指出考试要求写出。", "evidence_quote": "分治算法先判断子问题是否独立。复习时重点准备这个独立性的判断步骤，考试要求写出来。"}
+    ]}
+  },
+  {
+    "label": "合成反例：知识很重要但没有明确掌握或考试要求",
+    "transcript": [
+      {"id": 1, "text": "分治思想很重要，深入理解并应用这个思想才是核心。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：宽泛能力要求不等于具体知识重点",
+    "transcript": [
+      {"id": 1, "text": "你要有这种技能，要能分析问题并设计算法，这是更高要求。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：读代码时的理解和思考引导",
+    "transcript": [
+      {"id": 1, "text": "继续看这段代码，大家理解一下这四个条件是什么意思。"},
+      {"id": 2, "text": "重点思考的是这个i干什么，这个j干什么。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：易错信号单独出现不足以纳入",
+    "transcript": [
+      {"id": 1, "text": "现在算第三行，这个负号容易错，别抄成正号，接着代入。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：当前例题的解题突破口",
+    "transcript": [
+      {"id": 1, "text": "这道题关键是先把这个数拆开，这一步很重要，拆开就能继续算。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：记住临时符号和例题数值",
+    "transcript": [
+      {"id": 1, "text": "这道例题里先把这个量记作x，你记住x等于四，我们后面代进去。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成正例：明确要求记住具体定义，不是临时符号",
+    "transcript": [
+      {"id": 1, "text": "q(n,m)表示最大加数不大于m的整数n的划分个数。"},
+      {"id": 2, "text": "这个定义大家一定要记住，这是后面递推式的基础。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "emphasis", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "整数划分q(n,m)的定义", "reason": "教师明确要求记住q(n,m)所表示的划分个数定义。", "evidence_quote": "q(n,m)表示最大加数不大于m的整数n的划分个数。这个定义大家一定要记住，这是后面递推式的基础。"}
+    ]}
+  },
+  {
+    "label": "合成反例：教师明确排除定理证明",
+    "transcript": [
+      {"id": 1, "text": "这个定理的证明不考，也不要求掌握。"}
+    ],
+    "expected": {"candidates": []}
+  }
+]

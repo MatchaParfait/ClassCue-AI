@@ -1,0 +1,15 @@
+funasr==1.4.16
+modelscope==1.40.2
+librosa==1.0.0
+torch-complex==0.4.4
+sentencepiece==0.2.2
+addict==2.4.0
+pydub==0.25.1
+setuptools==80.9.0
+wheel==0.45.1
+av==19.0.1
+numpy==2.2.6
+PyYAML==6.0.3
+filelock==3.20.3
+psutil==7.2.2
+pydantic==2.12.5

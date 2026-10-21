@@ -1,0 +1,131 @@
+.has-warm-atmosphere {
+  position: relative;
+  isolation: isolate;
+  --atmosphere-lemon: #fde44c;
+  --atmosphere-honey: #ffcd70;
+  --atmosphere-apricot: #ffe1bd;
+}
+
+/* A richer wash and wider drift for the single-video processing page. */
+.process-page.has-warm-atmosphere:not(.batch-process-page) {
+  --atmosphere-lemon: #fbdd2a;
+  --atmosphere-honey: #ffbd52;
+  --atmosphere-apricot: #ffd49d;
+  --atmosphere-base: #ffe99f;
+  --atmosphere-base-spread: 84%;
+  --atmosphere-lemon-core: 90%;
+  --atmosphere-lemon-edge: 52%;
+  --atmosphere-honey-core: 68%;
+  --atmosphere-honey-edge: 44%;
+  --atmosphere-lemon-duration: 24s;
+  --atmosphere-honey-duration: 31s;
+  --atmosphere-lemon-from: translate(-4%, -4%) rotate(-10deg);
+  --atmosphere-lemon-to: translate(12%, 9%) rotate(9deg);
+  --atmosphere-honey-from: translate(5%, -5%) rotate(10deg);
+  --atmosphere-honey-to: translate(-11%, 9%) rotate(-8deg);
+}
+
+.warm-atmosphere {
+  position: absolute;
+  /* Existing character illustrations sit at -1, above this shared wash. */
+  z-index: -2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  background:
+    radial-gradient(ellipse at 48% 100%, var(--atmosphere-base, #fff2c4) 0%, transparent var(--atmosphere-base-spread, 68%));
+  mask-image: linear-gradient(to bottom, transparent, #000 130px);
+}
+
+.warm-atmosphere > span {
+  position: absolute;
+  display: block;
+  width: min(1150px, 95vw);
+  height: clamp(520px, 74vh, 900px);
+  animation: warm-atmosphere-drift var(--atmosphere-lemon-duration, 32s) ease-in-out infinite alternate;
+  animation-play-state: paused;
+}
+
+.warm-atmosphere-lemon {
+  top: -110px;
+  left: -24%;
+  background: radial-gradient(ellipse closest-side at 50% 50%,
+    color-mix(in srgb, var(--atmosphere-lemon) var(--atmosphere-lemon-core, 68%), transparent) 0%,
+    color-mix(in srgb, var(--atmosphere-lemon) var(--atmosphere-lemon-edge, 32%), transparent) 38%,
+    transparent 100%);
+}
+
+.warm-atmosphere .warm-atmosphere-honey {
+  top: 20%;
+  right: -29%;
+  height: clamp(620px, 90vh, 1100px);
+  background:
+    radial-gradient(ellipse closest-side at 50% 50%,
+      color-mix(in srgb, var(--atmosphere-honey) var(--atmosphere-honey-core, 43%), transparent) 0%,
+      color-mix(in srgb, var(--atmosphere-apricot) var(--atmosphere-honey-edge, 30%), transparent) 40%,
+      transparent 100%);
+  animation-name: warm-atmosphere-honey-drift;
+  animation-duration: var(--atmosphere-honey-duration, 41s);
+  animation-delay: -17s;
+}
+
+.warm-atmosphere[data-moving="true"] > span {
+  animation-play-state: running;
+}
+
+/* Shared viewport-wide wash, independent of each page's scroll height. */
+:is(.library-page, .settings-page) > .warm-atmosphere {
+  position: fixed;
+  /* Tint the illustration as well, while keeping all controls above the wash. */
+  z-index: -1;
+  inset: var(--app-header-height, 64px) 0 0;
+  background: linear-gradient(125deg, #fff0ae38, #fff5d138 48%, #ffe6a33d);
+  mask-image: linear-gradient(to bottom, transparent, #000 80px);
+}
+
+:is(.library-page, .settings-page) > .warm-atmosphere > span {
+  inset: -24% -22%;
+  width: auto;
+  height: auto;
+}
+
+:is(.library-page, .settings-page) > .warm-atmosphere .warm-atmosphere-lemon {
+  background: linear-gradient(116deg,
+    transparent 4%, #fde44c12 16%, #fde44c4d 32%, #fff0a73d 46%,
+    transparent 63%, #fbe56c26 80%, transparent 96%);
+  --atmosphere-lemon-duration: 48s;
+  --atmosphere-lemon-from: translate(-7%, -3%) rotate(-4deg);
+  --atmosphere-lemon-to: translate(8%, 4%) rotate(4deg);
+  animation-delay: -12s;
+}
+
+:is(.library-page, .settings-page) > .warm-atmosphere .warm-atmosphere-honey {
+  background: linear-gradient(68deg,
+    transparent 8%, #ffdc8b26 25%, transparent 45%,
+    #ffcd7033 66%, #ffe6ad3d 78%, transparent 96%);
+  --atmosphere-honey-duration: 64s;
+  --atmosphere-honey-from: translate(6%, -4%) rotate(3deg);
+  --atmosphere-honey-to: translate(-7%, 5%) rotate(-3deg);
+  animation-delay: -29s;
+}
+
+@keyframes warm-atmosphere-drift {
+  from { transform: var(--atmosphere-lemon-from, translate(-1%, -2%) rotate(-7deg)); }
+  to { transform: var(--atmosphere-lemon-to, translate(7%, 5%) rotate(5deg)); }
+}
+
+@keyframes warm-atmosphere-honey-drift {
+  from { transform: var(--atmosphere-honey-from, translate(2%, -3%) rotate(6deg)); }
+  to { transform: var(--atmosphere-honey-to, translate(-6%, 5%) rotate(-4deg)); }
+}
+
+@media (max-width: 760px) {
+  .warm-atmosphere > span { width: 140vw; opacity: .7; }
+  .warm-atmosphere-lemon { left: -72%; }
+  .warm-atmosphere .warm-atmosphere-honey { right: -85%; top: 38%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .warm-atmosphere > span { animation: none; }
+}

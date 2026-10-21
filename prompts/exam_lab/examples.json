@@ -1,0 +1,46 @@
+[
+  {
+    "label": "人工编写的合成示例：明确考试提示",
+    "transcript": [
+      {"id": 1, "text": "这一节讲动态规划的状态转移方程。"},
+      {"id": 2, "text": "状态转移方程考试会考，大家要会写。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "explicit_exam", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [2], "title": "动态规划的状态转移方程", "reason": "教师明确表示状态转移方程考试会考。", "evidence_quote": "状态转移方程考试会考，大家要会写。"}
+    ]}
+  },
+  {
+    "label": "人工编写的合成示例：掌握强调直接纳入",
+    "transcript": [
+      {"id": 1, "text": "用循环不变式证明算法正确性，先证明初始化，再证明保持，最后证明终止。"},
+      {"id": 2, "text": "这三个步骤很重要，必须掌握。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "emphasis", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [2], "title": "循环不变式证明的三个步骤", "reason": "教师强调三个步骤重要且必须掌握，不需要额外出现考试表述。", "evidence_quote": "这三个步骤很重要，必须掌握。"}
+    ]}
+  },
+  {
+    "label": "人工编写的合成示例：易错提醒直接纳入",
+    "transcript": [
+      {"id": 1, "text": "二分查找更新边界时要区分开区间和闭区间。"},
+      {"id": 2, "text": "这个边界特别容易错，要注意。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "easy_error", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [2], "title": "二分查找的区间边界更新", "reason": "教师明确指出对应区间边界容易出错。", "evidence_quote": "这个边界特别容易错，要注意。"}
+    ]}
+  },
+  {
+    "label": "人工编写的合成示例：明确不考",
+    "transcript": [
+      {"id": 1, "text": "这个定理的完整证明不考，也不要求掌握。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "人工编写的合成示例：普通讲解不能自动变成考点",
+    "transcript": [
+      {"id": 1, "text": "这里把两个数组合并，然后输出结果。"}
+    ],
+    "expected": {"candidates": []}
+  }
+]

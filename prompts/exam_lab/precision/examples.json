@@ -1,0 +1,80 @@
+[
+  {
+    "label": "合成正例：明确考试提示指向题型",
+    "transcript": [
+      {"id": 1, "text": "我们来看按字典序生成全排列。"},
+      {"id": 2, "text": "这种题考试会出，要会按照字典序写出下一个排列。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "explicit_exam", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "按字典序生成下一个全排列", "reason": "教师明确说这种全排列题考试会出并要求会做。", "evidence_quote": "我们来看按字典序生成全排列。这种题考试会出，要会按照字典序写出下一个排列。"}
+    ]}
+  },
+  {
+    "label": "合成正例：没有说考试，但明确强调方法必须掌握",
+    "transcript": [
+      {"id": 1, "text": "循环不变式证明分为初始化、保持和终止三个步骤。"},
+      {"id": 2, "text": "这个证明方法很重要，这三个步骤大家必须掌握。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "emphasis", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "循环不变式证明的三个步骤", "reason": "教师将证明方法及三个步骤本身明确列为必须掌握的内容。", "evidence_quote": "循环不变式证明分为初始化、保持和终止三个步骤。这个证明方法很重要，这三个步骤大家必须掌握。"}
+    ]}
+  },
+  {
+    "label": "合成正例：易错提醒指向需要掌握的知识区别",
+    "transcript": [
+      {"id": 1, "text": "二分查找的开区间和闭区间，更新边界的规则不一样。"},
+      {"id": 2, "text": "这是容易混淆的知识点，两种边界规则大家一定要分清并记住。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "easy_error", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "二分查找开闭区间的边界更新规则", "reason": "教师将开闭区间规则明确指出为易混知识点，并要求分清记住。", "evidence_quote": "二分查找的开区间和闭区间，更新边界的规则不一样。这是容易混淆的知识点，两种边界规则大家一定要分清并记住。"}
+    ]}
+  },
+  {
+    "label": "合成反例：重点修饰当前题目的观察位置",
+    "transcript": [
+      {"id": 1, "text": "继续看这道整数划分例题，把四代进去。"},
+      {"id": 2, "text": "这里的重点是看最大加数这一项，先别看右边，我们接着算。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：关键修饰当前解题突破口",
+    "transcript": [
+      {"id": 1, "text": "这道题为什么算不下去？"},
+      {"id": 2, "text": "关键是先想到把这个数拆开，这一步很重要，拆开以后就能继续了。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：局部易错提醒不能自动升格",
+    "transcript": [
+      {"id": 1, "text": "现在算这道题的第三行。"},
+      {"id": 2, "text": "这里容易错，注意这个负号别抄成正号，然后把二代进去。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成正例：解题步骤也可因明确考试提示纳入",
+    "transcript": [
+      {"id": 1, "text": "这道题这里要先判断两个子问题是否独立。"},
+      {"id": 2, "text": "这种独立性的判断考试会考，这个判断步骤大家要会写。"}
+    ],
+    "expected": {"candidates": [
+      {"level": "confirmed", "signal_type": "explicit_exam", "start_sentence_id": 1, "end_sentence_id": 2, "evidence_sentence_ids": [1, 2], "title": "子问题独立性的判断", "reason": "教师明确表示独立性判断考试会考，并要求会写判断步骤。", "evidence_quote": "这道题这里要先判断两个子问题是否独立。这种独立性的判断考试会考，这个判断步骤大家要会写。"}
+    ]}
+  },
+  {
+    "label": "合成反例：更高要求本身不等于知识重点",
+    "transcript": [
+      {"id": 1, "text": "分析给出的算法是一层要求，自己设计一个算法是更高要求。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "合成反例：明确不考不要求掌握",
+    "transcript": [
+      {"id": 1, "text": "这个定理的完整证明不考，也不要求掌握。"}
+    ],
+    "expected": {"candidates": []}
+  }
+]

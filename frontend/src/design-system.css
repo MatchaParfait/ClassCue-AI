@@ -1,0 +1,90 @@
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("/fonts/NotoSansSC-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  font-family: "Noto Sans SC", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 14px; font-weight: 400; line-height: 1.6;
+  color: var(--ui-text); background: var(--ui-bg); font-synthesis: none;
+}
+body { margin: 0; min-width: 320px; background: var(--ui-bg); }
+[hidden] { display: none !important; }
+button, input, select, textarea { font-family: inherit; letter-spacing: 0; }
+button, a, input, select, textarea, summary { -webkit-tap-highlight-color: transparent; }
+button, a { font: inherit; touch-action: manipulation; }
+button > svg, a > svg { flex-shrink: 0; }
+h1, h2, h3, p { margin: 0; letter-spacing: 0; }
+h1 { font-size: 28px; line-height: 1.4; font-weight: 600; color: var(--ui-text); }
+h2 { font-size: 18px; line-height: 1.5; font-weight: 600; color: var(--ui-text); }
+h3 { font-size: 15px; line-height: 1.6; font-weight: 600; }
+strong { font-weight: 600; }
+.eyebrow, .topbar-kicker, .muted-label { text-transform: uppercase; font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--ui-muted); }
+button, .primary-button, .secondary-button, .icon-button, .text-button { transition: background-color var(--ui-fast), color var(--ui-fast), border-color var(--ui-fast), box-shadow var(--ui-fast), transform var(--ui-fast); }
+.primary-button, .secondary-button, .demo-link { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 16px; border: 1px solid var(--ui-border); border-radius: 6px; font-size: 14px; line-height: 20px; font-weight: 500; white-space: nowrap; }
+.primary-button { background: var(--ui-accent-strong); border-color: var(--ui-accent-strong); color: var(--ui-on-inverse); box-shadow: 0 1px 2px color-mix(in srgb, var(--ui-shadow-ink) 7.8%, transparent); }
+.primary-button:hover:not(:disabled) { background: var(--ui-primary-hover); border-color: var(--ui-primary-hover); }
+.secondary-button, .demo-link { background: var(--ui-surface); color: var(--ui-muted); }
+.secondary-button:hover:not(:disabled), .demo-link:hover { background: var(--ui-surface-soft); border-color: var(--ui-border); }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 6px; min-width: 34px; min-height: 34px; padding: 6px; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface); color: var(--ui-muted); }
+.icon-button:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-surface-soft); border-color: var(--ui-border); }
+.text-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-muted); background: transparent; font-size: 13px; font-weight: 500; }
+.text-button:hover { color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
+.primary-button:active:not(:disabled), .secondary-button:active:not(:disabled), .icon-button:active:not(:disabled), .text-button:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.compact { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.danger-icon:hover:not(:disabled) { color: var(--ui-red); background: var(--ui-surface-soft); border-color: var(--ui-red); }
+button:disabled { opacity: .48; cursor: not-allowed; }
+:where(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ui-accent-strong); outline-offset: 3px; }
+h1:focus { outline: none; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { color: var(--ui-text); border-color: var(--ui-border); border-radius: 6px; font-size: 14px; font-weight: 400; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus, select:focus, textarea:focus { border-color: var(--ui-border); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent-strong); }
+input::placeholder, textarea::placeholder { color: var(--ui-muted); }
+.source-badge, .status-badge, .count-pill, .settings-state { font-size: 12px; font-weight: 500; line-height: 20px; }
+.status-badge, .source-badge { padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.status-ready, .source-badge { color: var(--ui-green); background: var(--ui-surface-soft); }
+.status-pending { color: var(--ui-amber); background: var(--ui-surface-soft); }
+.status-processing { color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
+.status-failed { color: var(--ui-red); background: var(--ui-surface-soft); }
+.count-pill { height: 24px; min-width: 24px; padding: 0 7px; color: var(--ui-muted); background: var(--ui-surface-soft); border-radius: 5px; }
+.field-error, .local-error, .job-error { color: var(--ui-red); }
+.toast { right: 22px; bottom: 22px; z-index: 70; max-width: min(560px, calc(100% - 48px)); padding: 12px 16px; font-size: 13px; color: var(--ui-on-inverse); background: var(--ui-success-soft); box-shadow: 0 8px 28px color-mix(in srgb, var(--ui-shadow-ink) 12.5%, transparent); animation: surface-enter 160ms var(--ui-ease); }
+.toast-action { margin-left: 6px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--ui-on-inverse) 42%, transparent); border-radius: 4px; color: var(--ui-on-inverse); background: transparent; font-size: 12px; font-weight: 600; }
+.toast-action:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-on-inverse) 12%, transparent); }
+.toast[role="alert"] { background: var(--ui-danger-soft); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, var(--ui-inverse) 22.0%, transparent); }
+.settings-dialog, .models-dialog { border-color: var(--ui-border); box-shadow: 0 16px 56px color-mix(in srgb, var(--ui-shadow-ink) 13.3%, transparent); animation: surface-enter var(--ui-panel) var(--ui-ease); }
+.dialog-heading h2 { font-size: 18px; }
+@keyframes surface-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes surface-leave { to { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+.model-preparation { margin-block: 16px; padding: 14px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); font-size: 12px; min-width: 0; }
+.model-preparation-heading, .model-preparation-metrics { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.model-preparation-heading strong { color: var(--ui-text); font-size: 13px; }
+.model-preparation p { margin: 7px 0 0; line-height: 1.65; overflow-wrap: anywhere; }
+.model-preparation-component { color: var(--ui-accent-strong); font-weight: 650; }
+.model-preparation-file { color: var(--ui-text); font-family: inherit; }
+.model-preparation-metrics { margin-top: 8px; font-variant-numeric: tabular-nums; }
+.model-preparation-estimate { color: var(--ui-muted); }
+.model-preparation-track { overflow: hidden; height: 7px; margin-top: 10px; background: var(--ui-border); border-radius: 99px; }
+.model-preparation-track > span { display: block; height: 100%; background: var(--ui-accent, #85cb72); border-radius: inherit; transition: width 220ms ease; }
+.model-preparation-track.indeterminate > span { width: 35%; animation: preparation-pending 1.6s ease-in-out infinite; }
+@keyframes preparation-pending { from { transform: translateX(-110%); } to { transform: translateX(390%); } }
+@media (prefers-reduced-motion: reduce) {
+  .model-preparation-track > span { transition: none; }
+  .model-preparation-track.indeterminate > span { animation: none; opacity: .65; }
+}
+.model-download-controls {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-soft);
+}
+
+.model-download-controls > button { justify-self: start; }
+.model-download-state { display: grid; gap: 4px; margin: 0; font-size: 13px; }
+.model-download-controls .settings-hint { margin: 0; }

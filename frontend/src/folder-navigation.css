@@ -1,0 +1,57 @@
+/* The atmosphere creates a stacking context; lift its dialogs above the sticky bar. */
+.workbench .library-page:has(> .modal-backdrop) {
+  position: relative;
+  z-index: 21;
+}
+
+.folder-window-toolbar {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.folder-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.folder-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.folder-breadcrumb > span,
+.folder-breadcrumb > button {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-breadcrumb [aria-current="page"] {
+  font-weight: 650;
+}
+
+.folder-breadcrumbs > button {
+  flex-shrink: 0;
+}
+
+.folder-card .library-card-body .folder-marker-counts {
+  margin-top: 4px;
+  gap: 5px;
+}
+
+.folder-card .folder-marker-counts .video-marker-count {
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--ui-accent-strong) 16%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-surface) 72%, transparent);
+  color: var(--ui-text);
+  font-weight: 600;
+  line-height: 1.2;
+}

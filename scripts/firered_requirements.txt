@@ -1,0 +1,4 @@
+fireredasr2s @ https://github.com/FireRedTeam/FireRedASR2S/archive/4e7d9aaf4482a47cec1724807026b9b151926eb5.zip
+kaldi-native-fbank==1.22.3
+pydantic>=2.8.0,<3
+av>=12.0.0

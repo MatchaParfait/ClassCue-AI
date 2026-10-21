@@ -1,0 +1,273 @@
+/* Character-theme recipe. The saved square composition stays untouched.
+   Opaque defaults keep the hierarchy readable without backdrop-filter support. */
+:root[data-ui-theme="character"] .library-page {
+  --library-glass: #fffdf2;
+  --library-glass-card: #fff7dc;
+  --library-glass-yellow: #ffe657;
+  --library-glass-border: #e1d6b2;
+  --library-glass-shine: #ffffffe6;
+  --library-glass-shadow: 0 6px 16px #66531d09, 0 20px 44px #66531d0b;
+  --library-control-shadow: 0 3px 8px #403c1714;
+  --library-video-frame: linear-gradient(135deg,
+    #fff4a8 0%, #ffe76c 20%, #f3c632 48%, #ffdf54 76%, #fff1a0 100%);
+
+  .library-heading {
+    border: 1px solid var(--library-glass-border);
+    background: linear-gradient(125deg, #fff18f, var(--library-glass-yellow) 52%, var(--ui-primary));
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), inset 0 -1px 0 #b798251a,
+      0 12px 32px #9a7a1920, 0 2px 5px #9a7a1909;
+  }
+
+  .library-toolbar {
+    min-height: 48px;
+    box-sizing: border-box;
+    padding: 8px 14px 8px 18px;
+    border: 1px solid var(--library-glass-border);
+    border-radius: 22px;
+    background: var(--library-glass);
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), 0 4px 14px #66531d06;
+  }
+
+  .library-folder-section {
+    margin-top: 22px;
+    padding: 16px 20px 20px;
+    border: 1px solid var(--library-glass-border);
+    border-radius: 28px;
+    background: var(--library-glass);
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), var(--library-glass-shadow);
+  }
+  .library-folder-section > .library-section-heading { margin: 0 0 14px; }
+
+  .library-card.folder-card {
+    border-color: #e1c747;
+    background: linear-gradient(135deg, #fff5bb80, transparent 65%), var(--library-glass-yellow);
+    box-shadow: inset 0 1px 0 #ffffffc9, inset 0 -1px 0 #c8a32314,
+      0 4px 10px #8066130d, 0 10px 22px #8066130c;
+  }
+  .library-card.folder-card.is-selected {
+    border-color: var(--ui-accent-strong);
+    background: linear-gradient(145deg, #ffffff80, transparent 68%), var(--ui-accent-soft);
+    box-shadow: 0 0 0 2px var(--ui-accent-strong), inset 0 1px 0 #fff, var(--library-glass-shadow);
+  }
+  .folder-card .folder-icon {
+    background: linear-gradient(145deg, #b0e59c, var(--ui-accent));
+    box-shadow: inset 0 1px 0 #ffffffa6, 0 3px 8px #285c3514;
+  }
+
+  .library-card.video-card {
+    border-width: 5px;
+    border-color: transparent;
+    /* Separate the readable interior from the beveled yellow frame.
+       Background layers preserve rounded corners and existing drag markers. */
+    background: linear-gradient(145deg, #fffef3, #fff7dc 68%) padding-box,
+      var(--library-video-frame) border-box;
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), 0 0 0 1px #fff9cfb3,
+      0 2px 3px #a67b1824, var(--library-glass-shadow);
+  }
+  .library-thumbnail-link { border-radius: 22px 22px 12px 12px; }
+  .library-card.video-card.is-selected {
+    border-color: var(--ui-accent);
+    background: linear-gradient(145deg, #ffffffb3, transparent 68%), var(--ui-accent-soft);
+    box-shadow: 0 0 0 2px var(--ui-accent-strong), inset 0 1px 0 #fff, var(--library-glass-shadow);
+  }
+  .library-card:focus-within {
+    box-shadow: 0 0 0 2px var(--ui-accent-strong), var(--library-glass-shadow);
+  }
+
+  .library-selection-toolbar, .library-processing-options {
+    border-color: var(--library-glass-border);
+    background: var(--library-glass);
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), 0 6px 20px #66531d0a;
+  }
+  .library-selection-toolbar { padding: 8px 12px; gap: 8px 12px; border-radius: 24px; }
+  .library-selection-toolbar:has(input:checked, input:indeterminate) {
+    border-color: #abc595;
+    box-shadow: inset 0 1px 0 var(--library-glass-shine), 0 4px 16px #285c350c;
+  }
+
+  .library-create-folder {
+    min-height: 38px;
+    padding: 8px 15px;
+    border: 1px solid #b7c8a7;
+    border-radius: 999px;
+    background: #f1f7e9;
+    color: var(--ui-accent-strong);
+    box-shadow: inset 0 1px 0 #ffffffe6, 0 2px 4px #285c3506;
+    font-weight: 650;
+  }
+  .library-heading-actions .secondary-button {
+    border: 1px solid #ffffffe0;
+    background: var(--library-glass);
+    box-shadow: inset 0 1px 0 #fff, 0 3px 9px #8e731a12;
+    font-weight: 600;
+  }
+  .library-select-all {
+    min-height: 34px;
+    box-sizing: border-box;
+    padding: 5px 11px;
+    border: 1px solid #d4d9c6;
+    border-radius: 999px;
+    color: var(--ui-text);
+    background: #ffffffa6;
+    font-weight: 550;
+  }
+  .library-select-all:has(input:checked, input:indeterminate),
+  .library-video-select:has(input:checked) {
+    border-color: #8db57c;
+    background: var(--ui-accent-soft);
+    color: var(--ui-accent-strong);
+    box-shadow: inset 0 1px 0 #ffffffe6;
+  }
+  .library-select-all:has(input:focus-visible) {
+    outline: 2px solid var(--ui-accent-strong);
+    outline-offset: 3px;
+  }
+  .library-select-all:has(input:disabled),
+  .library-video-select:has(input:disabled) { cursor: not-allowed; opacity: .48; }
+  .library-select-all input:disabled, .library-video-select input:disabled { cursor: not-allowed; }
+  .library-select-all, .library-video-select {
+    transition: background-color var(--ui-fast), border-color var(--ui-fast),
+      box-shadow var(--ui-fast), translate var(--ui-fast);
+  }
+  .sort-control select {
+    min-height: 34px;
+    cursor: pointer;
+    border-color: #d4d9c6;
+    background-color: #ffffffc4;
+    transition: background-color var(--ui-fast), border-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+  .library-card-actions .icon-button, .folder-rename-button {
+    transition: background-color var(--ui-fast), border-color var(--ui-fast),
+      color var(--ui-fast), box-shadow var(--ui-fast), transform var(--ui-fast);
+  }
+  .library-card-actions .icon-button[aria-expanded="true"],
+  .library-selection-process[aria-expanded="true"] {
+    color: var(--ui-accent-strong);
+    border-color: #9dbd8d;
+    background: var(--ui-accent-soft);
+  }
+  .toolbar-menu-items {
+    border-color: var(--library-glass-border);
+    background: #fffef5;
+    box-shadow: inset 0 1px 0 #fff, 0 8px 18px #463e2414, 0 20px 40px #463e241a;
+  }
+  .empty-library { background: var(--library-glass); box-shadow: var(--library-glass-shadow); }
+
+  .folder-window {
+    background: #fff4cf;
+    border-color: #fff5bad9;
+    box-shadow: inset 0 1px 0 #fffce6, 0 24px 80px #45391533;
+  }
+  .folder-window-heading {
+    background: linear-gradient(125deg, #fff18f, #ffe657 52%, var(--ui-primary));
+    box-shadow: inset 0 1px 0 #fff9c9, inset 0 -1px 0 #c4a42829;
+  }
+  .folder-window-toolbar {
+    background: #fff8d7;
+    border-color: #dac4754d;
+    box-shadow: inset 0 1px 0 #fffdf0b3;
+  }
+  .folder-window-content {
+    /* Same lemon/honey palette as the library atmosphere, inside the dialog. */
+    background:
+      radial-gradient(ellipse at 0% 10%, #fde44c70, transparent 65%),
+      radial-gradient(ellipse at 100% 90%, #ffcd7052, transparent 70%),
+      linear-gradient(155deg, #fff8de, #fff1c2);
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    --library-glass: #fffdf2b8;
+    --library-glass-card: #fff7dcd9;
+    --library-glass-yellow: #ffe657cc;
+    --library-glass-border: #ffffffd9;
+
+    .library-heading, .library-toolbar, .library-folder-section,
+    .library-selection-toolbar, .library-processing-options,
+    .library-create-folder, .library-heading-actions .secondary-button, .empty-library {
+      -webkit-backdrop-filter: blur(18px) saturate(125%);
+      backdrop-filter: blur(18px) saturate(125%);
+    }
+    .library-card.folder-card, .library-card.video-card {
+      -webkit-backdrop-filter: blur(10px) saturate(115%);
+      backdrop-filter: blur(10px) saturate(115%);
+    }
+    /* Menu text remains on a nearly opaque sheet, above the card's glass. */
+    .toolbar-menu-items { background: #fffef5f5; }
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .library-heading-actions .secondary-button:hover,
+    .library-create-folder:hover {
+      color: var(--ui-accent-strong);
+      background: #dcf0cc;
+      border-color: #6c985b;
+      box-shadow: inset 0 1px 0 #ffffffc9, 0 4px 12px #285c3521;
+      transform: translateY(-1px);
+    }
+    .library-heading-actions .primary-button:hover {
+      box-shadow: 0 4px 12px #285c3533;
+      transform: translateY(-1px);
+    }
+    .library-select-all:hover:not(:has(input:disabled)),
+    .library-video-select:hover:not(:has(input:disabled)) {
+      border-color: var(--ui-accent-strong);
+      background: #dff0d3;
+      box-shadow: 0 0 0 3px #85cb722b;
+    }
+    .sort-control select:hover {
+      border-color: #86a276;
+      background-color: #f0f8e7;
+      box-shadow: var(--library-control-shadow);
+    }
+    .library-card-actions .icon-button:hover:not(:disabled),
+    .folder-rename-button:hover:not(:disabled),
+    .library-selection-toolbar .icon-button:hover:not(:disabled) {
+      border-color: #9dbd8d;
+      background: #dff0d3;
+      color: var(--ui-accent-strong);
+      box-shadow: var(--library-control-shadow);
+    }
+    .library-selection-process:hover:not(:disabled) {
+      border-color: #6c985b;
+      background: #dcf0cc;
+      color: var(--ui-accent-strong);
+      box-shadow: var(--library-control-shadow);
+    }
+    .library-card.video-card:hover, .library-card.folder-card:hover {
+      box-shadow: inset 0 1px 0 #fff, 0 8px 18px #66531d12, 0 24px 40px #66531d17;
+    }
+    .library-card.video-card.is-selected:hover {
+      box-shadow: 0 0 0 2px var(--ui-accent-strong), 0 12px 30px #285c3521;
+    }
+    .library-card-body:hover strong { color: var(--ui-accent-strong); }
+  }
+  .library-heading-actions :is(.primary-button, .secondary-button):active,
+  .library-create-folder:active { transform: translateY(1px); box-shadow: inset 0 1px 3px #285c351a; }
+  .library-select-all:active:not(:has(input:disabled)),
+  .library-video-select:active:not(:has(input:disabled)) {
+    background: #cde5bb;
+    box-shadow: inset 0 1px 3px #285c351a;
+  }
+
+  /* Keep glass shadows and hover feedback from implying a drop while dragging. */
+  &[data-dragging="true"] .library-card { translate: none; }
+  .library-card:is(.video-card, .folder-card):is(.drop-folder, .drop-swap) {
+    border-color: var(--library-drop-border);
+    box-shadow: var(--library-drop-ring);
+  }
+
+  @media (max-width: 760px) {
+    .library-toolbar { flex-direction: row; align-items: center; gap: 8px; padding: 8px 12px; }
+    .library-toolbar-tools { min-width: 0; }
+    .library-folder-section { padding: 14px 14px 16px; border-radius: 24px; }
+    .library-section-heading { gap: 8px; }
+    .library-create-folder { min-height: 38px; padding: 7px 12px; font-size: 12px; }
+    .library-selection-toolbar { padding: 7px 9px; gap: 8px; }
+    .library-select-all { padding: 5px 9px; }
+    .library-heading-actions .secondary-button { flex: initial; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .library-heading-actions :is(.primary-button, .secondary-button),
+    .library-create-folder { transform: none !important; }
+  }
+}

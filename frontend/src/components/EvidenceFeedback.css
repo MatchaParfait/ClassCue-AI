@@ -1,0 +1,22 @@
+.task-space-evidence,
+.task-space-result-list > button,
+.subtitle-demo-results > button { position: relative; }
+
+.evidence-feedback {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid rgba(135, 232, 158, .75);
+  border-radius: inherit;
+  box-shadow: inset 3px 0 0 rgba(135, 232, 158, .85);
+}
+.evidence-feedback[data-evidence-phase="travel"] { opacity: .65; }
+.evidence-feedback[data-evidence-phase="arrival"] { animation: evidence-card-arrival 650ms ease-out both; }
+@keyframes evidence-card-arrival {
+  from { background: rgba(122, 232, 150, .23); box-shadow: inset 3px 0 0 #a6edb6, 0 0 16px rgba(122, 232, 150, .22); }
+  to { background: rgba(122, 232, 150, .04); box-shadow: inset 3px 0 0 rgba(135, 232, 158, .85); }
+}
+.task-space[data-hidden="true"] .evidence-feedback { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .evidence-feedback { animation: none !important; }
+}
