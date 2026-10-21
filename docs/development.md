@@ -36,12 +36,12 @@ Python 模块使用 `from classcue.video_store import VideoStore` 等包导入�
 前后端使用同一套控制入口，不需要分别启动或查找进程：
 
 - `启动课堂重点复习.cmd`：打开桌面窗口，已有实例时唤起原窗口。首次成功启动自动建立桌面和开始菜单快捷方式。
-- `停止课堂重点复习.cmd`：向桌面实例请求退出；有任务时先确认“停止任务并退出”，安全停止后再关闭所属服务。
-- `重启课堂重点复习.cmd`：重启所属服务，保留桌面窗口；有任务时提示先停止。应用数据迁移继续使用校验、立即重启和自动重连流程。
+- `scripts/停止课堂重点复习.cmd`：向桌面实例请求退出；有任务时先确认“停止任务并退出”，安全停止后再关闭所属服务。
+- `scripts/重启课堂重点复习.cmd`：重启所属服务，保留桌面窗口；有任务时提示先停止。应用数据迁移继续使用校验、立即重启和自动重连流程。
 
 有任务时关闭窗口会提示“后台继续／取消关闭”，托盘提供“打开主窗口”和“退出”。无任务时关闭窗口会退出并停止所属服务。窗口左下角“桌面”中可设置启动/唤起快捷键，留空关闭。完整说明见 [桌面生命周期](desktop-lifecycle.md)。
 
-桌面正常运行由 API 直接提供构建后的页面，无需启动 Node/Vite。`启动本地前端.cmd` 保留浏览器与 Vite 开发入口，首次需在 `frontend` 执行 `npm install`。端口默认 API `8765`、开发前端 `5173`，已有运行记录时沿用记录。旧版 Streamlit 仍可通过 `scripts/bootstrap.ps1` / `scripts/start_app.py` 启动。
+桌面正常运行由 API 直接提供构建后的页面，无需启动 Node/Vite。`scripts/启动本地前端.cmd` 保留浏览器与 Vite 开发入口，仅用于源码开发，不随用户发行包分发；首次需在 `frontend` 执行 `npm install`。端口默认 API `8765`、开发前端 `5173`，已有运行记录时沿用记录。旧版 Streamlit 仍可通过 `scripts/bootstrap.ps1` / `scripts/start_app.py` 启动。
 
 首次准备需要联网，通常会下载数百 MB 的 Python 和依赖。模型选择本身不会下载；点击“下载 / 准备所选模型”或第一次使用该模型转写时，才下载所选模型。默认使用 Whisper `turbo`。自动运行环境保存在项目内的 `.runtime`，不会修改系统 Python、PyCharm 解释器或开发用 `.venv`。
 
@@ -155,7 +155,7 @@ python -m streamlit run classcue/video_app.py --server.port 8503
 
 ### React 重点复习页
 
-本地浏览器复习页与旧版 Streamlit 共存。通常直接使用根目录的三个启停入口；也可在终端统一控制：
+本地浏览器复习页与旧版 Streamlit 共存。桌面应用使用根目录的主启动入口，辅助启停入口位于 `scripts/`；浏览器开发使用 `scripts/启动本地前端.cmd`，也可在终端统一控制：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/start_frontend.py start
@@ -174,7 +174,7 @@ npm run dev
 
 API 默认只监听 `127.0.0.1:8765`，前端默认地址为 `http://127.0.0.1:5173`。打开前端根路径进入视频库；`http://127.0.0.1:5173/demo` 使用显式 mock 数据验证复习交互。API 与旧版 Streamlit 共用应用的唯一视频库；`classcue/app_storage.py` 统一管理数据路径。
 
-Windows 也可以先执行一次 `cd frontend; npm install`，之后直接双击仓库根目录的 `启动本地前端.cmd`，它会同时启动 API 和 Vite。
+Windows 也可以先执行一次 `cd frontend; npm install`，之后直接双击 `scripts/启动本地前端.cmd`，它会同时启动 API 和 Vite。
 
 如果要关闭浏览器，让任务在终端中连续运行，可以使用独立批处理入口：
 
@@ -250,8 +250,8 @@ Windows 加载 Qwen 权重时使用 safetensors 0.8.0 的 `pread` 读取方式�
 
 ## 一键启动原理
 
-- 三个启停入口调用 `scripts/webui.ps1`，优先使用已有 `.venv` 或 `.runtime/venv`，再统一控制 API 和 Vite。
-- 尚无 Python 环境时，启动入口调用 `scripts/bootstrap.ps1 -WebUI`，从 uv 官方地址下载便携 `uv`，再按照提交的 `uv.lock` 准备固定依赖。
+- 桌面主启动及辅助停止、重启入口调用 `scripts/desktop_launcher.vbs`，使用已有 `.venv` 或 `.runtime/venv`；需要准备环境时由 `scripts/desktop_bootstrap.ps1` 处理，桌面正常运行不依赖 Vite。
+- 浏览器开发入口 `scripts/启动本地前端.cmd` 调用 `scripts/webui.ps1`，优先使用已有 `.venv` 或 `.runtime/venv`，统一控制 API 和 Vite；尚无 Python 环境时调用 `scripts/bootstrap.ps1 -WebUI`，从 uv 官方地址下载便携 `uv`，再按照提交的 `uv.lock` 准备固定依赖。
 - 默认将 Python、依赖、下载缓存和运行日志保存在 `.runtime`，该目录不会提交到 Git。配置外部 ASR 存储目录后，Qwen/FireRed 环境和其依赖缓存改用外部目录；主应用环境和日志仍保留在项目内。
 - `scripts/start_frontend.py` 串行管理启动、停止和重启，验证服务及所属进程身份，并记住数据目录和端口；不关闭占用端口的无关程序。
 - 网页地址只监听 `127.0.0.1`，不会向局域网公开应用。

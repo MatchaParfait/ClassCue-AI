@@ -162,7 +162,7 @@ files = [
     "prompts/exam_lab/rules.md",
     "prompts/exam_lab/system.md",
     "prompts/exam_lab/task.md",
-    "停止课堂重点复习.cmd",
+    "scripts/停止课堂重点复习.cmd",
     "启动课堂重点复习.cmd",
-    "重启课堂重点复习.cmd",
+    "scripts/重启课堂重点复习.cmd",
 ]

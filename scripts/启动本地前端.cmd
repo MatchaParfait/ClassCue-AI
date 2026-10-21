@@ -1,8 +1,8 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\webui.ps1" -Action start
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0webui.ps1" -Action start
 
 if errorlevel 1 (
   echo.
