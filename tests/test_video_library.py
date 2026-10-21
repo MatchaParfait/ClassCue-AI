@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import contextmanager
 from types import SimpleNamespace
 import json
 from threading import Event
@@ -76,7 +77,7 @@ def test_delete_moves_video_to_recycle_bin_and_undo_restores_it(library):
 def test_upload_streams_browser_bytes_into_managed_library_without_deleting_original(library):
     store, source, root, client = library
     response = client.post("/api/videos/upload", params={"filename": "课堂 #1.MP4"}, content=source.read_bytes())
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     video = response.json()["video"]
     destination = Path(video["video_path"])
     assert destination.is_relative_to(root)
@@ -99,8 +100,26 @@ def test_upload_preserves_known_original_folder_for_existing_video(library):
     original_folder = str(source.parent)
     assert client.post("/api/videos/register", json={"path": str(source)}).status_code == 200
     response = client.post("/api/videos/upload", params={"filename": "lesson.mp4"}, content=content)
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["video"]["source_folder"] == original_folder
+
+
+def test_upload_resolves_server_temporary_directory_alias(library, monkeypatch):
+    _, source, _, client = library
+    temporary_directory = api_main.TemporaryDirectory
+
+    @contextmanager
+    def aliased_directory(**kwargs):
+        with temporary_directory(**kwargs) as directory:
+            alias = Path(directory) / "alias"
+            alias.mkdir()
+            yield str(alias / "..")
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", aliased_directory)
+    response = client.post("/api/videos/upload", params={"filename": "lesson.mp4"},
+                           content=source.read_bytes())
+    assert response.status_code == 200, response.text
+    assert Path(response.json()["video"]["video_path"]).read_bytes() == source.read_bytes()
 
 
 @pytest.mark.parametrize("filename", ["notes.txt", "../lesson.mp4", r"..\lesson.mp4", "NUL.mp4"])

@@ -41,7 +41,9 @@ cd ..
 python scripts/release.py build --notes release/notes.md
 ```
 
-输出位于 `.runtime/dist`。默认只打包 Git 已跟踪且允许分发的程序文件及前端构建产物，不含 `.git`、`.venv`、`.runtime`、模型、用户数据、私钥或 `recovered-images`。未提交新模块的本地验收可显式添加 `--include-untracked`，发布工作流不会使用此选项。
+输出位于 `.runtime/dist`。源文件必须逐项列入根目录 `release_manifest.toml`，并已加入 Git 索引；另外加入 `frontend/dist` 的生产构建。不会自动收录整个 `scripts` 或 `docs`，也不包含内部指令、实验工具、测试、维护文档及截图。必要的上游许可证仍随包保留。
+
+新增运行模块、worker 或资源时，须同步修改清单并运行 `tests/test_release_manifest.py`。清单缺项、重复、非法路径、未暂存或缺失文件都会阻止打包。`--include-untracked` 仅供本地验收清单中尚未暂存的文件，不会自动收录其他未跟踪内容，发布工作流不使用此选项。更新客户端的路径校验继续兼容旧清单；发布源文件选择独立于该校验。
 可使用 `python scripts/release.py verify <ZIP文件路径>` 离线验证包内签名和所有程序文件。
 开源源码及测试继续由 GitHub 仓库/Source code 附件提供。MIT 许可证、字体/模型的原始许可证随程序保留。
 

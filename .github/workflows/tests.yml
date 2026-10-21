@@ -28,6 +28,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv sync --locked --group dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend integration dependencies
+        working-directory: frontend
+        run: npm ci
       - name: Run tests
         run: uv run --locked --group dev python -m pytest tests -q
       - name: Check syntax

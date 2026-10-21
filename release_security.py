@@ -137,6 +137,7 @@ def read_remote_json(url):
 
 
 def managed_name(name):
+    """Validate update paths, including legacy inventories; not a source selector."""
     if not isinstance(name, str) or "\\" in name or len(name) > 240:
         raise ValueError("无效的包内路径")
     parts = PurePosixPath(name).parts

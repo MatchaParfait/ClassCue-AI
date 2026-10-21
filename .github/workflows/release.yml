@@ -50,11 +50,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv sync --locked --group dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix frontend ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --locked --group dev python -m pytest tests -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Push-Location frontend
-          npm ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test -- --maxWorkers=2 --minWorkers=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build

@@ -423,7 +423,22 @@ def test_publisher_includes_only_tracked_program_files_and_prebuilt_frontend(dis
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# fixture source", encoding="utf-8")
     subprocess.run(["git", "init", str(d.root)], check=True, capture_output=True)
-    subprocess.run(["git", "add", "--", *d.old["files"], *required], cwd=d.root, check=True, capture_output=True)
+    manifest_files = [name for name in d.old["files"] if not name.startswith("frontend/dist/")]
+    manifest_files += required
+    (d.root / "release_manifest.toml").write_text(
+        "schema = 1\nfiles = " + json.dumps(manifest_files), encoding="utf-8",
+    )
+    excluded = [
+        "Agent.md", "docs/internal-notes.md", "docs/screenshots/review.webp",
+        "scripts/benchmark_private.py", "scripts/build_desktop_icon.py", "scripts/release.py",
+        "tests/fixture.py", "experiments/private-run/report.md", "internal_helper.py",
+    ]
+    for name in excluded:
+        target = d.root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("PRIVATE_DEVELOPMENT_ONLY", encoding="utf-8")
+    subprocess.run(["git", "add", "--", *d.old["files"], *required, *excluded, "release_manifest.toml"],
+                   cwd=d.root, check=True, capture_output=True)
     (d.root / "credentials.py").write_text("PRIVATE_UNTRACKED_VALUE")
     write_json(d.root / "data/settings.json", {"private": "USER_DATA"})
     package = build(d.root, d.directory / "dist")
@@ -433,6 +448,8 @@ def test_publisher_includes_only_tracked_program_files_and_prebuilt_frontend(dis
         assert "credentials.py" not in archive.namelist()
         assert not any(name.startswith((".runtime/", "data/", ".git/")) for name in archive.namelist())
         assert MARKER in archive.namelist()
+        assert not set(excluded) & set(archive.namelist())
+        assert "release_manifest.toml" not in archive.namelist()
 
 
 def test_successful_api_start_acknowledges_matching_portable_install(distribution, monkeypatch):

@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ from app_updates import write_json
 from app_version import VERSION
 from release_security import (
     MARKER, MAX_METADATA, MAX_PACKAGE, MAX_UNPACKED, asset_url, canonical, config, digest, managed_name,
-    runtime_hash, sign, validate_feed, validate_inventory, validate_zip_entry, verify, version,
+    runtime_hash, safe_target, sign, validate_feed, validate_inventory, validate_zip_entry, verify, version,
 )
 
 
@@ -79,6 +80,31 @@ def keygen(root):
     print("将该文件内容设置为 GitHub Actions Secret: RELEASE_SIGNING_KEY。不要上传私钥。")
 
 
+def source_files(root, *, include_untracked=False):
+    manifest = tomllib.loads((root / "release_manifest.toml").read_text(encoding="utf-8"))
+    entries = manifest.get("files")
+    if (manifest.get("schema") != 1 or not isinstance(entries, list) or not entries
+            or any(not isinstance(name, str) for name in entries)):
+        raise ValueError("Invalid release source manifest")
+    if len({name.casefold() for name in entries}) != len(entries):
+        raise ValueError("Duplicate release source manifest entry")
+    names = subprocess.check_output(
+        ["git", "-c", "core.quotepath=false", "ls-files", "-z", "--cached",
+         *(["--others", "--exclude-standard"] if include_untracked else [])],
+        cwd=root,
+    ).decode("utf-8").split("\0")
+    available = set(names)
+    if "release_manifest.toml" not in available:
+        raise ValueError("Release source manifest must be staged")
+    for name in entries:
+        managed_name(name)
+        if name == MARKER or name.startswith("frontend/dist/"):
+            raise ValueError("Generated files cannot be listed in the source manifest")
+        if name not in available or not safe_target(root, name).is_file():
+            raise ValueError(f"Release source is missing or not staged: {name}")
+    return set(entries)
+
+
 def build(root, output, tag=None, notes="", include_untracked=False):
     version(VERSION)
     if len(notes) > 30000:
@@ -87,29 +113,13 @@ def build(root, output, tag=None, notes="", include_untracked=False):
         raise ValueError("Git tag 必须与 pyproject.toml 版本完全一致")
     if not (root / "frontend/dist/index.html").is_file():
         raise ValueError("请先构建 frontend")
-    names = subprocess.check_output(
-        ["git", "-c", "core.quotepath=false", "ls-files", "-z", "--cached",
-         *(["--others", "--exclude-standard"] if include_untracked else [])],
-        cwd=root,
-    ).decode("utf-8").split("\0")
-    files = set()
-    for name in names:
-        if not name:
-            continue
-        try:
-            managed_name(name)
-        except ValueError:
-            continue
-        if name != MARKER:
-            files.add(name)
+    files = source_files(root, include_untracked=include_untracked)
     files.update(path.relative_to(root).as_posix() for path in (root / "frontend/dist").rglob("*") if path.is_file())
     if not {"app_updates.py", "app_update_install.py", "app_version.py", "release_security.py",
             "api/updates.py", "scripts/app_update_worker.py"}.issubset(files):
         raise ValueError("缺少已跟踪的更新模块，请先提交代码。本地未提交验收可显式使用 --include-untracked")
     for name in files:
-        managed_name(name)
-        if (root / name).is_symlink():
-            raise ValueError("分发源不能包含符号链接")
+        safe_target(root, name)
     cfg = config(root)
     inventory = {"schema": 1, "repository": cfg["repository"], "version": VERSION,
                  "data_schema": cfg["data_schema"], "files": {name: digest(root / name) for name in sorted(files)}}

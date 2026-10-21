@@ -2123,7 +2123,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
         # Stream browser files to disk; never buffer a classroom recording in memory.
         with TemporaryDirectory(prefix="classroom-upload-") as temporary:
-            source = Path(temporary) / filename
+            # Windows TEMP may use an 8.3 alias; canonicalize this server-owned directory.
+            source = Path(temporary).resolve() / filename
             size = 0
             try:
                 with source.open("wb") as output:

@@ -12,9 +12,11 @@ Install `uv`, then run:
 ```powershell
 uv sync --locked --group dev
 python scripts/check_repository_hygiene.py
-uv run --locked --group dev python -m pytest tests -q
 Push-Location frontend
 npm ci
+Pop-Location
+uv run --locked --group dev python -m pytest tests -q
+Push-Location frontend
 npm test -- --maxWorkers=2 --minWorkers=1
 npm run build
 Pop-Location
@@ -37,6 +39,11 @@ file and an isolated `.runtime` environment. Do not commit `.runtime`.
 - Run the checks above before opening a pull request. The hygiene check inspects
   the Git index, so rerun it after staging new or updated files.
 - Keep cleanup, CI changes, and unrelated product changes in separate commits.
+- Internal agent instructions and standalone experiment workflows stay private.
+  Required shared scene modules under `experiments/subtitle-cyberspace/src/`
+  remain application source.
+- Add new runtime files to `release_manifest.toml`. Public tests, documentation,
+  and build helpers do not automatically belong in the portable application.
 
 See [repository maintenance](docs/repository-maintenance.md) for public/private
 backup boundaries and the handling of previously published sensitive material.

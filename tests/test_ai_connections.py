@@ -166,10 +166,10 @@ def test_stale_save_is_rejected_and_other_connections_survive_legacy_save(connec
 def test_corrupt_collection_does_not_reset_or_overwrite_file(connections):
     path = ai_provider.SETTINGS_PATH
     path.write_text('{"connections": [{"id": "broken"}]}', encoding="utf-8")
-    before = path.read_text()
+    before = path.read_text(encoding="utf-8")
     assert connections.get("/api/settings/ai").status_code == 500
     assert connections.post("/api/settings/ai/connections", json={"name": "test"}).status_code == 400
-    assert path.read_text() == before
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_named_profiles_keep_connection_keys_out_of_legacy_fallback(tmp_path, monkeypatch):
@@ -191,7 +191,7 @@ def test_unified_save_updates_name_parameters_and_key_together(connections):
     assert response.json()["connection_name"] == "统一保存"
     assert response.json()["model"] == "next-model" and response.json()["has_api_key"]
     assert connections.post("/api/settings/ai/key/reveal").json()["api_key"] == "next-secret"
-    assert "next-secret" not in ai_provider.SETTINGS_PATH.read_text()
+    assert "next-secret" not in ai_provider.SETTINGS_PATH.read_text(encoding="utf-8")
     assert connections.put("/api/settings/ai", json={**response.json(), "remove_key": True}).status_code == 200
     assert connections.get("/api/settings/ai").json()["has_api_key"] is False
 
