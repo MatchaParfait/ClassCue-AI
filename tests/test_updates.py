@@ -96,6 +96,42 @@ def test_signed_update_and_announcements_are_read_without_network(distribution):
     assert not UpdateCenter(d.root).status()["preferences"]["auto_check"]
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+def test_atomic_state_write_retries_only_bounded_windows_sharing_failures(tmp_path, monkeypatch, persistent):
+    from classcue import app_updates
+    path = tmp_path / "state.json"
+    write_json(path, {"old": True})
+    original, calls, delays = Path.replace, [], []
+    def replace(source, target):
+        calls.append(target)
+        if persistent or len(calls) < 3:
+            error = PermissionError("fixture sharing violation")
+            error.winerror = 32
+            raise error
+        return original(source, target)
+    monkeypatch.setattr(Path, "replace", replace)
+    monkeypatch.setattr(app_updates.time, "sleep", delays.append)
+    if persistent:
+        with pytest.raises(PermissionError):
+            write_json(path, {"new": True})
+        assert read_json(path) == {"old": True}
+        assert len(calls) == 8 and sum(delays) < 4
+    else:
+        write_json(path, {"new": True})
+        assert read_json(path) == {"new": True}
+        assert len(calls) == 3
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_state_does_not_hide_other_permission_errors(tmp_path, monkeypatch):
+    def denied(*_args):
+        raise PermissionError("fixture persistent ACL error")
+    monkeypatch.setattr(Path, "replace", denied)
+    with pytest.raises(PermissionError):
+        write_json(tmp_path / "state.json", {"new": True})
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_tampered_expired_and_replayed_feeds_are_not_accepted(distribution):
     d = distribution
     d.feed["payload"]["announcements"][0]["title"] = "tampered"

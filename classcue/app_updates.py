@@ -34,7 +34,15 @@ def write_json(path, value):
             json.dump(value, output, ensure_ascii=False)
             output.flush()
             os.fsync(output.fileno())
-        temporary.replace(path)
+        # Windows readers or scanners can briefly hold the destination entry.
+        for attempt in range(8):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError as error:
+                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 7:
+                    raise
+                time.sleep(min(.05 * 2 ** attempt, 1))
     finally:
         temporary.unlink(missing_ok=True)
 
