@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from http.client import HTTPException
 from html.parser import HTMLParser
 import json
 import os
@@ -55,7 +56,7 @@ def fetch(url: str) -> bytes:
 def health(url: str, library_id: str) -> dict[str, str] | None:
     try:
         payload = json.loads(fetch(f"{url}/api/health"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, HTTPException):
         return None
     if not isinstance(payload, dict):
         return None
@@ -116,7 +117,7 @@ def frontend_is_ready(url: str, library_id: str, instance_id: str) -> bool:
             return False
         proxied = health(url, library_id)
         return proxied is not None and proxied["instance_id"] == instance_id
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError, ValueError, HTTPException):
         return False
 
 
@@ -129,7 +130,7 @@ def static_frontend_is_ready(url: str, library_id: str, instance_id: str) -> boo
             and identity.get("mode") == "static" and identity.get("root_id") == root_id
             and health(url, library_id)["instance_id"] == instance_id
         )
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, HTTPException):
         return False
 
 
@@ -203,7 +204,7 @@ def live_data_root(state: dict, api_url: str, *, require_idle: bool = False) -> 
     """Read and verify the database used by the recorded server instance."""
     try:
         payload = json.loads(fetch(f"{api_url}/api/health"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, HTTPException):
         return None
     if payload.get("service") != "classroom-video-study" or payload.get("instance_id") != state.get("instance_id"):
         raise RuntimeError("API identity changed; refusing to control an unrelated service")

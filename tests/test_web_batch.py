@@ -1,3 +1,4 @@
+import faulthandler
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,8 +77,39 @@ def folder(batch, name="course", count=2):
 
 
 def wait(batch, job_id):
-    batch.application.state.jobs.executor.submit(lambda: None).result(timeout=10)
+    barrier = batch.application.state.jobs.executor.submit(lambda: None)
+    try:
+        barrier.result(timeout=60)
+    except TimeoutError:
+        barrier.cancel()
+        faulthandler.dump_traceback()
+        row = batch.store.get_job(job_id)
+        detail = {key: row[key] for key in ("status", "stage", "message", "error_message")} if row else None
+        pytest.fail(f"Batch worker did not settle within 60s; job={job_id}; last_state={detail}")
     return batch.client.get(f"/api/jobs/{job_id}").json()
+
+
+def test_batch_wait_reports_job_state_and_thread_stacks_on_timeout(monkeypatch):
+    observed = []
+
+    def result(*, timeout):
+        observed.append(timeout)
+        raise TimeoutError
+
+    barrier = SimpleNamespace(result=result, cancel=lambda: observed.append("cancel"))
+    fixture = SimpleNamespace(
+        application=SimpleNamespace(state=SimpleNamespace(jobs=SimpleNamespace(
+            executor=SimpleNamespace(submit=lambda _operation: barrier),
+        ))),
+        store=SimpleNamespace(get_job=lambda _id: {
+            "status": "running", "stage": "importing",
+            "message": "fixture still importing", "error_message": "",
+        }),
+    )
+    monkeypatch.setattr(faulthandler, "dump_traceback", lambda: observed.append("threads"))
+    with pytest.raises(pytest.fail.Exception, match="last_state=.*importing"):
+        wait(fixture, "slow-fixture")
+    assert observed == [60, "cancel", "threads"]
 
 
 def start(batch, root):

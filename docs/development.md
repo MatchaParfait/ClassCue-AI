@@ -112,6 +112,8 @@ python -m classcue.setup_environment --require-gpu
 
 ## 配置 AI 服务
 
+“AI 服务 → API 并发上限”随连接保存，允许 1–16，默认 1；保存后用于新任务，运行中的任务保留启动时的连接和并发设置。它限制同一分析任务独立字幕块的 API 请求数，不会并行启动多个视频或 ASR 任务。引用校验、格式修复、取消和错误日志仍保留；修复请求与其他字幕块请求共用上限。FireRed 的转写期提前提取仍按稳定字幕顺序预取，最终分析阶段按此上限并发处理剩余块。
+
 管理页左侧和复习页“复习设置”使用同一套 AI 服务设置：
 
 - **模型名称**：可以直接填写，也可以先点击列表图标从当前 Base URL 获取远端模型；部分站点不提供模型列表，此时手动输入即可。
@@ -344,7 +346,11 @@ GPU OOM 依次尝试缩小输入组 6→3→1，BS1 仍失败则暂停；不自�
 uv run --locked --group dev python -m pytest -q
 ```
 
-GitHub Actions 会在 Windows 上运行测试。贡献说明见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+GitHub Actions 的 `Tests` 工作流在分支推送和 PR 时运行 Windows 后端全套测试、前端测试与构建。版本标签由 `Release And Announcements` 单独执行同样的完整测试和构建，再生成签名发行包，避免标签重复触发一份 `Tests`。
+
+批处理 API 测试使用临时视频库、假字幕和假 AI，不请求真实模型服务；Windows 生命周期测试在临时安装中真实启动 API/Vite，验证端口冲突、重复启动、重启、数据迁移及停止，不控制正在使用的应用。批处理测试最多等待 60 秒，超时输出任务状态和线程堆栈，仍会判为失败。
+
+贡献说明见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 
 ## 许可证
 

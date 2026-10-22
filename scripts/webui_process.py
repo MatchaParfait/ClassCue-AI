@@ -136,21 +136,43 @@ def stop_verified(records: list[dict]) -> None:
         for record in records:
             handle = kernel.OpenProcess(0x1000 | 0x0001 | 0x00100000, False, record["pid"])
             if not handle:
-                if ctypes.get_last_error() == 87:  # Process already exited.
+                error = ctypes.get_last_error()
+                if error == 87:  # Process already exited.
                     continue
-                raise ctypes.WinError(ctypes.get_last_error())
-            handles.append(handle)
+                if error == 5:
+                    probe = kernel.OpenProcess(0x1000 | 0x00100000, False, record["pid"])
+                    if probe:
+                        try:
+                            if handle_creation(kernel, probe) != record["created"]:
+                                raise RuntimeError(f"PID {record['pid']} was reused; no service was stopped")
+                            if kernel.WaitForSingleObject(probe, 0) == 0:
+                                continue
+                        finally:
+                            kernel.CloseHandle(probe)
+                failure = ctypes.WinError(error)
+                failure.add_note(f"Could not open verified process PID {record['pid']} for termination")
+                raise failure
+            handles.append((record["pid"], handle))
             if handle_creation(kernel, handle) != record["created"]:
                 raise RuntimeError(f"PID {record['pid']} was reused; no service was stopped")
-        for handle in reversed(handles):
-            exit_code = wintypes.DWORD()
-            if not kernel.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+        for pid, handle in reversed(handles):
+            state = kernel.WaitForSingleObject(handle, 0)
+            if state == 0:
+                continue
+            if state != 258:  # WAIT_TIMEOUT: process is still running.
                 raise ctypes.WinError(ctypes.get_last_error())
-            if exit_code.value == 259 and not kernel.TerminateProcess(handle, 0):
-                raise ctypes.WinError(ctypes.get_last_error())
-        for handle in handles:
+            if not kernel.TerminateProcess(handle, 0):
+                error = ctypes.get_last_error()
+                # A venv parent can exit when its child is stopped. Windows
+                # reports access denied if it exits between our check and kill.
+                if error == 5 and kernel.WaitForSingleObject(handle, 5000) == 0:
+                    continue
+                failure = ctypes.WinError(error)
+                failure.add_note(f"Could not terminate verified process PID {pid}")
+                raise failure
+        for pid, handle in handles:
             if kernel.WaitForSingleObject(handle, 5000) != 0:
-                raise RuntimeError("Timed out waiting for an owned service to stop")
+                raise RuntimeError(f"Timed out waiting for owned service PID {pid} to stop")
     finally:
-        for handle in handles:
+        for _pid, handle in handles:
             kernel.CloseHandle(handle)

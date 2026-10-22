@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import hashlib
 import json
 import logging
+from http.client import BadStatusLine, IncompleteRead
 from pathlib import Path
 import os
 import shutil
@@ -97,6 +98,23 @@ def test_health_requires_project_identity(monkeypatch):
                "library_id": "workspace", "instance_id": "instance"}
     monkeypatch.setattr(start_frontend, "fetch", lambda _url: json.dumps(payload).encode())
     assert start_frontend.health("http://unused", "workspace") == payload
+
+
+@pytest.mark.parametrize("error", [BadStatusLine("GET / HTTP/1.1"), IncompleteRead(b"", 10)])
+@pytest.mark.parametrize("probe", ["health", "frontend", "static", "live_data_root"])
+def test_malformed_http_during_readiness_is_not_a_fatal_launch_error(monkeypatch, error, probe):
+    def fetch(_url):
+        raise error
+
+    monkeypatch.setattr(start_frontend, "fetch", fetch)
+    if probe == "health":
+        assert start_frontend.health("http://unused", "workspace") is None
+    elif probe == "frontend":
+        assert not start_frontend.frontend_is_ready("http://unused", "workspace", "instance")
+    elif probe == "static":
+        assert not start_frontend.static_frontend_is_ready("http://unused", "workspace", "instance")
+    else:
+        assert start_frontend.live_data_root({"instance_id": "instance"}, "http://unused") is None
 
 
 def test_vite_requires_own_page_and_matching_proxy(tmp_path, monkeypatch):
