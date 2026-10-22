@@ -4,11 +4,12 @@ import { useId } from "react";
 import { useRecallSchemes } from "../hooks/useRecallSchemes";
 import { Link } from "react-router-dom";
 
-export function RecallModeControl({ value = ["medium_recall"], onChange, disabled = false, active = true }: {
+export function RecallModeControl({ value = ["medium_recall"], onChange, disabled = false, active = true, showManageLink = true }: {
   value: RecallMode[];
   onChange: (value: RecallMode[]) => void;
   disabled?: boolean;
   active?: boolean;
+  showManageLink?: boolean;
 }) {
   const hintId = useId();
   const schemes = useRecallSchemes(active);
@@ -40,7 +41,7 @@ export function RecallModeControl({ value = ["medium_recall"], onChange, disable
       {schemes.isError && <p className="field-error" role="status">自定义方案读取失败。
         <button className="text-button" type="button" onClick={() => void schemes.refetch()}>重试</button></p>}
       <p id={hintId} className="field-hint">可多选；每种方案独立调用 AI，多选会使用更多 token。</p>
-      <Link className="text-button recall-manage-link" to="/settings?section=recall">管理自定义方案</Link>
+      {showManageLink && <Link className="text-button recall-manage-link" to="/settings?section=recall">管理自定义方案</Link>}
     </fieldset>
   );
 }

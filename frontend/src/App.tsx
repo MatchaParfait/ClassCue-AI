@@ -51,6 +51,7 @@ import { RecallSelectionScope, useRecallSelection } from "./hooks/useRecallSelec
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { ToolbarMenu } from "./components/ToolbarMenu";
 import { VideoMoveMenu } from "./components/VideoMoveMenu";
+import { StudyShareExportMenuItem, StudyShareImportButton } from "./components/StudyShareControls";
 import { useTaskStatus, isTaskTerminal, taskLabel, videoFileChangeBlockReason } from "./hooks/useTaskStatus";
 import type { Job, Video, VideoLibraryFolder, VideoLibraryState } from "./types";
 import { canOpenReview, formatTime } from "./utils";
@@ -63,12 +64,14 @@ import "./theme.css";
 import "./themes/character.css";
 import "./library-glass.css";
 import "./folder-navigation.css";
+import "./onboarding.css";
 import { CharacterAccent, CharacterEye } from "./components/CharacterAccent";
 import { DesktopControls } from "./components/DesktopControls";
 import { WarmAtmosphere } from "./components/WarmAtmosphere";
 import { hasActivePreparation, preparationSummary } from "./components/ModelPreparationProgress";
 import { cleanupSummary, isCleanupJob } from "./components/ModelCleanupProgress";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, spotlight, useEntryMotion, useMotionTransition, useNewItems, useReducedMotion } from "./components/Motion";
+import { OnboardingGuide } from "./components/OnboardingGuide";
 
 const LIBRARY_SYNC_INTERVAL = 15_000;
 const ProcessPage = lazy(() => import("./components/ProcessPage").then(module => ({ default: module.ProcessPage })));
@@ -160,6 +163,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
   const [screens, setScreens] = useState<Location[]>([]);
   const newDraftSequence = useRef(0);
   const [rememberedJob, setRememberedJob] = useState<string | number | null>(null);
+  const [onboardingActive, setOnboardingActive] = useState(false);
   const panelKey = (value: Location) => value.pathname === "/process"
     ? value.state?.draftKey ?? `${value.pathname}:${new URLSearchParams(value.search).get("videoId") ?? "new"}` : value.pathname;
   useEffect(() => {
@@ -249,7 +253,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
                 : `${taskLabel(currentTask.status)}${!isTaskTerminal(currentTask) ? ` · ${Math.round(currentTask.progress ?? 0)}%` : ""}` : "暂无任务"}</span>
               <ChevronRight size={15} aria-hidden="true" />
             </button>
-            <Link className={`workbench-settings-link${pageLocation.pathname === "/settings" ? " is-selected" : ""}`}
+            <Link data-onboarding="settings" className={`workbench-settings-link${pageLocation.pathname === "/settings" ? " is-selected" : ""}`}
               title="设置" aria-label="设置" aria-current={pageLocation.pathname === "/settings" ? "page" : undefined} to="/settings">
               <Settings2 size={20} aria-hidden="true" /><span>设置</span><UpdateNotice active={visible} />
             </Link>
@@ -278,7 +282,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
               }} />} />
             <Route path="/batch-process" element={<BatchProcessPage active={active} onClose={close} onJob={onJob} />} />
             <Route path="/settings" element={<SettingsPage active={active} onClose={close} onJob={onJob}
-              onConfigurationSaved={active && /^\/(process|batch-process|tasks)/.test(screen.state?.returnTo ?? "") ? close : undefined} />} />
+              onConfigurationSaved={!onboardingActive && active && /^\/(process|batch-process|tasks)/.test(screen.state?.returnTo ?? "") ? close : undefined} />} />
           </Routes></Suspense>
         </PageSession>;
       })}
@@ -289,6 +293,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
         onJob={onJob} onSettings={() => open("/settings?section=ai")} onOpen={(value) => open(value.job_type === "storage_migration" ? "/settings?section=storage" : value.job_type === "batch_video_process" ? "/batch-process"
           : value.video_id ? `/process?videoId=${value.video_id}` : "/settings?section=asr")} /></Suspense>}
     </WorkbenchPanel>
+    <OnboardingGuide active={visible && workspaceSettled && !isPanel} scope={scope} onActiveChange={setOnboardingActive} />
   </div>;
 }
 
@@ -1164,6 +1169,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           </button>
           <span className="drag-handle" title={moving.has(video.id) ? "正在移动" : "拖动调整位置"}>{moving.has(video.id) ? <LoaderCircle className="spin" size={17} /> : <GripVertical size={17} />}</span>
           <ToolbarMenu label={`管理视频“${video.display_name}”`} icon={<MoreHorizontal size={18} />} disabled={moving.has(video.id) || editingVideoName}>
+            <StudyShareExportMenuItem video={video} blockReason={renameBlockReason} />
             <VideoMoveMenu currentFolder={parseFolderId(libraryState.assignments[String(video.id)] ?? null)}
               onMove={(id) => void moveVideo(video.id, id === null ? "" : `folder-${id}`)} />
           </ToolbarMenu>
@@ -1192,10 +1198,10 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           </div>
           <CharacterAccent />
         </div>
-
         <div className="library-toolbar">
           <div className="library-breadcrumb"><span>本地视频库</span></div>
           <div className="library-toolbar-tools">
+          <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
           <label className="sort-control">
             <span>排序</span>
             <select value={sortMode} aria-label="视频库排序" onChange={(event) => setSortMode(event.target.value as "manual" | "name" | "time")}>

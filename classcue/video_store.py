@@ -106,6 +106,12 @@ class VideoStore:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(video_id, analysis_mode)
                 );
+                CREATE TABLE IF NOT EXISTS video_share_imports (
+                    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    package_hash TEXT NOT NULL,
+                    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(video_id, package_hash)
+                );
                 CREATE TABLE IF NOT EXISTS recall_schemes (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -548,6 +554,7 @@ class VideoStore:
                 "video_analysis_runs",
                 "video_ai_chunks",
                 "video_processing_metrics",
+                "video_share_imports",
             ):
                 connection.execute(f"DELETE FROM {table} WHERE video_id = ?", (video_id,))
             connection.execute(
@@ -780,6 +787,7 @@ class VideoStore:
         "video_ai_chunks",
         "video_processing_metrics",
         "video_experiments",
+        "video_share_imports",
     )
 
     @staticmethod
@@ -977,6 +985,7 @@ class VideoStore:
                     "video_analysis_runs", "video_ai_chunks", "video_processing_metrics",
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
                     "llm_experiment_results",
+                    "video_share_imports",
                 ):
                     self._insert_rows(connection, table, related.get(table, []))
                 connection.execute(
@@ -1200,6 +1209,7 @@ class VideoStore:
             for table in (
                 "video_transcript_segments", "video_keyword_hits", "video_markers",
                 "video_analysis_runs", "video_ai_chunks", "video_processing_metrics",
+                "video_share_imports",
             ):
                 connection.execute(f"DELETE FROM {table} WHERE video_id = ?", (video_id,))
             connection.executemany(

@@ -22,16 +22,17 @@ from pathlib import Path
 from threading import Event, RLock
 from tempfile import TemporaryDirectory
 from typing import Annotated, Any, Callable, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import classcue.asr_storage as asr_storage
 import classcue.storage_migration as storage_migration
 import classcue.application_data_migration as application_data_migration
+import classcue.study_share as study_share
 from classcue.asr_status_cache import AsrStatusCache
 from classcue.asr_gpu_status import inspect_cuda_device
 from classcue.diagnostics import LOG_DIR as ACTIVE_LOG_DIR
@@ -917,6 +918,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     api.state.database_lease = lease
     api.state.asr_status_cache = status_cache
     api.state.storage_migrating = storage_migrating
+
+    @api.exception_handler(study_share.ShareError)
+    async def share_error(_request: Request, exc: study_share.ShareError):
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
 
     @api.middleware("http")
     async def guard_storage_migration(request: Request, call_next):
@@ -2745,6 +2750,73 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 time.sleep(0.5)
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    def share_block_reason(video_id: int) -> str | None:
+        if updating.is_set():
+            return "正在准备更新，请等待软件重启"
+        locked, global_reason = video_file_change_locks()
+        if global_reason:
+            return "目录迁移或批次队列占用中，请完成或停止任务后再分享资料"
+        if video_id in locked:
+            return "该视频被处理任务或暂停队列占用，请完成或停止任务后再分享资料"
+        return None
+
+    async def read_share_package(request: Request) -> study_share.StudyPackage:
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > study_share.MAX_SHARE_BYTES:
+                raise study_share.ShareError("分享包超过 32 MB", 413)
+            content.extend(chunk)
+        return await run_in_threadpool(study_share.decode_package, bytes(content))
+
+    @api.get("/api/videos/{video_id}/study-share")
+    def export_study_share(video_id: int):
+        with jobs._lock:
+            _video_or_404(provider.get(), video_id)
+            if reason := share_block_reason(video_id):
+                raise study_share.ShareError(reason, 409)
+            content = study_share.export_package(provider.get(), video_id)
+        return Response(content, media_type="application/octet-stream", headers={
+            "Content-Disposition": "attachment; filename=\"study.studyshare\"; filename*=UTF-8''"
+            + quote("课堂学习资料.studyshare"),
+            "Cache-Control": "no-store",
+        })
+
+    @api.post("/api/study-shares/preview")
+    async def preview_study_share(request: Request):
+        package = await read_share_package(request)
+
+        def preview():
+            with jobs._lock:
+                store = provider.get()
+                video = study_share.target_video(store, package)
+                result = study_share.preview_package(store, package, share_block_reason(int(video["id"])))
+                return {**result, "library_id": provider.library_id()}
+
+        return await run_in_threadpool(preview)
+
+    @api.post("/api/study-shares/import")
+    async def import_study_share(
+        request: Request,
+        package_hash: str = Query(pattern=r"^[0-9a-f]{64}$"),
+        video_id: int = Query(gt=0),
+        library_id: str = Query(min_length=1, max_length=100),
+    ):
+        package = await read_share_package(request)
+
+        def commit():
+            with jobs._lock:
+                if library_id != provider.library_id():
+                    raise study_share.ShareError("当前视频库已切换，请重新预览分享包", 409)
+                if reason := share_block_reason(video_id):
+                    raise study_share.ShareError(reason, 409)
+                store = provider.get()
+                imported_id = study_share.import_package(
+                    store, package, expected_hash=package_hash, expected_video_id=video_id,
+                )
+                return {"video": video_payload(_video_or_404(store, imported_id))}
+
+        return await run_in_threadpool(commit)
 
     @api.get("/api/videos/{video_id}")
     def get_video(video_id: int) -> dict[str, object]:

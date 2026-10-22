@@ -352,11 +352,20 @@ def test_announcement_schedule_expiry_and_version_filter(distribution):
     assert [item["id"] for item in d.center.status()["announcements"]] == ["notice-1"]
 
 
+def test_development_configuration_uses_public_release_repository():
+    root = Path(__file__).resolve().parents[1]
+    cfg = read_json(root / "release_config.json")
+    assert cfg["repository"] == "MatchaParfait/ClassCue-AI"
+
+
 def test_missing_or_damaged_configuration_disables_updates_without_breaking_local_api(tmp_path):
     center = UpdateCenter(tmp_path)
     assert not center.status()["configured"] and center.status()["error"]
+    assert center.status()["repository"] == "MatchaParfait/ClassCue-AI"
     write_json(tmp_path / "release_config.json", [])
-    assert not UpdateCenter(tmp_path).status()["configured"]
+    damaged = UpdateCenter(tmp_path).status()
+    assert not damaged["configured"]
+    assert damaged["repository"] == "MatchaParfait/ClassCue-AI"
 
 
 def test_native_install_rejects_unsaved_busy_and_foreign_pages():

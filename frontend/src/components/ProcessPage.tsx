@@ -60,17 +60,23 @@ const DEFAULT_FORM: ProcessForm = {
   forceRetranscribe: false,
 };
 
-export function ProcessPage({ embedded = false, active = true, onClose, onJob, onRegistered }: {
+export function ProcessPage({ embedded = false, active = true, onClose, onJob, onRegistered, guided = false, videoId, onCompleted, onSettings }: {
   embedded?: boolean; active?: boolean; onClose?: () => void; onJob?: (id: string | number) => void; onRegistered?: (video: Video) => void;
+  guided?: boolean; videoId?: number; onCompleted?: (video: Video, job: Job) => void;
+  onSettings?: (section: "asr" | "ai") => void;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const initialVideoId = Number(searchParams.get("videoId") ?? 0);
+  const initialVideoId = videoId ?? Number(searchParams.get("videoId") ?? 0);
   const [videoPath, setVideoPath] = useState("");
   const [filename, setFilename] = useState("");
   const [formOptions, setForm] = useState<ProcessForm>(DEFAULT_FORM);
-  const [recallModes, setRecallModes] = useRecallSelection();
+  const [savedRecallModes, setSavedRecallModes] = useRecallSelection();
+  const recallModes = guided ? formOptions.recallModes : savedRecallModes;
+  const setRecallModes = guided
+    ? (modes: ProcessForm["recallModes"]) => setForm((current) => ({ ...current, recallModes: modes }))
+    : setSavedRecallModes;
   const form = { ...formOptions, recallModes };
   const [registeredVideo, setRegisteredVideo] = useState<Video | null>(null);
   const [jobId, setJobId] = useState<string | number | null>(null);
@@ -81,7 +87,8 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   const [notice, setNotice] = useState<string | null>(null);
   const [stoppingJobId, setStoppingJobId] = useState<string | number | null>(null);
   const [editingFilename, setEditingFilename] = useState(false);
-  const spacePreference = useCyberspacePreference();
+  const savedSpacePreference = useCyberspacePreference();
+  const spacePreference = guided ? "off" : savedSpacePreference;
   const [spaceOpen, setSpaceOpen] = useState(true);
   const [spaceReturning, setSpaceReturning] = useState(false);
   const startButton = useRef<HTMLButtonElement>(null);
@@ -177,12 +184,16 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     const id = completed.job_id ?? completed.id;
     if (openedCompletedJob.current === id) return;
     openedCompletedJob.current = id;
+    if (onCompleted) {
+      onCompleted(registeredVideo, completed);
+      return;
+    }
     const query = registeredVideo.library_id ? `?library_id=${encodeURIComponent(registeredVideo.library_id)}` : "";
     // Completion, not the decorative reveal or a secondary metadata request, owns navigation.
     navigate(`/review/${registeredVideo.id}${query}`, {
       replace: true, state: { completedJobId: id, completedVideoId: registeredVideo.id },
     });
-  }, [active, job.data, registeredVideo?.id, registeredVideo?.library_id, navigate]);
+  }, [active, job.data, registeredVideo?.id, registeredVideo?.library_id, navigate, onCompleted]);
 
   useEffect(() => {
     const currentJob = job.data;
@@ -264,7 +275,7 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
       setJobId(result.job_id ?? result.id ?? null);
       setStoppingJobId(null);
       setFormError(null);
-      setNotice("处理任务已提交，可切换页面，进度会自动恢复");
+      setNotice(guided ? "处理任务已提交" : "处理任务已提交，可切换页面，进度会自动恢复");
       if (result.job_id ?? result.id) onJob?.(result.job_id ?? result.id);
       void queryClient.invalidateQueries({ queryKey: ["videos"] });
     },
@@ -375,7 +386,7 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
 
   if (existingVideo.isError && !registeredVideo && !hydratedExisting.current) {
     return <main className="process-page has-warm-atmosphere"><WarmAtmosphere active={active} /><div className="process-inner">
-      <div className="process-header"><h1>处理视频</h1><Link className="secondary-button" to="/">返回视频库 <ArrowRight size={16} /></Link></div>
+      <div className="process-header"><h1>处理视频</h1>{!guided && <Link className="secondary-button" to="/">返回视频库 <ArrowRight size={16} /></Link>}</div>
       <p className="field-error" role="alert"><AlertCircle size={16} />{errorMessage(existingVideo.error)}</p>
       <button className="secondary-button" type="button" onClick={() => void existingVideo.refetch()}><RefreshCw size={16} />重新读取视频</button>
     </div></main>;
@@ -384,15 +395,17 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   const showSpace = spacePreference !== "off" && spaceOpen && Boolean(currentJob && registeredVideo);
   const commands: JobCommandsProps | undefined = currentJob ? {
     job: currentJob,
-    onReview: () => registeredVideo && navigate(`/review/${registeredVideo.id}`),
+    onReview: () => { if (!guided && registeredVideo) navigate(`/review/${registeredVideo.id}`); },
+    hideReview: guided,
+    onSettings: onSettings ? () => onSettings("ai") : undefined,
     onRetry: () => currentJob.status === "resource_paused" ? resumeMutation.mutate() : startProcess(),
     onCancel: () => cancelMutation.mutate(currentJob.job_id ?? currentJob.id),
     cancelling: cancelMutation.isPending || stoppingJobId === (currentJob.job_id ?? currentJob.id),
     retrying: processMutation.isPending || resumeMutation.isPending,
   } : undefined;
   return (
-    <main data-space-motion={spacePreference} className={`process-page has-warm-atmosphere${registeredVideo ? " process-page-selected" : ""}${embedded ? " embedded-page" : ""}${showSpace ? " is-cyberspace" : ""}${spaceReturning ? " is-space-returning" : ""}${spacePreference !== "off" && (showSpace || processMutation.isPending) && !spaceReturning ? " is-space-cooling" : ""}`}>
-      <WarmAtmosphere active={active && (!showSpace || spaceReturning)} />
+    <main data-space-motion={spacePreference} className={`process-page${guided ? " guided-process-page" : " has-warm-atmosphere"}${registeredVideo ? " process-page-selected" : ""}${embedded ? " embedded-page" : ""}${showSpace ? " is-cyberspace" : ""}${spaceReturning ? " is-space-returning" : ""}${spacePreference !== "off" && (showSpace || processMutation.isPending) && !spaceReturning ? " is-space-cooling" : ""}`}>
+      {!guided && <WarmAtmosphere active={active && (!showSpace || spaceReturning)} />}
       <div className="process-inner">
         <div className="process-header">
           <div>
@@ -401,8 +414,8 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
             {spacePreference !== "off" && currentJob && !spaceOpen && <button className="text-button" type="button" onClick={() => setSpaceOpen(true)}><Sparkles size={16} />打开字幕空间</button>}
             {!registeredVideo && <p>视频将保存到视频库，是否保留原文件取决于设置中的“导入后删除原文件”。</p>}
           </div>
-          {embedded ? <button className="secondary-button panel-return" onClick={onClose}>返回视频库</button>
-            : <Link className="secondary-button" to="/"><ArrowRight size={16} /> 返回视频库</Link>}
+          {!guided && (embedded ? <button className="secondary-button panel-return" onClick={onClose}>返回视频库</button>
+            : <Link className="secondary-button" to="/"><ArrowRight size={16} /> 返回视频库</Link>)}
         </div>
 
         {showSpace && active && currentJob && registeredVideo && <ProcessingExperience key={`${registeredVideo.id}:${currentJob.job_id ?? currentJob.id}`} job={currentJob} video={registeredVideo}
@@ -492,8 +505,8 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
           </div>}
           {(!registeredVideo || registeredVideo.status === "review_ready" || registeredVideo.has_transcript) && <div className="process-actions">
             {!registeredVideo && <button className="primary-button" type="button" onClick={register} disabled={!canRegister || isProcessing}><FileVideo size={16} /> {registerMutation.isPending ? "正在导入视频库…" : "导入视频库"}</button>}
-            {registeredVideo?.status === "review_ready" && <button className="secondary-button" type="button" onClick={() => navigate(`/review/${registeredVideo.id}`)}>打开复习页面 <ArrowRight size={16} /></button>}
-            {registeredVideo?.has_transcript && registeredVideo.status !== "review_ready" && !isProcessing && <button className="secondary-button" type="button" onClick={() => navigate(`/review/${registeredVideo.id}`)}>查看已保存字幕 <ArrowRight size={16} /></button>}
+            {!guided && registeredVideo?.status === "review_ready" && <button className="secondary-button" type="button" onClick={() => navigate(`/review/${registeredVideo.id}`)}>打开复习页面 <ArrowRight size={16} /></button>}
+            {!guided && registeredVideo?.has_transcript && registeredVideo.status !== "review_ready" && !isProcessing && <button className="secondary-button" type="button" onClick={() => navigate(`/review/${registeredVideo.id}`)}>查看已保存字幕 <ArrowRight size={16} /></button>}
           </div>}
         </section>
 
@@ -505,15 +518,18 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
             <div className="readonly-config"><span>当前 ASR 模型</span><strong>{optionLabel(currentAsr ?? options.data?.asr_model_name, "未配置")}</strong>
               {asrStatus.isFetching && <small role="status">检查中</small>}
               {asrStatus.isError && <small role="status">状态检查失败</small>}
-              <Link to="/settings?section=asr"><Settings2 size={14} /> 修改</Link></div>
-            <div className="readonly-config"><span>当前 AI 服务</span><strong>{ai.isPending ? "正在读取配置" : ai.isError ? "配置读取失败" : ai.data?.model || "未配置"}</strong><Link to="/settings?section=ai"><Settings2 size={14} /> 修改</Link></div>
+              {onSettings ? <button className="text-button" type="button" onClick={() => onSettings("asr")}><Settings2 size={14} />修改</button>
+                : <Link to="/settings?section=asr"><Settings2 size={14} /> 修改</Link>}</div>
+            <div className="readonly-config"><span>当前 AI 服务</span><strong>{ai.isPending ? "正在读取配置" : ai.isError ? "配置读取失败" : ai.data?.model || "未配置"}</strong>
+              {onSettings ? <button className="text-button" type="button" onClick={() => onSettings("ai")}><Settings2 size={14} />修改</button>
+                : <Link to="/settings?section=ai"><Settings2 size={14} /> 修改</Link>}</div>
           </div>
           {isFireRed ? <FireRedResourceProfile modelId={currentAsr!.id} active={active} />
             : typeof currentAsr === "object" && currentAsr?.engine === "qwen"
               ? <QwenResourceControls form={form} onChange={setForm} disabled={isProcessing} /> : null}
           <div className="option-grid">
             <label className="check-option"><input type="checkbox" checked={Boolean(form.forceRetranscribe)} disabled={isProcessing} onChange={(event) => setForm((current) => ({ ...current, forceRetranscribe: event.target.checked }))} /><span><strong>使用当前模型重新转写</strong><small>成功后替换原字幕并重建复习结果；失败时保留原结果</small></span></label>
-            <RecallModeControl value={form.recallModes} active={active} disabled={isProcessing} onChange={(recallModes) => {
+            <RecallModeControl value={form.recallModes} active={active} showManageLink={!guided} disabled={isProcessing} onChange={(recallModes) => {
               setRecallModes(recallModes);
               setForm((current) => ({ ...current, recallModes }));
               setFormError((current) => current === RECALL_SELECTION_REQUIRED ? null : current);
@@ -547,16 +563,20 @@ interface JobCommandsProps {
   onCancel: () => void;
   cancelling: boolean;
   retrying: boolean;
+  hideReview?: boolean;
+  onSettings?: () => void;
 }
 
-function JobCommands({ job, onReview, onRetry, onCancel, cancelling, retrying }: JobCommandsProps) {
+function JobCommands({ job, onReview, onRetry, onCancel, cancelling, retrying, hideReview, onSettings }: JobCommandsProps) {
   return <div className="process-job-commands">
     {(!isJobTerminal(job) || job.status === "resource_paused") && <button className="stop-job-button" type="button" onClick={onCancel} disabled={cancelling}><Ban size={15} /> {cancelling ? "正在请求停止…" : "停止处理"}</button>}
-    {job.status === "completed" && <button className="secondary-button compact" type="button" onClick={onReview}>打开复习页面 <ArrowRight size={14} /></button>}
+    {job.status === "completed" && !hideReview && <button className="secondary-button compact" type="button" onClick={onReview}>打开复习页面 <ArrowRight size={14} /></button>}
     {["failed", "awaiting_api"].includes(job.status) && <button className="secondary-button compact" type="button" onClick={onRetry} disabled={retrying}><RotateCcw size={14} /> {retrying ? "正在重试…" : "重试任务"}</button>}
     {["interrupted", "cancelled", "canceled"].includes(job.status) && <button className="secondary-button compact" type="button" onClick={onRetry} disabled={retrying}><RotateCcw size={14} />{retrying ? "正在继续…" : "继续处理"}</button>}
     {job.status === "resource_paused" && <button className="secondary-button compact" type="button" onClick={onRetry} disabled={retrying}><RotateCcw size={14} /> {retrying ? "正在继续…" : "继续处理"}</button>}
-    {job.status === "awaiting_api" && <Link className="text-button" to="/settings?section=ai"><Settings2 size={14} />AI 服务设置</Link>}
+    {job.status === "awaiting_api" && (onSettings
+      ? <button className="text-button" type="button" onClick={onSettings}><Settings2 size={14} />AI 服务设置</button>
+      : <Link className="text-button" to="/settings?section=ai"><Settings2 size={14} />AI 服务设置</Link>)}
   </div>;
 }
 

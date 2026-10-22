@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import * as api from "../api/client";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsPage, type GuidedSettingsSection } from "./SettingsPage";
+import { ONBOARDING_RESET_EVENT } from "../components/OnboardingGuide";
 import type { AiSettings, AsrModel } from "../types";
 
 vi.mock("../api/client");
@@ -25,7 +26,7 @@ async function waitFor(check: () => void) {
   throw failure;
 }
 
-function mountSettings(path = "/settings", models = catalogue) {
+function mountSettings(path = "/settings", models = catalogue, guidedSection?: GuidedSettingsSection) {
   mockDirectories();
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.mocked(api.getAsrModels).mockResolvedValue(models);
@@ -44,7 +45,7 @@ function mountSettings(path = "/settings", models = catalogue) {
   const render = (active = true) => act(() => root.render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <SettingsPage active={active} />
+        <SettingsPage active={active} guidedSection={guidedSection} />
       </MemoryRouter>
     </QueryClientProvider>,
   ));
@@ -54,6 +55,40 @@ function mountSettings(path = "/settings", models = catalogue) {
     container.remove();
   } };
 }
+
+it("renders only the requested settings in a guide without navigation, restart tools or unrelated settings", async () => {
+  vi.resetAllMocks();
+  const page = mountSettings("/settings?section=updates", catalogue, "ai");
+  try {
+    await waitFor(() => expect(page.container.querySelector("#ai-settings-title")).not.toBeNull());
+    expect(api.getAiSettings).toHaveBeenCalled();
+    expect(page.container.querySelector(".settings-navigation")).toBeNull();
+    expect(page.container.querySelector(".settings-page-heading")).toBeNull();
+    expect(page.container.querySelector(".shortcut-settings")).toBeNull();
+    expect(page.container.querySelector("#asr-settings-title")).toBeNull();
+    expect(page.container.querySelector(".storage-directories-section")).toBeNull();
+    expect(page.container.querySelector('a[href="/"]')).toBeNull();
+  } finally { await page.dispose(); }
+});
+
+it("exposes the onboarding entry in the settings sidebar rather than the hidden workbench heading", async () => {
+  vi.resetAllMocks();
+  const reset = vi.fn();
+  window.addEventListener(ONBOARDING_RESET_EVENT, reset);
+  const page = mountSettings("/settings?section=ai");
+  try {
+    const entry = page.container.querySelector<HTMLButtonElement>(".settings-navigation .settings-onboarding-trigger")!;
+    expect(entry).not.toBeNull();
+    expect(entry.textContent).toBe("重新打开新手引导");
+    expect(entry.closest(".settings-heading-actions")).toBeNull();
+    expect(entry.previousElementSibling?.textContent).toBe("关于与更新");
+    await act(async () => entry.click());
+    expect(reset).toHaveBeenCalledTimes(1);
+  } finally {
+    window.removeEventListener(ONBOARDING_RESET_EVENT, reset);
+    await page.dispose();
+  }
+});
 
 it.each(["gpu", "cpu"] as const)("clears only the chosen Dolphin %s environment and displays real cleanup counts", async (device) => {
   vi.resetAllMocks();
@@ -211,7 +246,7 @@ it("does not inspect ASR models or AI services in the default storage category",
   const page = mountSettings();
   try {
     await waitFor(() => expect(api.getStorageDirectories).toHaveBeenCalled());
-    expect(page.container.querySelectorAll(".settings-navigation button")).toHaveLength(8);
+    expect(page.container.querySelectorAll(".settings-navigation button:not(.settings-onboarding-trigger)")).toHaveLength(8);
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("快捷键");
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("桌面设置");
     expect(page.container.querySelector(".settings-navigation")?.textContent).not.toContain("工作区");

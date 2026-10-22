@@ -38,6 +38,17 @@ believed to be private. Confirm repository identity and visibility first.
 
 ## Before Public Commits
 
+Standalone LLM comparison and review tools belong to private development, not
+this application repository or its portable distribution. Keep experiment
+transcripts, rendered requests, raw responses, review notes, and screenshots
+outside public commits. The subtitle scene source used by the application is
+not part of that exclusion.
+
+Transfer only reviewed product files between the private development checkout
+and this checkout. Adapt package imports and the release inventory here; never
+merge private repository history into a public branch. Confirm the destination
+repository's actual identity and visibility before pushing.
+
 1. Separate repository cleanup, tooling changes, and product changes.
 2. Stage explicit paths or selected hunks.
 3. Review `git diff --cached --stat`, `git diff --cached`, and

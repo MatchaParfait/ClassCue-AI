@@ -84,6 +84,7 @@ files = [
     "classcue/setup_environment.py",
     "classcue/sqlite_connection.py",
     "classcue/storage_migration.py",
+    "classcue/study_share.py",
     "classcue/subtitle_search.py",
     "classcue/transcriber.py",
     "classcue/transcript_events.py",

@@ -1,4 +1,4 @@
-import { useUnsavedDraft } from "../components/UnsavedChanges";
+import { useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
 import { CharacterEye } from "../components/CharacterAccent";
 import { WarmAtmosphere } from "../components/WarmAtmosphere";
 import { SettingsHerons } from "../components/SettingsHerons";
@@ -29,6 +29,7 @@ import {
   Info,
   Save,
   Server,
+  Sparkles,
   SlidersHorizontal,
   Target,
   Timer,
@@ -41,7 +42,8 @@ import { ModelPreparationProgress } from "../components/ModelPreparationProgress
 import { ModelDownloadControls } from "../components/ModelDownloadControls";
 import { ModelCleanupProgress } from "../components/ModelCleanupProgress";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { ONBOARDING_RESET_EVENT } from "../components/OnboardingGuide";
 import {
   clearAsrModel,
   clearAsrRuntime,
@@ -89,14 +91,19 @@ function normalizeAiSettings(settings: AiSettings): AiSettings {
     request_concurrency: settings.request_concurrency ?? 1 };
 }
 
-export function SettingsPage({ embedded = false, active = true, onClose, onConfigurationSaved, onJob }: {
+export type GuidedSettingsSection = "storage" | "asr" | "ai" | "shortcuts";
+
+export function SettingsPage({ embedded = false, active = true, onClose, onConfigurationSaved, onJob, guidedSection }: {
   embedded?: boolean; active?: boolean; onClose?: () => void; onConfigurationSaved?: () => void;
   onJob?: (id: string | number) => void;
+  guidedSection?: GuidedSettingsSection;
 }) {
   const queryClient = useQueryClient();
+  const leave = useUnsavedLeave();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
-  const section = ["storage", "asr", "ai", "recall", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage";
+  const navigate = useNavigate();
+  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
   const asr = useQuery({ queryKey: ["settings", "asr"], queryFn: getAsrModels, enabled: active && section === "asr", staleTime: 60_000 });
   const ai = useQuery({ queryKey: ["settings", "ai"], queryFn: getAiSettings, enabled: active && section === "ai" });
   const directoriesKey = ["settings", "directories"];
@@ -109,9 +116,9 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
   const notify = (tone: "success" | "error", text: string) => setNotice({ tone, text });
   const previousSection = useRef(section);
   useEffect(() => {
-    if (active && previousSection.current !== section) window.scrollTo({ top: 0, behavior: "instant" });
+    if (active && !guidedSection && previousSection.current !== section) window.scrollTo({ top: 0, behavior: "instant" });
     previousSection.current = section;
-  }, [active, section]);
+  }, [active, section, guidedSection]);
   useEffect(() => {
     if (notice?.tone !== "success" || !active) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
@@ -127,11 +134,11 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
   useEntryMotion(contentRef, { active: active && sectionReady, changeKey: section, initial: false, distance: 3, duration: .14, delay: .02,
     selector: ":scope > div:not([hidden]) .settings-section > :not(.settings-section-heading):not(.modal-backdrop)" });
   return (
-    <main className={`settings-page has-warm-atmosphere${embedded ? " embedded-page" : ""}`}>
-      <SettingsHerons />
-      <WarmAtmosphere active={active} />
+    <main className={`settings-page${guidedSection ? " guided-settings-page" : " has-warm-atmosphere"}${embedded ? " embedded-page" : ""}`}>
+      {!guidedSection && <SettingsHerons />}
+      {!guidedSection && <WarmAtmosphere active={active} />}
       <div className="settings-page-inner">
-        <header className="settings-page-heading">
+        {!guidedSection && <header className="settings-page-heading">
           <div>
             <h1 tabIndex={-1}>设置</h1>
           </div>
@@ -139,7 +146,7 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
             {embedded ? <button className="secondary-button panel-return" onClick={onClose}>返回视频库</button>
               : <Link className="secondary-button" to="/"><Database size={16} /> 返回视频库</Link>}
           </div>
-        </header>
+        </header>}
 
         <AnimatePresence>{notice && (
           <AnimatedPopup duration={.18} className={`settings-notice ${notice.tone}`} role="status">
@@ -150,19 +157,23 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
         )}</AnimatePresence>
 
         <div className="settings-layout">
-          <nav className="settings-navigation" aria-label="设置分类">
+          {!guidedSection && <nav className="settings-navigation" aria-label="设置分类">
             {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).map(([key, label, Icon]) =>
-              <button key={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => setSearchParams({ section: key }, { replace: true, state: location.state })}>
+              <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => setSearchParams({ section: key }, { replace: true, state: location.state })}>
                 {section === key && <SelectionIndicator id={`${selectionScope}-settings`} />}<Icon size={18} /><span>{label}</span>
               </button>)}
-          </nav>
+            <button className="settings-onboarding-trigger" type="button"
+              onClick={() => leave(() => { window.dispatchEvent(new Event(ONBOARDING_RESET_EVENT)); navigate("/"); })}>
+              <Sparkles size={18} /><span>重新打开新手引导</span>
+            </button>
+          </nav>}
           <div ref={contentRef} className="settings-content">
-        <div hidden={section !== "updates"}><UpdateSettings active={active && section === "updates"} /></div>
-        <div hidden={section !== "recall"}><RecallSchemeSettings active={active && section === "recall"} onSaved={onConfigurationSaved} /></div>
-        <div hidden={section !== "shortcuts"}><ShortcutSettings /></div>
-        <div hidden={section !== "desktop"}><DesktopSettings active={active && section === "desktop"} /><InteractionSettings /></div>
-        <div hidden={section !== "experimental"}><ExperimentalSettings active={active && section === "experimental"} /></div>
-        <div hidden={section !== "storage"}>
+        {!guidedSection && <div hidden={section !== "updates"}><UpdateSettings active={active && section === "updates"} /></div>}
+        {!guidedSection && <div hidden={section !== "recall"}><RecallSchemeSettings active={active && section === "recall"} onSaved={onConfigurationSaved} /></div>}
+        {(!guidedSection || section === "shortcuts") && <div hidden={section !== "shortcuts"}><ShortcutSettings /></div>}
+        {!guidedSection && <div hidden={section !== "desktop"}><DesktopSettings active={active && section === "desktop"} /><InteractionSettings /></div>}
+        {!guidedSection && <div hidden={section !== "experimental"}><ExperimentalSettings active={active && section === "experimental"} /></div>}
+        {(!guidedSection || section === "storage") && <div hidden={section !== "storage"}>
         <StorageDirectoriesSection
           data={directories.data}
           isLoading={directories.isLoading}
@@ -180,11 +191,12 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
           }}
           onError={(error) => notify("error", errorMessage(error))}
         />
-        <ApplicationDataSection active={active && section === "storage"} directories={directories.data} onError={(error) => notify("error", errorMessage(error))} />
-        </div>
-        <div hidden={section !== "asr"}>
+        {!guidedSection && <ApplicationDataSection active={active && section === "storage"} directories={directories.data} onError={(error) => notify("error", errorMessage(error))} />}
+        </div>}
+        {(!guidedSection || section === "asr") && <div hidden={section !== "asr"}>
         <AsrSection
           active={active && section === "asr"}
+          guided={guidedSection === "asr"}
           onJob={onJob}
           onSaved={onConfigurationSaved}
           models={asr.data ?? []}
@@ -196,8 +208,8 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
           }}
           onError={(error) => notify("error", errorMessage(error))}
         />
-        </div>
-        <div hidden={section !== "ai"}>
+        </div>}
+        {(!guidedSection || section === "ai") && <div hidden={section !== "ai"}>
         <AiSection
           active={active && section === "ai"}
           onSaved={onConfigurationSaved}
@@ -216,7 +228,7 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
           onError={(error) => notify("error", errorMessage(error))}
           onInvalidate={invalidateAi}
         />
-        </div>
+        </div>}
           </div>
         </div>
       </div>
@@ -226,6 +238,7 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
 
 function AsrSection({
   active = true,
+  guided = false,
   onSaved,
   models: allModels,
   isLoading,
@@ -235,6 +248,7 @@ function AsrSection({
   onJob,
 }: {
   active?: boolean;
+  guided?: boolean;
   onSaved?: () => void;
   models: AsrModel[];
   isLoading: boolean;
@@ -248,7 +262,7 @@ function AsrSection({
     model.selectable !== false && model.engine !== "nano" && model.id !== "fun-asr-nano-2512",
   ).sort((left, right) => asrModelOrder(left) - asrModelOrder(right)), [allModels]);
   const [searchParams] = useSearchParams();
-  const editing = searchParams.get("section") === "asr";
+  const editing = guided || searchParams.get("section") === "asr";
   const checkedModels = editing ? models : models.filter((model) => model.selected);
   const statusQueries = useQueries({
     queries: checkedModels.map((model) => ({ ...asrStatusOptions(model, editing), enabled: active })),
@@ -522,7 +536,7 @@ function AsrSection({
     discard: () => { setSelectedId(savedModel?.id ?? ""); setDeviceDrafts({}); setAcceptedSelection(null); },
   });
   return (
-    <section className="settings-section" aria-labelledby="asr-settings-title">
+    <section className="settings-section" data-onboarding="asr" aria-labelledby="asr-settings-title">
       <div className="settings-section-heading">
         <div className="settings-section-title"><span className="settings-section-icon"><WandSparkles size={18} /></span><div><p className="eyebrow">ASR 模型</p><h2 id="asr-settings-title"><CharacterEye heading />选择转写引擎</h2></div></div>
       </div>
@@ -791,7 +805,7 @@ function AiSection({
     save: () => save(true), discard: () => { resetDraft(); setConnectionDialog(null); setConnectionError(null); },
   });
   return (
-    <section className="settings-section" aria-labelledby="ai-settings-title">
+    <section className="settings-section" data-onboarding="ai" aria-labelledby="ai-settings-title" aria-busy={busy}>
       <div className="settings-section-heading">
         <div className="settings-section-title"><span className="settings-section-icon"><Server size={18} /></span><div><p className="eyebrow">AI 服务</p><h2 id="ai-settings-title"><CharacterEye heading />分析服务连接</h2></div></div>
         <span className={`settings-state ${draftingNew || emptyConnections ? "muted" : "ready"}`}>{draftingNew ? "新连接 · 尚未启用" : emptyConnections ? "尚未配置" : "当前连接"}</span>

@@ -161,6 +161,21 @@ export interface LibraryStatus {
   processing?: boolean;
 }
 
+export interface StudySharePreview {
+  package_hash: string;
+  library_id: string;
+  video_id: number;
+  video_name: string;
+  shared_video_name: string;
+  duration_ms: number;
+  subtitle_count: number;
+  marker_count: number;
+  analysis_runs: { analysis_mode: MarkerMode; name: string; scheme_revision: number }[];
+  already_imported: boolean;
+  can_import: boolean;
+  block_reason: string | null;
+}
+
 export interface StorageDirectories {
   application_data?: ApplicationDataStatus;
   media_storage_root?: string | null;
@@ -294,6 +309,7 @@ export interface AiSettings {
   request_concurrency?: number;
   reasoning_effort?: "low" | "medium" | "high" | null;
   has_api_key: boolean;
+  configured?: boolean;
 }
 
 export interface JobStatus {

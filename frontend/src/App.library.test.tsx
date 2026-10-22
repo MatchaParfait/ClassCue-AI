@@ -652,7 +652,7 @@ describe("library drag and drop", () => {
     });
     expect(container.querySelectorAll(".folder-card")).toHaveLength(0);
     click(card("video-1").querySelector('[aria-haspopup="menu"]'));
-    expect([...card("video-1").querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["一级目录"]);
+    expect([...card("video-1").querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["导出分享包", "一级目录"]);
     expect(JSON.parse(window.localStorage.getItem("classroom-video-library")!).folders).toEqual([]);
   });
 

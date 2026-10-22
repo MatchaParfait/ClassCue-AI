@@ -11,12 +11,16 @@ vi.mock("./api/client", async (importOriginal) => ({
   getVideos: vi.fn(), getLibrary: vi.fn(), getLibraryStatus: vi.fn(),
   getLatestBatch: vi.fn(), getPausedJobs: vi.fn(), getJob: vi.fn(), cancelJob: vi.fn(),
   createLibraryFolder: vi.fn(), moveVideoToFolder: vi.fn(), retryBatch: vi.fn(), resumeJob: vi.fn(),
+  getStorageDirectories: vi.fn(), getAsrSelection: vi.fn(), getAsrModelStatus: vi.fn(), getAiSettings: vi.fn(),
 }));
 vi.mock("./components/ProcessPage", () => ({
-  ProcessPage: ({ active, onRegistered, onJob }: { active: boolean; onRegistered: (video: Video) => void; onJob: (id: string) => void }) => {
+  ProcessPage: ({ active, onRegistered, onJob, guided = false }: {
+    active: boolean; onRegistered: (video: Video) => void; onJob: (id: string) => void;
+    guided?: boolean;
+  }) => {
     const [draft, setDraft] = useState("");
     const [params] = useSearchParams();
-    return <div data-process-active={String(active)}><input aria-label="Process draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
+    return <div data-process-active={String(active)} data-guided={String(guided)} className="process-video-section process-options-section"><input aria-label="Process draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
       <span data-video-id>{params.get("videoId") ?? "new"}</span>
       <Link to="/settings?section=asr">修改 ASR</Link>
       <button onClick={() => onRegistered({ id: 3 } as Video)}>Register fixture</button>
@@ -24,8 +28,11 @@ vi.mock("./components/ProcessPage", () => ({
   },
 }));
 vi.mock("./pages/SettingsPage", () => ({
-  SettingsPage: ({ onConfigurationSaved }: { onConfigurationSaved?: () => void }) =>
-    <div><input aria-label="API draft" /><button onClick={onConfigurationSaved}>Save fixture</button></div>,
+  SettingsPage: ({ onConfigurationSaved }: { onConfigurationSaved?: () => void }) => {
+    const [params] = useSearchParams();
+    return <div data-onboarding="asr" className={params.get("section") === "shortcuts" ? "shortcut-settings" : undefined}>
+      <input aria-label="API draft" /><button onClick={onConfigurationSaved}>Save fixture</button></div>;
+  },
 }));
 vi.mock("./pages/BatchProcessPage", () => ({
   BatchProcessPage: () => <div>Batch fixture</div>,
@@ -38,6 +45,7 @@ vi.mock("./components/VideoPanel", () => ({ VideoPanel: () => <div>Review fixtur
 
 let container: HTMLDivElement, root: Root;
 let videos: Video[];
+const readyModel = { id: "model", name: "Model", engine: "whisper", downloaded: true, selected: true, cache_size_bytes: 0 };
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
@@ -93,6 +101,40 @@ it("shows both import links directly and opens complete pages", async () => {
   expect(container.querySelector(".library-page")).not.toBeNull();
   expect(container.querySelector(".library-page")?.closest("[hidden]")).not.toBeNull();
   expect(container.querySelectorAll('[aria-modal="true"]')).toHaveLength(0);
+});
+
+it("resumes model onboarding from home through the actual settings link", async () => {
+  localStorage.setItem("classroom-onboarding:v1:D:\\Course", JSON.stringify({ started: true, step: "model", storageConfirmed: true }));
+  vi.mocked(api.getStorageDirectories).mockResolvedValue({ library_id: "test", delete_source_after_import: false } as Awaited<ReturnType<typeof api.getStorageDirectories>>);
+  vi.mocked(api.getAsrSelection).mockResolvedValue(readyModel);
+  vi.mocked(api.getAsrModelStatus).mockResolvedValue(readyModel);
+  vi.mocked(api.getAiSettings).mockResolvedValue({ configured: true } as Awaited<ReturnType<typeof api.getAiSettings>>);
+  await mount();
+  await settle(() => expect(document.querySelector(".onboarding-tip h2")?.textContent).toBe("准备字幕模型"));
+  click(button("设置"));
+  await settle(() => expect(window.location.pathname).toBe("/settings"));
+  expect(document.querySelector("#onboarding-description")?.textContent).toContain("ASR 模型");
+});
+
+it("ends onboarding at shortcuts without opening existing videos or changing normal processing", async () => {
+  localStorage.setItem("classroom-onboarding:v1:D:\\Course", JSON.stringify({
+    started: true, step: "shortcuts", storageConfirmed: true, modelConfirmed: true, aiConfirmed: true,
+  }));
+  vi.mocked(api.getStorageDirectories).mockResolvedValue({ library_id: "test", delete_source_after_import: false } as Awaited<ReturnType<typeof api.getStorageDirectories>>);
+  vi.mocked(api.getAsrSelection).mockResolvedValue(readyModel);
+  vi.mocked(api.getAsrModelStatus).mockResolvedValue(readyModel);
+  vi.mocked(api.getAiSettings).mockResolvedValue({ configured: true } as Awaited<ReturnType<typeof api.getAiSettings>>);
+  await mount("/settings?section=shortcuts");
+  await settle(() => expect(document.querySelector(".onboarding-tip")?.textContent).toContain("4 / 4"));
+  click([...document.querySelectorAll(".onboarding-tip button")].find(item => item.textContent?.includes("完成引导"))!);
+  await settle(() => expect(document.querySelector(".onboarding-tip")).toBeNull());
+  expect(window.location.pathname + window.location.search).toBe("/settings?section=shortcuts");
+  expect(document.body.style.overflow).not.toBe("hidden");
+  leavePage();
+  await settle(() => expect(window.location.pathname).toBe("/"));
+  click(container.querySelector('.library-heading-actions a[href="/process"]')!);
+  await settle(() => expect(visibleScreen().querySelector("[data-guided]")?.getAttribute("data-guided")).toBe("false"));
+  expect(document.querySelector(".onboarding-tip")).toBeNull();
 });
 
 it("keeps the selected video and draft across settings, save, close and forward navigation", async () => {

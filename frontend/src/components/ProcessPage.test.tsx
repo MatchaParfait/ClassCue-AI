@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation, useNavigationType } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,11 +108,11 @@ async function settle(check: () => void) {
   throw failure;
 }
 
-async function mount(path = "/process?videoId=1") {
+async function mount(path = "/process?videoId=1", props: Partial<ComponentProps<typeof ProcessPage>> = {}) {
   act(() => root.render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ProcessPage /><RouteProbe />
+        <ProcessPage {...props} /><RouteProbe />
       </MemoryRouter>
     </QueryClientProvider>,
   ));
@@ -123,6 +123,30 @@ async function mount(path = "/process?videoId=1") {
     await settle(() => expect(container.textContent).toContain("FireRedASR2-AED"));
   }
 }
+
+it("embeds guided processing without exit links and reports completion without navigating out of the guide", async () => {
+  const onCompleted = vi.fn(), onSettings = vi.fn();
+  await mount("/process?videoId=1", { guided: true, onCompleted, onSettings });
+  expect(container.querySelector('a[href="/"]')).toBeNull();
+  expect(container.querySelector('a[href*="/settings"]')).toBeNull();
+  const edit = container.querySelector<HTMLButtonElement>(".readonly-config button")!;
+  act(() => edit.click());
+  expect(onSettings).toHaveBeenCalledWith("asr");
+  start();
+  await settle(() => expect(api.getJob).toHaveBeenCalled());
+  act(() => client.setQueryData(["jobs", "job"], { id: "job", video_id: 1, status: "completed" }));
+  await settle(() => expect(onCompleted).toHaveBeenCalledTimes(1));
+  expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), expect.objectContaining({ status: "completed" }));
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1");
+});
+
+it("uses local medium recall in the guide without overwriting the user's saved recall selection", async () => {
+  window.localStorage.setItem(`${RECALL_SELECTION_KEY}:default`, JSON.stringify(["high_recall"]));
+  await mount("/process?videoId=1", { guided: true });
+  expect(container.querySelector<HTMLInputElement>('.recall-mode-options input[value="medium_recall"]')?.checked).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('.recall-mode-options input[value="high_recall"]')?.checked).toBe(false);
+  expect(JSON.parse(localStorage.getItem(`${RECALL_SELECTION_KEY}:default`)!)).toEqual(["high_recall"]);
+});
 
 function RouteProbe() {
   const location = useLocation();

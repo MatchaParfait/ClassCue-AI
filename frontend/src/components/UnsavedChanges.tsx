@@ -11,6 +11,8 @@ type Guard = {
   register: (draft: MutableRefObject<Draft>) => () => void;
   notify: () => void;
   isDirty: () => boolean;
+  lockNavigation: (allow?: (location: Location) => boolean) => () => void;
+  isNavigationLocked: (location: Location) => boolean;
   request: (proceed: Leave["proceed"], cancel?: Leave["cancel"], source?: Leave["source"]) => void;
 };
 const Context = createContext<Guard | null>(null);
@@ -28,12 +30,22 @@ export function useUnsavedLeave() {
   const guard = useContext(Context);
   return guard?.request ?? unprotectedRequest;
 }
+export function useNavigationLock(active: boolean, allow?: (location: Location) => boolean) {
+  const guard = useContext(Context);
+  const allowed = useRef(allow);
+  allowed.current = allow;
+  useLayoutEffect(() => {
+    if (active) return guard?.lockNavigation(location => allowed.current?.(location) ?? false);
+  }, [active, guard]);
+}
 function NavigationGuard({ guard }: { guard: Guard }) {
   const blocker = useBlocker(useCallback(({ currentLocation, nextLocation }: { currentLocation: Location; nextLocation: Location }) =>
-    guard.isDirty() && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search), [guard]));
+    guard.isNavigationLocked(nextLocation) || (guard.isDirty()
+      && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search)), [guard]));
   const pending = useRef<string | null>(null);
   useEffect(() => {
     if (blocker.state !== "blocked") { pending.current = null; return; }
+    if (guard.isNavigationLocked(blocker.location)) { blocker.reset(); return; }
     if (pending.current === blocker.location.key) return;
     pending.current = blocker.location.key;
     guard.request(() => blocker.proceed(), () => blocker.reset(), "navigation");
@@ -42,6 +54,7 @@ function NavigationGuard({ guard }: { guard: Guard }) {
 }
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const drafts = useRef(new Set<MutableRefObject<Draft>>());
+  const navigationLocks = useRef(new Set<(location: Location) => boolean>());
   const [revision, setRevision] = useState(0);
   const [pending, setPending] = useState<Leave | null>(null);
   const pendingRef = useRef<Leave | null>(null);
@@ -68,6 +81,12 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   }, [isDirty]);
   const guard = useMemo<Guard>(() => ({
     notify, isDirty, request,
+    isNavigationLocked: location => [...navigationLocks.current].some(allow => !allow(location)),
+    lockNavigation: (allow) => {
+      const owner = allow ?? (() => false);
+      navigationLocks.current.add(owner);
+      return () => { navigationLocks.current.delete(owner); };
+    },
     register: draft => { drafts.current.add(draft); notify(); return () => { drafts.current.delete(draft); notify(); }; },
   }), [notify, isDirty, request]);
   const dirty = [...drafts.current].filter(item => item.current.dirty);

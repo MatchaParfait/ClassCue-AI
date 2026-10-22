@@ -23,6 +23,7 @@ import type {
   StorageDirectoryValues,
   StorageMigrationPlan,
   ApplicationDataPlan,
+  StudySharePreview,
 } from "../types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -37,6 +38,39 @@ export function getLiveTranscript(jobId: string | number) {
 
 export function getAnalysisPreview(jobId: string | number) {
   return request<AnalysisPreview>(`/api/jobs/${encodeURIComponent(jobId)}/analysis-preview`);
+}
+
+export function previewStudyShare(file: File, signal?: AbortSignal): Promise<StudySharePreview> {
+  return request("/api/study-shares/preview", {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file, signal,
+  });
+}
+
+export function importStudyShare(file: File, preview: StudySharePreview): Promise<{ video: Video }> {
+  const query = new URLSearchParams({
+    package_hash: preview.package_hash, video_id: String(preview.video_id), library_id: preview.library_id,
+  });
+  return request(`/api/study-shares/import?${query}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+  });
+}
+
+export async function downloadStudyShare(video: Video): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/videos/${video.id}/study-share`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(payload?.detail || `导出失败：HTTP ${response.status}`);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${(video.display_name || video.filename).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 160)}.studyshare`;
+  document.body.append(anchor);
+  try { anchor.click(); }
+  finally {
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -489,6 +523,7 @@ function normalizeAiSettings(raw: unknown): AiSettings {
     request_concurrency: pickNumber(record, "request_concurrency") || 1,
     reasoning_effort: (record.reasoning_effort as AiSettings["reasoning_effort"]) ?? null,
     has_api_key: Boolean(record.has_api_key),
+    configured: Boolean(record.configured ?? (record.base_url && record.model && record.has_api_key)),
   };
 }
 
