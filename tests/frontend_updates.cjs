@@ -1,4 +1,4 @@
-// Entirely mocked public feed and native bridge; no update is installed.
+// Mocked update feed/native bridge against an isolated fixture API; no update is installed.
 const { chromium } = require("./playwright.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -22,6 +22,7 @@ const assert = require("node:assert/strict");
     install: null,
   };
   await page.addInitScript(() => {
+    localStorage.setItem("classroom-onboarding:v1:updates-qa", JSON.stringify({ dismissed: true }));
     window.__installs = 0;
     window.pywebview = { api: {
       describe: async () => ({ name: "课堂重点复习", tray: true, dialog: null, hotkey: "" }),
@@ -45,6 +46,7 @@ const assert = require("node:assert/strict");
     else if (pathname === "/api/library") value = { items: [], breadcrumbs: [], folder: null };
     else if (pathname.includes("/batch") || pathname.endsWith("/latest")) value = null;
     else if (pathname === "/api/health") value = { status: "ok", version: "0.2.0" };
+    else return route.continue();
     await route.fulfill({ json: value });
   });
   try {

@@ -6,6 +6,22 @@ on:
     branches: [main]
     paths: ["release/announcements.json"]
   workflow_dispatch:
+    inputs:
+      action:
+        description: Release operation
+        type: choice
+        options: [refresh-feed, finalize]
+        default: refresh-feed
+        required: true
+      release_tag:
+        description: Reviewed draft tag (finalize only)
+        type: string
+      expected_commit:
+        description: Reviewed full commit SHA (finalize only)
+        type: string
+      expected_sha256:
+        description: Reviewed ZIP SHA-256 (finalize only)
+        type: string
   schedule:
     - cron: "23 4 * * 1"
 
@@ -25,8 +41,21 @@ jobs:
       RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
       PYTHONUTF8: "1"
       RELEASE_TAG: ${{ github.ref_name }}
+      FINALIZE_TAG: ${{ inputs.release_tag }}
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
     steps:
+      - name: Validate finalization inputs
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'finalize'
+        shell: pwsh
+        run: |
+          if ($env:FINALIZE_TAG -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw "Invalid release tag" }
+          if ($env:EXPECTED_COMMIT -notmatch '^[a-f0-9]{40}$') { throw "Full reviewed commit SHA required" }
+          if ($env:EXPECTED_SHA256 -notmatch '^[a-f0-9]{64}$') { throw "Reviewed ZIP SHA-256 required" }
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'finalize' && inputs.expected_commit || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -37,13 +66,13 @@ jobs:
           python -m pip install cryptography filelock
           python -c "from scripts.release import signed, ROOT; signed(ROOT, {'schema': 1})"
       - uses: actions/setup-node@v4
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Test And Build
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           python -m pip install uv
@@ -64,16 +93,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --locked --group dev python scripts/release.py feed --release .runtime/dist/app-release.json --output .runtime/feed-preflight.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Publish Immutable Version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create Reviewed Draft
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           $Artifacts = @((Get-ChildItem -LiteralPath .runtime/dist -Filter "*.zip" -File).FullName) + @((Resolve-Path .runtime/dist/app-release.json).Path)
-          gh release create "$env:RELEASE_TAG" --verify-tag --draft --title "$env:RELEASE_TAG" --notes-file release/notes.md $Artifacts
+          $Commit = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit "$env:RELEASE_TAG" --draft=false --latest
+          gh release create "$env:RELEASE_TAG" --verify-tag --target "$Commit" --draft --title "$env:RELEASE_TAG" --notes-file release/notes.md $Artifacts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Draft only. Review its assets before dispatching finalize."
+      - name: Verify Reviewed Assets And Finalize
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'finalize'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .runtime/reviewed | Out-Null
+          gh release view "$env:FINALIZE_TAG" --json tagName,targetCommitish,isDraft,isPrerelease,assets | Set-Content -Encoding utf8 .runtime/reviewed/release.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release download "$env:FINALIZE_TAG" --dir .runtime/reviewed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>$null
+          if ($LASTEXITCODE -ne 0) { throw "Cannot establish current stable version" }
+          python scripts/release_gate.py --tag "$env:FINALIZE_TAG" --commit "$env:EXPECTED_COMMIT" --sha256 "$env:EXPECTED_SHA256" --directory .runtime/reviewed --release-info .runtime/reviewed/release.json --latest "$Latest"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/release.py feed --release .runtime/reviewed/app-release.json --output .runtime/feed-preflight.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit "$env:FINALIZE_TAG" --draft=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Sign And Publish Feed
+        if: "!(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force .runtime/feed-source | Out-Null

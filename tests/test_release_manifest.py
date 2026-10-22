@@ -96,7 +96,7 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
     assert {path.relative_to(ROOT).as_posix() for path in (ROOT / "classcue").rglob("*.py")} <= files
     source_only_scripts = {
         "build_desktop_icon.py", "check_repository_hygiene.py",
-        "prepare_settings_herons.py", "release.py",
+        "prepare_settings_herons.py", "release.py", "release_gate.py",
         "\u542f\u52a8\u672c\u5730\u524d\u7aef.cmd",
     }
     assert {
