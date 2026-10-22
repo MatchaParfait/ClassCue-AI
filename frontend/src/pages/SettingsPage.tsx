@@ -79,12 +79,14 @@ const DEFAULT_AI: AiSettings = {
   json_mode: false,
   timeout_seconds: 120,
   max_retries: 5,
+  request_concurrency: 1,
   reasoning_effort: "high",
   has_api_key: false,
 };
 
 function normalizeAiSettings(settings: AiSettings): AiSettings {
-  return { ...settings, reasoning_effort: settings.reasoning_effort || "high" };
+  return { ...settings, reasoning_effort: settings.reasoning_effort || "high",
+    request_concurrency: settings.request_concurrency ?? 1 };
 }
 
 export function SettingsPage({ embedded = false, active = true, onClose, onConfigurationSaved, onJob }: {
@@ -632,7 +634,7 @@ function AiSection({
     const editable = (settings: AiSettings) => [
       settings.connection_name, settings.base_url, settings.model, settings.output_tokens,
       settings.token_parameter, settings.json_mode, settings.timeout_seconds,
-      settings.max_retries, settings.reasoning_effort ?? "high",
+      settings.max_retries, settings.reasoning_effort ?? "high", settings.request_concurrency ?? 1,
     ];
     dirty.current = JSON.stringify(editable(next)) !== JSON.stringify(editable(baseline.current));
     if (key === "base_url") {
@@ -655,6 +657,7 @@ function AiSection({
   const persistDraft = async () => {
     if (!form.connection_name?.trim() || !form.base_url.trim() || !form.model.trim())
       throw new Error("请填写连接名称、接口地址和模型名称。");
+    if (!concurrencyValid) throw new Error("API 并发上限必须为 1 到 16 的整数。");
     const { has_api_key: _hasKey, ...settings } = form;
     const value = draftingNew
       ? await createAiConnection(form.connection_name.trim(), copySourceId, settings, credentials())
@@ -706,6 +709,8 @@ function AiSection({
   const hasChanges = draftingNew || dirty.current || Boolean(apiKey.trim()) || removeKey;
   const emptyConnections = data?.connections?.length === 0;
   const busy = connectionBusy || saving || testing || loadingModels;
+  const concurrency = form.request_concurrency ?? 1;
+  const concurrencyValid = Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 16;
   const endpointReady = Boolean(form.base_url.trim() && (apiKey.trim() || (form.has_api_key && !removeKey)));
   const acceptConnection = (value: AiSettings, notify = true) => {
     value = normalizeAiSettings(value);
@@ -850,6 +855,12 @@ function AiSection({
                 {loadingModels ? <LoaderCircle className="spin" size={16} /> : <Server size={16} />} 获取模型
               </button>
             </div>
+            <label className="settings-field"><span>API 并发上限</span>
+              <input type="number" min={1} max={16} step={1} inputMode="numeric" value={concurrency}
+                aria-invalid={!concurrencyValid}
+                title="每个分析任务同时进行的 API 请求上限；保存后用于新任务"
+                onChange={(event) => update("request_concurrency", Number(event.target.value))} />
+            </label>
             <label className="settings-field full"><span>思考强度</span>
               <select aria-label="思考强度" aria-describedby="ai-reasoning-hint" value={form.reasoning_effort ?? "high"}
                 onChange={(event) => update("reasoning_effort", event.target.value as AiSettings["reasoning_effort"])}>
@@ -870,7 +881,7 @@ function AiSection({
           </div>
           </details>
           <div className="settings-action-row">
-            <button className="primary-button" type="button" disabled={!hasChanges || !form.connection_name?.trim() || !form.base_url.trim() || !form.model.trim()} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} 保存连接</button>
+            <button className="primary-button" type="button" disabled={!hasChanges || !concurrencyValid || !form.connection_name?.trim() || !form.base_url.trim() || !form.model.trim()} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} 保存连接</button>
             <button className="secondary-button" type="button" disabled={!endpointReady || !form.model.trim() || testing} onClick={() => void test()}>{testing ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />} 测试连接</button>
             {hasChanges && <button className="text-button" type="button" onClick={resetDraft}>{draftingNew ? "取消新增" : "放弃修改"}</button>}
             <button className="icon-button" type="button" title="刷新 AI 配置" aria-label="刷新 AI 配置" onClick={onInvalidate}><RefreshCw size={16} /></button>

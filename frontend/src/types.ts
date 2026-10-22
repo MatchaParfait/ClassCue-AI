@@ -291,6 +291,7 @@ export interface AiSettings {
   json_mode: boolean;
   timeout_seconds: number;
   max_retries: number;
+  request_concurrency?: number;
   reasoning_effort?: "low" | "medium" | "high" | null;
   has_api_key: boolean;
 }

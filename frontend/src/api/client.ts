@@ -486,6 +486,7 @@ function normalizeAiSettings(raw: unknown): AiSettings {
     json_mode: Boolean(record.json_mode ?? record.response_json),
     timeout_seconds: pickNumber(record, "timeout_seconds", "timeout") || 60,
     max_retries: pickNumber(record, "max_retries", "retries"),
+    request_concurrency: pickNumber(record, "request_concurrency") || 1,
     reasoning_effort: (record.reasoning_effort as AiSettings["reasoning_effort"]) ?? null,
     has_api_key: Boolean(record.has_api_key),
   };
@@ -523,6 +524,7 @@ export async function saveAiSettings(settings: Omit<AiSettings, "has_api_key">, 
     json_mode: settings.json_mode,
     timeout_seconds: settings.timeout_seconds,
     max_retries: settings.max_retries,
+    request_concurrency: settings.request_concurrency ?? 1,
     reasoning_effort: settings.reasoning_effort ?? null,
   };
   return normalizeAiSettings(await request("/api/settings/ai", {

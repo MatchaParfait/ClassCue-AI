@@ -5,6 +5,7 @@ from __future__ import annotations
 from classcue.paths import PROJECT_ROOT
 
 from dataclasses import asdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 from difflib import SequenceMatcher
@@ -12,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import time
+from threading import Event
 from typing import Callable, Literal
 import uuid
 
@@ -882,9 +884,21 @@ def execute_run(
     if row["status"] != "queued":
         raise ValueError("Each experiment can execute only once; create a new run")
     store.update_experiment(experiment_id, status="processing")
+    started = time.perf_counter()
     logged = None
+    executor = None
+    pending = {}
+    stop_requests = Event()
     collected = []
     technical_failures = []
+
+    def stop_prefetch():
+        nonlocal executor
+        if executor is not None:
+            stop_requests.set()
+            executor.shutdown(wait=True, cancel_futures=True)
+            executor = None
+
     try:
         config = LabConfig.model_validate(snapshot["config"])
         profile = ProviderProfile.model_validate(snapshot["profile"])
@@ -896,7 +910,26 @@ def execute_run(
         by_id = {segment.id: segment for segment in full}
         bundle = snapshot["prompt_bundle"]
         logged = LoggedClient(store, experiment_id, profile, config, api_key,
-                              client=client, should_cancel=should_cancel)
+                              client=client, should_cancel=lambda: stop_requests.is_set() or (
+                                  should_cancel is not None and should_cancel()
+                              ))
+        next_request = 0
+
+        def initial_request(prepared):
+            logged.check_cancelled()
+            prefetched = early_extraction.take(snapshot, prepared["chunk_id"]) if early_extraction else None
+            if prefetched is not None:
+                return prefetched
+            return logged.request(prepared["request"], prepared["chunk_id"], "extract")
+
+        def prefetch_through(end):
+            nonlocal next_request
+            if executor is None:
+                return
+            while next_request < min(end, len(snapshot["requests"])):
+                prepared = snapshot["requests"][next_request]
+                pending[prepared["chunk_id"]] = executor.submit(initial_request, prepared)
+                next_request += 1
 
         def select(body: dict, step_id: str, stage: str, supplied: list, parent=None) -> tuple[list, str]:
             limit = config.max_format_repairs if config.repair_json else 0
@@ -914,11 +947,14 @@ def execute_run(
             protected_candidates = []
             try:
                 while True:
-                    prefetched = (
-                        early_extraction.take(snapshot, step_id)
-                        if early_extraction is not None and stage == "extract" and repair_round == 0
-                        else None
-                    )
+                    if stage == "extract" and repair_round == 0 and step_id in pending:
+                        prefetched = pending.pop(step_id).result()
+                    else:
+                        prefetched = (
+                            early_extraction.take(snapshot, step_id)
+                            if early_extraction is not None and stage == "extract" and repair_round == 0
+                            else None
+                        )
                     if prefetched is not None:
                         raw, call_id = prefetched
                     else:
@@ -1012,6 +1048,14 @@ def execute_run(
                     logging.getLogger(__name__).warning("Chunk preview unavailable")
 
         notify_chunk(0, 1 if snapshot["requests"] else None)
+        if (
+            profile.request_concurrency > 1 and len(snapshot["requests"]) > 1
+            and snapshot.get("operation") != "evidence_repair_replay"
+        ):
+            executor = ThreadPoolExecutor(
+                max_workers=profile.request_concurrency, thread_name_prefix="exam-point-api",
+            )
+            prefetch_through(profile.request_concurrency)
         for index, prepared in enumerate(snapshot["requests"]):
             logged.check_cancelled()
             if index:
@@ -1061,6 +1105,9 @@ def execute_run(
             notify_chunk(index + 1, None)
             if progress:
                 progress((index + 1) / len(snapshot["requests"]), f"Experiment chunks {index + 1}/{len(snapshot['requests'])}")
+            # Keep one slot for this chunk's validation/repair requests. Only
+            # replenish lookahead after its evidence is fully checked.
+            prefetch_through(index + profile.request_concurrency + 1)
         results = _deduplicate(collected, by_id)
         positions = {segment.id: index for index, segment in enumerate(full)}
         for result in results:
@@ -1074,15 +1121,18 @@ def execute_run(
         report = _run_report(
             store, experiment_id, snapshot, collected, technical_failures, results, status, complete=True,
         )
+        report["wall_seconds"] = round(time.perf_counter() - started, 6)
         store.save_experiment_results(experiment_id, _redact(report, api_key))
         store.update_experiment(experiment_id, status=status, candidate_count=len(results), error_message="")
         return report
     except BaseException as error:
+        stop_prefetch()
         message = str(_redact(str(error), api_key))
         status = "interrupted" if isinstance(error, ProcessingCancelled) else "failed"
         report = _run_report(
             store, experiment_id, snapshot, collected, technical_failures, [], status, complete=False,
         )
+        report["wall_seconds"] = round(time.perf_counter() - started, 6)
         report["error"] = message
         store.save_experiment_results(experiment_id, _redact(report, api_key))
         store.update_experiment(
@@ -1099,5 +1149,6 @@ def execute_run(
             raise RuntimeError(message) from None
         raise
     finally:
+        stop_prefetch()
         if logged is not None:
             logged.close()

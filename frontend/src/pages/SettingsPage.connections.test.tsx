@@ -219,6 +219,35 @@ it("shows three effort levels below the model, sends high for unset settings and
   expect(effort.value).toBe("medium");
 });
 
+it("saves the API concurrency per connection and includes it in draft changes", async () => {
+  const concurrency = input("API 并发上限");
+  expect(concurrency.closest("details")).toBeNull();
+  expect(concurrency.value).toBe("1");
+  expect(concurrency.min).toBe("1");
+  expect(concurrency.max).toBe("16");
+  setInput(concurrency, "4");
+  expect(button("保存连接").disabled).toBe(false);
+  click("保存连接");
+  await until(() => expect(saved[0].request_concurrency).toBe(4));
+  expect(api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({ request_concurrency: 4 }), undefined);
+  select("second");
+  await until(() => expect(concurrency.value).toBe("1"));
+  select("first");
+  await until(() => expect(concurrency.value).toBe("4"));
+  setInput(concurrency, "8");
+  click("放弃修改");
+  expect(concurrency.value).toBe("4");
+  expect(button("保存连接").disabled).toBe(true);
+});
+
+it.each(["0", "17", "2.5", ""])("does not save invalid API concurrency %s", (value) => {
+  const concurrency = input("API 并发上限");
+  setInput(concurrency, value);
+  expect(concurrency.getAttribute("aria-invalid")).toBe("true");
+  expect(button("保存连接").disabled).toBe(true);
+  expect(api.saveAiSettings).not.toHaveBeenCalled();
+});
+
 it("deletes every connection, keeps the empty state after refresh and saves a new connection", async () => {
   click("删除当前连接");
   click("确认删除连接");

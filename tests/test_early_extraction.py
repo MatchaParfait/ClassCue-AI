@@ -150,12 +150,14 @@ def markers(lesson):
     ]
 
 
+@pytest.mark.parametrize("concurrency", [1, 3])
 def test_request_begins_before_asr_finishes_and_final_requests_and_dedup_match_serial(
-    lesson, monkeypatch,
+    lesson, monkeypatch, concurrency,
 ):
     import classcue.video_pipeline as video_pipeline
 
     client = Client()
+    lesson.profile.request_concurrency = concurrency
     asr_finished = Event()
     def respond(request):
         if len(client.requests) == 1:
@@ -192,12 +194,15 @@ def test_request_begins_before_asr_finishes_and_final_requests_and_dedup_match_s
     assert report["usage"]["totals"]["total_tokens"] == 360
 
     baseline = Client()
-    # Reanalysis from the saved full transcript exercises the unchanged serial path.
+    # Reanalysis from the saved transcript may send requests in a different
+    # order, but the actual input blocks and final evidence must be identical.
     judge = adapter(lesson, baseline)
     assert judge.analyze_video(
         lesson.store, lesson.video_id, force=True, filter_formula_noise=False,
     ) == ("completed", 2)
-    assert baseline.requests == early_requests
+    assert sorted(baseline.requests, key=lambda item: supplied_ids(item)[0]) == sorted(
+        early_requests, key=lambda item: supplied_ids(item)[0],
+    )
     assert markers(lesson) == early_markers
 
 

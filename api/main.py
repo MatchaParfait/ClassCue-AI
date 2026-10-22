@@ -41,6 +41,7 @@ from classcue.qwen_resilience import qwen_queue
 from classcue.firered_resilience import firered_queue, resource_events, resource_profile
 from classcue.ai_provider import (
     DEFAULT_OUTPUT_TOKENS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES, DEFAULT_REASONING_EFFORT,
+    DEFAULT_REQUEST_CONCURRENCY, MAX_REQUEST_CONCURRENCY,
     ProviderProfile, ProviderSettings, create_judge, interface_key_path,
     interface_provider, load_provider_settings, resolve_interface_key,
     save_provider_settings,
@@ -307,6 +308,9 @@ class AISettingsPayload(BaseModel):
     json_mode: bool = True
     timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, ge=5, le=600)
     max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0, le=5)
+    request_concurrency: int = Field(
+        default=DEFAULT_REQUEST_CONCURRENCY, ge=1, le=MAX_REQUEST_CONCURRENCY, strict=True,
+    )
     reasoning_effort: Literal["low", "medium", "high"] = DEFAULT_REASONING_EFFORT
 
     @field_validator("reasoning_effort", mode="before")
@@ -1662,6 +1666,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "json_mode": profile.json_mode,
             "timeout_seconds": profile.timeout_seconds,
             "max_retries": profile.max_retries,
+            "request_concurrency": profile.request_concurrency,
             "reasoning_effort": profile.reasoning_effort,
             "has_api_key": bool(key),
             "configured": bool(profile.base_url and profile.model and key),
@@ -1677,6 +1682,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 json_mode=payload.json_mode,
                 timeout_seconds=payload.timeout_seconds,
                 max_retries=payload.max_retries,
+                request_concurrency=payload.request_concurrency,
                 reasoning_effort=payload.reasoning_effort,
             )
         except ValueError as exc:
@@ -2273,7 +2279,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "analysis_modes": ["high_recall", "medium_recall", "low_recall",
                                *[item["id"] for item in provider.get().list_recall_schemes() if not item["archived"]]],
             "llm_chunk_seconds": 600,
-            "llm_request_concurrency": 1,
+            "llm_request_concurrency": ai["request_concurrency"],
             "reasoning_effort": ai["reasoning_effort"],
             "status": video["status"],
             "active_job": active_job,

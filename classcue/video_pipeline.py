@@ -324,8 +324,9 @@ def create_semantic_markers(
             cached_count / max(len(chunks), 1),
             f"AI 筛选{mode}片段：已复用 {cached_count}，待请求 {len(pending_chunks)}",
         )
+    request_concurrency = getattr(getattr(judge, "profile", None), "request_concurrency", MAX_CONCURRENT_AI_REQUESTS)
     with ThreadPoolExecutor(
-        max_workers=min(MAX_CONCURRENT_AI_REQUESTS, len(pending_chunks) or 1),
+        max_workers=min(request_concurrency, len(pending_chunks) or 1),
         thread_name_prefix="subtitle-ai",
     ) as executor:
         futures = {
@@ -344,7 +345,7 @@ def create_semantic_markers(
             if progress:
                 progress(
                     (cached_count + completed) / max(len(chunks), 1),
-                    f"AI 正在筛选{mode}片段 {cached_count + completed}/{len(chunks)}（最多 {MAX_CONCURRENT_AI_REQUESTS} 路）",
+                    f"AI 正在筛选{mode}片段 {cached_count + completed}/{len(chunks)}（最多 {request_concurrency} 路）",
                 )
     for draft in merge_semantic_drafts(drafts):
         store.add_marker(

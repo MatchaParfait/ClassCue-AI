@@ -124,11 +124,23 @@ def test_api_rejects_disabling_all_analysis_choices(tmp_path):
         assert not store.list_active_jobs()
 
 
+def test_processing_options_exposes_saved_api_concurrency(tmp_path, monkeypatch):
+    store = VideoStore(tmp_path / "video.db")
+    video_id = store.create_video("fixture", "lesson.mp4", "lesson.mp4", "audio.wav", 1000)
+    settings = SimpleNamespace(active_profile=api_main.ProviderProfile(request_concurrency=4))
+    monkeypatch.setattr(api_main, "load_provider_settings", lambda: settings)
+    monkeypatch.setattr(api_main, "resolve_interface_key", lambda *_args: None)
+    with TestClient(api_main.create_app(store)) as client:
+        response = client.get(f"/api/videos/{video_id}/processing-options")
+        assert response.status_code == 200, response.text
+        assert response.json()["llm_request_concurrency"] == 4
+
+
 def test_single_job_snapshots_connection_before_its_worker_starts(tmp_path, monkeypatch):
     store = VideoStore(tmp_path / "video.db")
     video_id = store.create_video("hash", "lesson.mp4", "lesson.mp4", "lesson.wav", 3000)
     settings = SimpleNamespace(active_profile=api_main.ProviderProfile(
-        base_url="https://first.test/v1", model="original",
+        base_url="https://first.test/v1", model="original", request_concurrency=4,
     ))
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: settings)
     monkeypatch.setattr(api_main, "resolve_interface_key", lambda profile, _: f"{profile.model}-key")
@@ -136,7 +148,7 @@ def test_single_job_snapshots_connection_before_its_worker_starts(tmp_path, monk
     captured = []
 
     def create_judge(profile, key, *_args, **_kwargs):
-        captured.append((profile.model, key))
+        captured.append((profile.model, key, profile.request_concurrency))
         return SimpleNamespace(close=lambda: None)
 
     monkeypatch.setattr(api_main, "create_judge", create_judge)
@@ -149,8 +161,9 @@ def test_single_job_snapshots_connection_before_its_worker_starts(tmp_path, monk
             response = client.post(f"/api/videos/{video_id}/process", json={})
             assert response.status_code == 202
             settings.active_profile.model = "edited-in-place"
+            settings.active_profile.request_concurrency = 16
             settings.active_profile = api_main.ProviderProfile(base_url="https://second.test/v1", model="new")
         finally:
             gate.set()
         application.state.jobs.executor.submit(lambda: None).result(timeout=5)
-    assert captured == [("original", "original-key")]
+    assert captured == [("original", "original-key", 4)]

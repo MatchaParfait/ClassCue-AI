@@ -23,6 +23,8 @@ DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_OUTPUT_TOKENS = 16384
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_RETRIES = 5
+DEFAULT_REQUEST_CONCURRENCY = 1
+MAX_REQUEST_CONCURRENCY = 16
 DEFAULT_REASONING_EFFORT = "high"
 SETTINGS_PATH = app_storage.DATA_DIR / "ai_providers.json"
 RELAY_KEY_PATH = app_storage.DATA_DIR / "openai_compatible_api_key.dpapi"
@@ -38,6 +40,9 @@ class ProviderProfile(BaseModel):
     json_mode: bool = True
     timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, ge=5, le=600)
     max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0, le=5)
+    request_concurrency: int = Field(
+        default=DEFAULT_REQUEST_CONCURRENCY, ge=1, le=MAX_REQUEST_CONCURRENCY, strict=True,
+    )
     reasoning_effort: Literal["low", "medium", "high"] = DEFAULT_REASONING_EFFORT
 
     @field_validator("reasoning_effort", mode="before")
@@ -295,4 +300,5 @@ def create_judge(
         mode=mode, max_tokens=profile.max_tokens, token_parameter=profile.token_parameter,
         json_mode=profile.json_mode, timeout_seconds=profile.timeout_seconds,
         max_retries=profile.max_retries, reasoning_effort=profile.reasoning_effort, client=client,
+        request_concurrency=profile.request_concurrency,
     )

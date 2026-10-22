@@ -133,7 +133,8 @@ class ExamPointJudge:
             report = execute_run(
                 store, run_id, snapshot, self._api_key, signature, client=self.client,
                 progress=(lambda value, _message: progress(
-                    value, f"AI 筛选 {round(value * len(snapshot['requests']))}/{len(snapshot['requests'])}（并发 1）",
+                    value, f"AI 筛选 {round(value * len(snapshot['requests']))}/{len(snapshot['requests'])}"
+                    f"（并发上限 {self.profile.request_concurrency}）",
                 )) if progress else None,
                 should_cancel=should_stop,
                 early_extraction=early,
@@ -147,7 +148,7 @@ class ExamPointJudge:
                 raise ProcessingCancelled("用户已请求停止处理")
             if snapshot["requests"]:
                 store.record_ai_metrics(
-                    video_id, report["latency_seconds"], len(snapshot["requests"]),
+                    video_id, report.get("wall_seconds", report["latency_seconds"]), len(snapshot["requests"]),
                 )
             if should_stop and should_stop():
                 raise ProcessingCancelled("用户已请求停止处理")

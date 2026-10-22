@@ -8,7 +8,7 @@ from typing import Any
 
 from classcue.ai_provider import (
     DEFAULT_OUTPUT_TOKENS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES,
-    DEFAULT_REASONING_EFFORT, ProviderProfile,
+    DEFAULT_REASONING_EFFORT, DEFAULT_REQUEST_CONCURRENCY, ProviderProfile,
 )
 from classcue.core import (
     SemanticResponseError, SemanticSelection, TranscriptSegment,
@@ -38,12 +38,14 @@ class OpenAICompatibleJudge:
         json_mode: bool = True, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES, client: Any | None = None,
         reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
+        request_concurrency: int = DEFAULT_REQUEST_CONCURRENCY,
     ) -> None:
         self.profile = ProviderProfile(
             base_url=base_url, model=model, max_tokens=max_tokens,
             token_parameter=token_parameter, json_mode=json_mode,
             timeout_seconds=timeout_seconds, max_retries=max_retries,
             reasoning_effort=reasoning_effort,
+            request_concurrency=request_concurrency,
         )
         if not api_key.strip() or not self.profile.base_url:
             raise ValueError("缺少 API Key 或 Base URL。")

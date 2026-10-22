@@ -123,6 +123,31 @@ def test_save_normalizes_unset_effort_and_preserves_explicit_choices(connections
     assert load_provider_settings().active_profile.reasoning_effort == expected
 
 
+def test_concurrency_roundtrips_per_connection_and_copies_without_reset(connections):
+    client = connections
+    current = client.get("/api/settings/ai").json()
+    assert current["request_concurrency"] == 1
+    response = client.put("/api/settings/ai", json={**current, "request_concurrency": 4})
+    assert response.status_code == 200, response.text
+    assert response.json()["request_concurrency"] == 4
+    assert load_provider_settings().active_profile.request_concurrency == 4
+    copied = client.post("/api/settings/ai/connections", json={
+        "name": "parallel-copy", "source_id": "default",
+    }).json()
+    assert copied["request_concurrency"] == 4
+    fresh = client.post("/api/settings/ai/connections", json={"name": "fresh"}).json()
+    assert fresh["request_concurrency"] == 1
+    assert client.post("/api/settings/ai/connections/default/activate").json()["request_concurrency"] == 4
+
+
+@pytest.mark.parametrize("value", [0, -1, 17, 1.5, True, "4", None])
+def test_invalid_concurrency_is_rejected_without_changing_saved_connection(connections, value):
+    current = connections.get("/api/settings/ai").json()
+    response = connections.put("/api/settings/ai", json={**current, "request_concurrency": value})
+    assert response.status_code == 422
+    assert load_provider_settings().active_profile.request_concurrency == 1
+
+
 def test_duplicate_copies_key_but_same_endpoint_accounts_remain_independent(connections):
     client = connections
     copied = client.post("/api/settings/ai/connections", json={"name": "复制", "source_id": "default"}).json()

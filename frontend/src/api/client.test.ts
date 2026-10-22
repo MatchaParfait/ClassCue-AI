@@ -1,8 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { searchSubtitles, getSearchPreviewUrl } from "./client";
+import { getAiSettings, saveAiSettings } from "./client";
 import { getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("normalizes legacy API concurrency and sends the saved value to the backend", async () => {
+  const profile = { base_url: "https://relay.test/v1", model: "test", max_tokens: 2048 };
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => profile });
+  vi.stubGlobal("fetch", fetch);
+  const legacy = await getAiSettings();
+  expect(legacy.request_concurrency).toBe(1);
+  await saveAiSettings({ ...legacy, request_concurrency: 6 });
+  expect(JSON.parse(fetch.mock.calls[1][1].body).request_concurrency).toBe(6);
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ ...profile, request_concurrency: 6 }) });
+  expect((await getAiSettings()).request_concurrency).toBe(6);
+});
 
 it("preserves active model jobs through normalization and clears finished job identifiers", async () => {
   const model = { id: "paraformer-large-cpu", engine: "paraformer", active_job_id: "existing",
