@@ -85,6 +85,7 @@ from classcue.video_pipeline import (
 )
 from classcue.app_storage import load_data_root
 from classcue.video_store import VideoStore
+from classcue.slide_extractor import SlideRoi, extract_and_store_slides
 from classcue.recall_schemes import ModeId, RecallPromptInput, RecallSchemeInput, freeze_schemes, preview_recall_prompt
 from classcue.subtitle_search import MAX_PAGE_SIZE, MAX_QUERY_LENGTH, MAX_SQLITE_INTEGER, validate_query
 from api.denoise import router as denoise_router
@@ -265,6 +266,24 @@ class TranscribePayload(BaseModel):
     asr_model_id: str | None = None
     force_retranscribe: bool = False
     qwen_options: QwenSettingsPayload = Field(default_factory=QwenSettingsPayload)
+
+
+class SlideRoiPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: int = Field(default=0, ge=0, strict=True)
+    y: int = Field(default=0, ge=0, strict=True)
+    width: int | None = Field(default=None, ge=1, strict=True)
+    height: int | None = Field(default=None, ge=1, strict=True)
+
+    def to_roi(self) -> SlideRoi:
+        return SlideRoi(self.x, self.y, self.width, self.height)
+
+
+class SlideExtractionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    roi: SlideRoiPayload | None = None
+    ignore_regions: list[SlideRoiPayload] = Field(default_factory=list, max_length=16)
+    force: bool = False
 
 
 class RecallAnalysisPayload(BaseModel):
@@ -1244,6 +1263,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "created_at": video["created_at"],
             "source_size": int(video["source_size"]),
             "source_mtime_ns": int(video["source_mtime_ns"]),
+            "slide_count": int(video["slide_count"]) if "slide_count" in video.keys() else 0,
             "library_id": provider.library_id(),
             "marker_importance_counts": {level: importance_counts.get(level, 0)
                                          for level in ("standard", "important", "critical")},
@@ -2055,6 +2075,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             result = provider.get().trash_folder(
                 folder_id,
                 asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
             )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2067,6 +2088,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             result = provider.get().trash_video(
                 video_id,
                 asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
             )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2822,6 +2844,169 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def get_video(video_id: int) -> dict[str, object]:
         video = _video_or_404(provider.get(), video_id)
         return video_payload(video)
+
+    def slide_payload(row: sqlite3.Row, video_id: int) -> dict[str, object]:
+        return {
+            "id": int(row["id"]),
+            "video_id": int(video_id),
+            "start_ms": int(row["start_ms"]),
+            "end_ms": int(row["end_ms"]),
+            "representative_ms": int(row["representative_ms"]),
+            "visible_from_ms": int(row["visible_from_ms"] if row["visible_from_ms"] is not None else row["representative_ms"]),
+            "visible_until_ms": int(row["visible_until_ms"] if row["visible_until_ms"] is not None else row["representative_ms"] + 1),
+            "page_start_ms": int(row["page_start_ms"] if row["page_start_ms"] is not None else row["start_ms"]),
+            "page_end_ms": int(row["page_end_ms"] if row["page_end_ms"] is not None else row["end_ms"]),
+            "duration_ms": int(row["duration_ms"]),
+            "image_hash": str(row["image_hash"]),
+            "retention_class": str(row["retention_class"]),
+            "confidence": float(row["confidence"]),
+            "roi": json.loads(row["roi_json"] or "{}"),
+            "ignore_regions": json.loads(row["ignore_regions_json"] or "[]"),
+            "extraction_version": str(row["extraction_version"]),
+            "image_url": f"/api/videos/{video_id}/slides/{int(row['id'])}/image",
+        }
+
+    def subtitle_payload(segment) -> dict[str, object]:
+        return {
+            "id": int(segment.id),
+            "start_ms": int(segment.start_ms),
+            "end_ms": int(segment.end_ms),
+            "text": segment.text,
+        }
+
+    @api.post("/api/videos/{video_id}/slides/extract", status_code=202)
+    def extract_video_slides(
+        video_id: int,
+        payload: SlideExtractionPayload | None = None,
+    ) -> dict[str, object]:
+        store = provider.get()
+        video = _video_or_404(store, video_id)
+        if video["status"] == "processing":
+            raise HTTPException(status_code=409, detail="该视频正在处理中")
+        options = payload or SlideExtractionPayload()
+        roi = options.roi.to_roi() if options.roi is not None else None
+        slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
+
+        def operation(
+            update: Callable[[float, str, str | None], None],
+            should_cancel: Callable[[], bool],
+        ) -> object:
+            return extract_and_store_slides(
+                store,
+                video_id,
+                slide_root,
+                roi=roi,
+                ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
+                force=options.force,
+                progress=update,
+                should_stop=should_cancel,
+            )
+
+        try:
+            job_id = jobs.submit(
+                "slide_extract",
+                video_id,
+                operation,
+                request={
+                    "kind": "slide_extract",
+                    "video_id": video_id,
+                    "options": options.model_dump(),
+                },
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job_id": job_id, "video_id": video_id, "status": "queued", "job_type": "slide_extract"}
+
+    @api.get("/api/videos/{video_id}/slides")
+    def get_video_slides(
+        video_id: int,
+        start_ms: int | None = Query(default=None, ge=0),
+        end_ms: int | None = Query(default=None, gt=0),
+        include_auxiliary: bool = Query(default=False),
+        context_ms: int = Query(default=0, ge=0, le=600_000),
+    ) -> list[dict[str, object]]:
+        store = provider.get()
+        _video_or_404(store, video_id)
+        if (start_ms is None) != (end_ms is None):
+            raise HTTPException(status_code=400, detail="start_ms 和 end_ms 必须同时提供")
+        if start_ms is not None and end_ms is not None and end_ms <= start_ms:
+            raise HTTPException(status_code=400, detail="end_ms 必须大于 start_ms")
+        if start_ms is not None and end_ms is not None:
+            start_ms = max(0, start_ms - context_ms)
+            end_ms += context_ms
+        rows = store.list_slides(
+            video_id,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            include_auxiliary=include_auxiliary,
+        )
+        return [slide_payload(row, video_id) for row in rows]
+
+    @api.get("/api/videos/{video_id}/visual-evidence")
+    def get_visual_evidence(
+        video_id: int,
+        start_ms: int = Query(..., ge=0),
+        end_ms: int = Query(..., gt=0),
+        context_ms: int = Query(default=20_000, ge=0, le=600_000),
+    ) -> dict[str, object]:
+        store = provider.get()
+        _video_or_404(store, video_id)
+        if end_ms <= start_ms:
+            raise HTTPException(status_code=400, detail="end_ms 必须大于 start_ms")
+        query_start = max(0, start_ms - context_ms)
+        query_end = end_ms + context_ms
+        segments = [
+            subtitle_payload(segment)
+            for segment in store.get_segments(video_id)
+            if segment.end_ms > query_start and segment.start_ms < query_end
+        ]
+        slides = [
+            slide_payload(row, video_id)
+            for row in store.list_slides(
+                video_id,
+                start_ms=query_start,
+                end_ms=query_end,
+                include_auxiliary=True,
+            )
+        ]
+        images: dict[str, dict] = {}
+        for slide in slides:
+            image = images.setdefault(slide["image_hash"], {
+                "image_hash": slide["image_hash"], "image_url": slide["image_url"],
+                "slide_ids": [], "time_instances": [],
+            })
+            image["slide_ids"].append(slide["id"])
+            image["time_instances"].append({
+                key: slide[key] for key in (
+                    "id", "start_ms", "end_ms", "representative_ms", "visible_from_ms",
+                    "visible_until_ms", "page_start_ms", "page_end_ms", "retention_class",
+                )
+            })
+        return {
+            "video_id": int(video_id),
+            "requested_range": {"start_ms": int(start_ms), "end_ms": int(end_ms)},
+            "context_range": {"start_ms": int(query_start), "end_ms": int(query_end)},
+            "subtitles": segments,
+            "slides": slides,
+            "images": list(images.values()),
+        }
+
+    @api.get("/api/videos/{video_id}/slides/{slide_id}/image")
+    def get_slide_image(video_id: int, slide_id: int):
+        store = provider.get()
+        _video_or_404(store, video_id)
+        row = store.get_slide(slide_id)
+        if row is None or int(row["video_id"]) != int(video_id):
+            raise HTTPException(status_code=404, detail="PPT 图片不存在")
+        slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()).resolve()
+        image = (slide_root / str(row["image_path"])).resolve()
+        try:
+            image.relative_to(slide_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="PPT 图片路径无效") from exc
+        if not image.is_file():
+            raise HTTPException(status_code=404, detail="PPT 图片文件不存在")
+        return FileResponse(image, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"})
 
     @api.get("/api/videos/{video_id}/subtitles")
     def get_subtitles(video_id: int) -> list[dict[str, object]]:

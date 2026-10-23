@@ -47,6 +47,7 @@ export interface Video {
   has_transcript?: boolean;
   transcription_model?: string;
   storage_warning?: string | null;
+  slide_count?: number;
   marker_importance_counts?: Record<MarkerImportance, number>;
 }
 
@@ -71,6 +72,43 @@ export interface Subtitle {
   start_ms: number;
   end_ms: number;
   text: string;
+}
+
+export type SlideRetentionClass = "primary" | "auxiliary" | "animation";
+
+export interface VideoSlide {
+  id: number;
+  video_id: number;
+  start_ms: number;
+  end_ms: number;
+  representative_ms: number;
+  visible_from_ms: number;
+  visible_until_ms: number;
+  page_start_ms: number;
+  page_end_ms: number;
+  duration_ms: number;
+  image_hash: string;
+  retention_class: SlideRetentionClass;
+  confidence: number;
+  roi: { x: number; y: number; width: number; height: number };
+  ignore_regions: { x: number; y: number; width: number; height: number }[];
+  extraction_version: string;
+  image_url: string;
+}
+
+export interface VisualEvidence {
+  video_id: number;
+  requested_range: { start_ms: number; end_ms: number };
+  context_range: { start_ms: number; end_ms: number };
+  subtitles: Subtitle[];
+  slides: VideoSlide[];
+  images: {
+    image_hash: string;
+    image_url: string;
+    slide_ids: number[];
+    time_instances: Pick<VideoSlide, "id" | "start_ms" | "end_ms" | "representative_ms" |
+      "visible_from_ms" | "visible_until_ms" | "page_start_ms" | "page_end_ms" | "retention_class">[];
+  }[];
 }
 
 export interface SubtitleSearchHit {

@@ -86,6 +86,13 @@ def audio_directory(project_root: Path, data_root: Path) -> Path:
     return configured_audio_directory(project_root, data_root) or data_root / "temporary_audio"
 
 
+def slide_directory(project_root: Path, data_root: Path) -> Path:
+    """Return the persistent local directory for extracted slide images."""
+    if root := configured_media_root(project_root):
+        return root / "slides"
+    return data_root / "slides"
+
+
 def video_directory(project_root: Path, data_root: Path) -> Path:
     if root := configured_media_root(project_root):
         return root / "videos"

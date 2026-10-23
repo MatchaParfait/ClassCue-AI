@@ -44,6 +44,7 @@ import { FireRedResourceProfile, FireRedResourceStatus } from "./FireRedResource
 import { RecallModeControl } from "./RecallModeControl";
 import { hasActivePreparation, ModelPreparationProgress } from "./ModelPreparationProgress";
 import { ProcessVideoPreview } from "./ProcessVideoPreview";
+import { SlideExtractionControls } from "./SlideExtractionControls";
 import { WarmAtmosphere } from "./WarmAtmosphere";
 import { useAsrStatus } from "../hooks/useAsrStatus";
 import { useTaskStatus } from "../hooks/useTaskStatus";
@@ -455,6 +456,12 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
           </div>}
 
           {registeredVideo && !showSpace && <ProcessVideoPreview key={registeredVideo.id} video={registeredVideo} active={active} />}
+          {registeredVideo && !showSpace && <SlideExtractionControls
+            key={registeredVideo.id}
+            video={registeredVideo}
+            active={active}
+            busy={fileChangesBusy || isProcessing}
+          />}
           {(registeredVideo || videoPath) && (
             <div className={`video-info${registeredVideo ? " video-info-selected" : ""}`}>
               <div className="video-info-icon"><FileVideo size={registeredVideo ? 28 : 22} /></div>

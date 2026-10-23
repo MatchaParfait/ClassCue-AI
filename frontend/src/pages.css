@@ -22,6 +22,132 @@
 .process-preview-player { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; border: 0; border-radius: 8px; background: var(--ui-player-bg); }
 .process-preview-player:focus-visible { outline: 2px solid var(--ui-accent-strong); outline-offset: 3px; }
 .process-preview-error { flex-wrap: wrap; margin-top: 12px; }
+
+.slide-extraction-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--ui-line);
+  background: color-mix(in srgb, var(--ui-panel) 86%, transparent);
+}
+.slide-extraction-panel h2 { display: flex; align-items: center; gap: 8px; }
+.slide-extraction-summary, .slide-extraction-actions, .slide-roi-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.slide-extraction-summary { color: var(--ui-muted); font-size: 13px; }
+.slide-extraction-summary strong { color: var(--ui-ink); }
+.slide-extraction-actions { justify-content: flex-start; }
+.slide-region-selector {
+  position: relative;
+  overflow: hidden;
+  max-width: 960px;
+  aspect-ratio: 16 / 9;
+  background: #101514;
+  touch-action: none;
+  user-select: none;
+}
+.slide-region-selector video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.slide-region-selector-hint {
+  position: absolute;
+  inset: 10px auto auto 10px;
+  padding: 6px 8px;
+  color: #fff;
+  background: rgb(0 0 0 / 62%);
+  font-size: 12px;
+  pointer-events: none;
+}
+.slide-region-selection {
+  position: absolute;
+  border: 2px solid var(--space-accent, #f2c66d);
+  background: rgb(242 198 109 / 16%);
+  pointer-events: none;
+}
+.slide-roi-note { color: var(--ui-muted); font-size: 12px; }
+.slide-extraction-job { display: grid; gap: 8px; padding-top: 4px; }
+.ppt-viewer-backdrop { z-index: 1300; padding: 24px; background: rgb(10 14 13 / 76%); }
+.ppt-viewer-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: min(1420px, 100%); height: min(900px, calc(100dvh - 48px)); min-width: 0; overflow: hidden; border: 1px solid var(--ui-border-strong); border-radius: 10px; background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 28px 90px rgb(0 0 0 / 34%); }
+.ppt-viewer-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 20px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface-soft); }
+.ppt-viewer-heading, .ppt-viewer-header-meta, .ppt-viewer-page-title > div, .ppt-viewer-time-grid span, .ppt-viewer-actions, .ppt-viewer-nav { display: flex; align-items: center; }
+.ppt-viewer-heading { min-width: 0; gap: 11px; color: var(--ui-accent-strong); }
+.ppt-viewer-heading > div { min-width: 0; }
+.ppt-viewer-heading h2 { margin: 0; font-size: 18px; }
+.ppt-viewer-heading p { max-width: min(560px, 55vw); margin: 3px 0 0; overflow: hidden; color: var(--ui-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ppt-viewer-header-meta { flex: 0 0 auto; gap: 14px; color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-time-axis { display: grid; gap: 6px; padding: 16px 20px 13px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.ppt-viewer-axis-labels { position: relative; height: 16px; color: var(--ui-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.ppt-viewer-axis-labels span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.ppt-viewer-axis-labels span:first-child { transform: none; }
+.ppt-viewer-axis-labels span:last-child { transform: translateX(-100%); }
+.ppt-viewer-axis-track { position: relative; height: 30px; overflow: hidden; border: 1px solid var(--ui-border-strong); border-radius: 5px; background: repeating-linear-gradient(90deg, var(--ui-surface-soft) 0, var(--ui-surface-soft) calc(25% - 1px), var(--ui-border) 25%); }
+.ppt-viewer-axis-segment { position: absolute; top: 4px; bottom: 4px; min-width: 6px; padding: 0; overflow: hidden; border: 1px solid currentColor; border-radius: 3px; background: currentColor; color: var(--ui-muted); opacity: .8; cursor: pointer; transition: opacity 140ms ease, filter 140ms ease, transform 140ms ease; }
+.ppt-viewer-axis-segment span { display: block; overflow: hidden; color: var(--ui-surface); font-size: 10px; font-weight: 700; line-height: 20px; text-overflow: clip; white-space: nowrap; }
+.ppt-viewer-axis-segment.ppt-retention-primary { background: color-mix(in srgb, var(--ui-green) 75%, transparent); }
+.ppt-viewer-axis-segment.ppt-retention-auxiliary { background: color-mix(in srgb, var(--ui-accent-strong) 78%, transparent); }
+.ppt-viewer-axis-segment.ppt-retention-animation { background: color-mix(in srgb, var(--ui-muted) 75%, transparent); }
+.ppt-viewer-axis-segment:hover, .ppt-viewer-axis-segment.is-selected { opacity: 1; filter: brightness(1.12); transform: translateY(-1px); z-index: 1; }
+.ppt-viewer-axis-segment.is-selected { box-shadow: 0 0 0 2px var(--ui-surface), 0 0 0 3px currentColor; }
+.ppt-viewer-axis-caption { display: flex; justify-content: space-between; gap: 12px; color: var(--ui-muted); font-size: 10px; }
+.ppt-viewer-body { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); min-height: 0; }
+.ppt-viewer-timeline { min-width: 0; overflow: hidden; border-right: 1px solid var(--ui-border); background: var(--ui-surface-soft); }
+.ppt-viewer-timeline-heading { display: flex; justify-content: space-between; gap: 12px; padding: 13px 14px; border-bottom: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-list { height: calc(100% - 44px); overflow: auto; padding: 6px; }
+.ppt-viewer-item { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ui-text); text-align: left; cursor: pointer; }
+.ppt-viewer-item:hover { background: var(--ui-surface); border-color: var(--ui-border); }
+.ppt-viewer-item.is-selected { background: var(--ui-accent-soft); border-color: var(--ui-accent-strong); }
+.ppt-viewer-item-thumb { display: block; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--ui-border); background: #111; }
+.ppt-viewer-item-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.ppt-viewer-item-copy { display: grid; align-content: start; min-width: 0; gap: 4px; padding-top: 2px; }
+.ppt-viewer-item-copy strong { font-size: 13px; }
+.ppt-viewer-item-copy span { color: var(--ui-muted); font-size: 11px; line-height: 1.4; }
+.ppt-viewer-item-copy small { width: fit-content; font-size: 10px; }
+.ppt-viewer-preview { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; background: color-mix(in srgb, var(--ui-surface-soft) 52%, #101413); }
+.ppt-viewer-image-wrap { display: grid; place-items: center; min-height: 0; padding: 24px; background: #101413; }
+.ppt-viewer-image-wrap img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 12px 34px rgb(0 0 0 / 28%); }
+.ppt-viewer-details { display: grid; gap: 14px; padding: 16px 20px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
+.ppt-viewer-page-title { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.ppt-viewer-page-title > div { gap: 9px; min-width: 0; }
+.ppt-viewer-page-title strong { font-size: 16px; }
+.ppt-viewer-confidence { flex: 0 0 auto; color: var(--ui-muted); font-size: 12px; }
+.ppt-retention-badge, .ppt-viewer-item-copy small { padding: 3px 6px; border: 1px solid currentColor; border-radius: 999px; font-weight: 600; }
+.ppt-retention-primary { color: var(--ui-green); }
+.ppt-retention-auxiliary { color: var(--ui-accent-strong); }
+.ppt-retention-animation { color: var(--ui-muted); }
+.ppt-viewer-time-grid { display: flex; flex-wrap: wrap; gap: 10px 22px; color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-time-grid span { gap: 5px; }
+.ppt-viewer-time-grid b { color: var(--ui-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ppt-viewer-actions { justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ppt-viewer-nav { gap: 8px; }
+.ppt-viewer-state { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 260px; padding: 32px; color: var(--ui-muted); text-align: center; }
+.ppt-viewer-state > div { display: grid; gap: 6px; }
+.ppt-viewer-state strong { color: var(--ui-text); }
+.ppt-viewer-state p { margin: 0; font-size: 12px; }
+.ppt-viewer-state.is-error { color: var(--ui-red); }
+.ppt-viewer-state.is-error p { color: var(--ui-muted); }
+.ppt-viewer-empty-state > div { justify-items: center; }
+.ppt-viewer-empty-state .primary-button { margin-top: 8px; }
+.ppt-viewer-extract-job { display: grid; gap: 8px; width: min(420px, 100%); margin-top: 14px; text-align: left; }
+.ppt-viewer-extract-job > div:first-child { display: flex; justify-content: space-between; gap: 12px; color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-extract-job > div:first-child b { color: var(--ui-text); font-variant-numeric: tabular-nums; }
+.ppt-viewer-extract-job .job-progress { width: 100%; }
+.ppt-viewer-extract-job small { color: var(--ui-muted); font-size: 11px; overflow-wrap: anywhere; }
+.ppt-viewer-extract-job .stop-job-button, .ppt-viewer-extract-job .text-button { justify-self: center; }
+@media (max-width: 760px) {
+  .ppt-viewer-backdrop { padding: 10px; }
+  .ppt-viewer-dialog { height: calc(100dvh - 20px); }
+  .ppt-viewer-body { grid-template-columns: 1fr; grid-template-rows: minmax(150px, 34%) minmax(0, 1fr); }
+  .ppt-viewer-timeline { border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  .ppt-viewer-list { display: flex; gap: 6px; height: auto; overflow-x: auto; padding: 6px; }
+  .ppt-viewer-item { flex: 0 0 206px; }
+  .ppt-viewer-item-copy { display: none; }
+  .ppt-viewer-item-thumb { width: 100%; }
+  .ppt-viewer-image-wrap { padding: 12px; }
+  .ppt-viewer-heading p { max-width: 45vw; }
+}
+.slide-extraction-job .job-progress { width: 100%; }
 .process-page .video-info-selected { margin-top: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .video-info-selected .video-info-icon { display: none; }
 .video-info-selected .video-info-main > strong { font-size: 20px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }

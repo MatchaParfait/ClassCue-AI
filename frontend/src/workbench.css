@@ -105,6 +105,10 @@
 .video-marker-swatch.importance-critical { background: var(--ui-importance-critical); border-color: var(--ui-importance-critical); }
 .video-card .library-card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; padding: 0; }
 .library-card-actions .icon-button { width: 30px; height: 30px; min-height: 30px; min-width: 30px; border-color: transparent; background: transparent; }
+.library-card-actions .library-card-ppt.is-ready { color: var(--ui-green); }
+.library-card-actions .library-card-ppt.is-empty { color: var(--ui-muted); }
+.library-card-actions .library-card-ppt.is-ready:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-green) 14%, transparent); }
+.library-card-actions .library-card-ppt.is-empty:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-accent-strong) 12%, transparent); }
 .library-card .drag-handle { opacity: 0; color: var(--ui-muted); transition: opacity var(--ui-fast); }
 .library-card:hover .drag-handle, .library-card:focus-within .drag-handle, .library-card.is-busy .drag-handle { opacity: 1; }
 .library-card.is-busy { border-color: var(--ui-border); }

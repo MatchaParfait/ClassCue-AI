@@ -92,6 +92,7 @@ files = [
     "classcue/video_library.py",
     "classcue/video_pipeline.py",
     "classcue/video_store.py",
+    "classcue/slide_extractor.py",
     "classcue/video_thumbnail.py",
     "classcue/web_batch.py",
     "api/__init__.py",

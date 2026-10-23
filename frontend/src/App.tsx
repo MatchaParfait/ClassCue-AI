@@ -23,9 +23,12 @@ import {
   FolderOpen,
   FolderPlus,
   GripVertical,
+  ImagePlus,
+  Images,
   LoaderCircle,
   MoreHorizontal,
   Pencil,
+  Presentation,
   RotateCcw,
   Save,
   Settings2,
@@ -72,6 +75,7 @@ import { hasActivePreparation, preparationSummary } from "./components/ModelPrep
 import { cleanupSummary, isCleanupJob } from "./components/ModelCleanupProgress";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, spotlight, useEntryMotion, useMotionTransition, useNewItems, useReducedMotion } from "./components/Motion";
 import { OnboardingGuide } from "./components/OnboardingGuide";
+import { PptViewer } from "./components/PptViewer";
 
 const LIBRARY_SYNC_INTERVAL = 15_000;
 const ProcessPage = lazy(() => import("./components/ProcessPage").then(module => ({ default: module.ProcessPage })));
@@ -398,6 +402,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const [recycleTarget, setRecycleTarget] = useState<
     { kind: "video"; video: Video } | { kind: "folder"; folder: VideoLibraryFolder } | null
   >(null);
+  const [pptVideo, setPptVideo] = useState<Video | null>(null);
   const [canUndoRemoval, setCanUndoRemoval] = useState(false);
   const [undoingRemoval, setUndoingRemoval] = useState(false);
   const recycleLatest = useQuery({
@@ -1071,6 +1076,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     const selectionKey = parentId ?? "root";
     const selected = (selections[selectionKey] ?? []).includes(video.id);
     const processingDisabled = processingBlocked || processingPending || moving.has(video.id) || !canSelectForProcessing(video);
+    const hasSlides = Number(video.slide_count ?? 0) > 0;
     const ready = video.status === "review_ready";
     const preview = canOpenReview(video.status, Boolean(video.has_transcript));
     const openVideo = () => {
@@ -1162,6 +1168,14 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
               const selector = parentId ? ".folder-window .library-processing" : ".library-inner .library-processing";
               document.querySelector(selector)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
             }}><Sparkles size={16} /></button>
+          <button className={`icon-button library-card-ppt${hasSlides ? " is-ready" : " is-empty"}`} type="button" title={hasSlides ? `打开已提取的 PPT“${video.display_name}”（${video.slide_count} 张）` : `打开 PPT“${video.display_name}”，当前还未提取`}
+            aria-label={hasSlides ? `打开已提取的 PPT“${video.display_name}”` : `打开 PPT“${video.display_name}”，当前还未提取`} disabled={moving.has(video.id) || editingVideoName}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (Date.now() < suppressVideoClickUntil.current) return;
+              setPptVideo(video);
+            }}>{hasSlides ? <Images size={16} /> : <ImagePlus size={16} />}</button>
           <button className="icon-button danger-icon library-card-delete" type="button" title="移入回收站"
             aria-label={`删除视频“${video.display_name}”`} disabled={trashBusyKey !== null || editingVideoName}
             onClick={() => setRecycleTarget({ kind: "video", video })}>
@@ -1318,6 +1332,17 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           </motion.form>
         </AnimatedOverlay>
       )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {pptVideo && active && !suspended && (
+          <PptViewer
+            video={pptVideo}
+            libraryId={libraryId}
+            active={Boolean(pptVideo)}
+            backgroundRef={librarySurfaceRef}
+            onClose={() => setPptVideo(null)}
+          />
+        )}
       </AnimatePresence>
       {recycleTarget && active && !suspended && <RecycleConfirmDialog
         kind={recycleTarget.kind}

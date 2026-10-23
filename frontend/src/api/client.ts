@@ -104,6 +104,7 @@ function normalizeVideo(raw: Video): Video {
     duration_ms: Number(raw.duration_ms ?? 0),
     video_path: raw.video_path ?? (raw as Video & { source_path?: string }).source_path ?? "",
     source_size: Number(raw.source_size ?? 0),
+    slide_count: Number(raw.slide_count ?? 0),
   };
 }
 
@@ -297,6 +298,10 @@ export function getStreamUrl(videoId: number, demo = false): string {
 export function getThumbnailUrl(video: Video): string {
   const version = ["native-jpeg444-q2-v2", video.library_id ?? "", video.video_path, video.source_size ?? "", video.source_mtime_ns ?? ""];
   return `${API_BASE}/api/videos/${video.id}/thumbnail?v=${encodeURIComponent(JSON.stringify(version))}`;
+}
+
+export function getSlideImageUrl(slide: { video_id: number; id: number; image_url?: string }): string {
+  return `${API_BASE}${slide.image_url ?? `/api/videos/${slide.video_id}/slides/${slide.id}/image`}`;
 }
 
 export function getSearchPreviewUrl(videoId: number, timeMs: number, libraryId: string): string {
@@ -744,6 +749,48 @@ export async function processVideo(videoId: number, payload: Record<string, unkn
   });
   const record = raw as { job?: Job };
   return normalizeJob(record.job ?? unwrapValue(raw as Job));
+}
+
+export async function extractVideoSlides(
+  videoId: number,
+  payload: {
+    roi?: { x: number; y: number; width: number; height: number };
+    ignore_regions?: { x: number; y: number; width: number; height: number }[];
+    force?: boolean;
+  } = {},
+): Promise<Job> {
+  return normalizeJob(await request<Job>(`/api/videos/${videoId}/slides/extract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function getVideoSlides(
+  videoId: number,
+  options: { start_ms?: number; end_ms?: number; include_auxiliary?: boolean; context_ms?: number } = {},
+): Promise<import("../types").VideoSlide[]> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined) query.set(key, String(value));
+  }
+  return request<import("../types").VideoSlide[]>(
+    `/api/videos/${videoId}/slides${query.toString() ? `?${query}` : ""}`,
+  );
+}
+
+export async function getVisualEvidence(
+  videoId: number,
+  startMs: number,
+  endMs: number,
+  contextMs = 20_000,
+): Promise<import("../types").VisualEvidence> {
+  const query = new URLSearchParams({
+    start_ms: String(startMs),
+    end_ms: String(endMs),
+    context_ms: String(contextMs),
+  });
+  return request<import("../types").VisualEvidence>(`/api/videos/${videoId}/visual-evidence?${query}`);
 }
 
 export interface BatchProcessResult {

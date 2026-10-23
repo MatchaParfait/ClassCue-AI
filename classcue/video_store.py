@@ -86,6 +86,25 @@ class VideoStore:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(video_id, start_ms, end_ms, trigger_phrase, analysis_mode)
                 );
+                CREATE TABLE IF NOT EXISTS video_slides (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    start_ms INTEGER NOT NULL,
+                    end_ms INTEGER NOT NULL,
+                    representative_ms INTEGER NOT NULL,
+                    image_path TEXT NOT NULL,
+                    image_hash TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    retention_class TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    roi_json TEXT NOT NULL DEFAULT '{}',
+                    extraction_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CHECK(start_ms < end_ms),
+                    CHECK(representative_ms >= start_ms AND representative_ms < end_ms)
+                );
+                CREATE INDEX IF NOT EXISTS video_slides_by_time
+                    ON video_slides(video_id, start_ms, end_ms);
                 CREATE TABLE IF NOT EXISTS video_keyword_hits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -200,6 +219,25 @@ class VideoStore:
             # Keep existing-schema upgrades in one transaction after table bootstrap.
             connection.execute("BEGIN IMMEDIATE")
             self._migrate_video_metadata(connection)
+            slide_columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_slides)")}
+            for column, definition in (
+                ("visible_from_ms", "INTEGER"),
+                ("visible_until_ms", "INTEGER"),
+                ("page_start_ms", "INTEGER"),
+                ("page_end_ms", "INTEGER"),
+                ("ignore_regions_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("cache_identity", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in slide_columns:
+                    connection.execute(f"ALTER TABLE video_slides ADD COLUMN {column} {definition}")
+            connection.execute(
+                "UPDATE video_slides SET visible_from_ms = COALESCE(visible_from_ms, representative_ms), "
+                "visible_until_ms = COALESCE(visible_until_ms, representative_ms + 1), "
+                "page_start_ms = COALESCE(page_start_ms, start_ms), "
+                "page_end_ms = COALESCE(page_end_ms, end_ms) "
+                "WHERE visible_from_ms IS NULL OR visible_until_ms IS NULL "
+                "OR page_start_ms IS NULL OR page_end_ms IS NULL"
+            )
             job_columns = {row["name"] for row in connection.execute("PRAGMA table_info(processing_jobs)")}
             if "request_json" not in job_columns:
                 connection.execute("ALTER TABLE processing_jobs ADD COLUMN request_json TEXT NOT NULL DEFAULT ''")
@@ -588,7 +626,9 @@ class VideoStore:
         with self.connect() as connection:
             return connection.execute(
                 "SELECT v.*, EXISTS(SELECT 1 FROM video_transcript_segments s "
-                "WHERE s.video_id = v.id) AS has_transcript FROM videos v WHERE v.id = ?",
+                "WHERE s.video_id = v.id) AS has_transcript, "
+                "(SELECT COUNT(1) FROM video_slides sl WHERE sl.video_id = v.id) AS slide_count "
+                "FROM videos v WHERE v.id = ?",
                 (video_id,),
             ).fetchone()
 
@@ -596,7 +636,9 @@ class VideoStore:
         with self.connect() as connection:
             return connection.execute(
                 "SELECT v.*, EXISTS(SELECT 1 FROM video_transcript_segments s "
-                "WHERE s.video_id = v.id) AS has_transcript FROM videos v "
+                "WHERE s.video_id = v.id) AS has_transcript, "
+                "(SELECT COUNT(1) FROM video_slides sl WHERE sl.video_id = v.id) AS slide_count "
+                "FROM videos v "
                 "ORDER BY v.created_at DESC, v.id DESC"
             ).fetchall()
 
@@ -783,6 +825,7 @@ class VideoStore:
         "video_transcript_segments",
         "video_keyword_hits",
         "video_markers",
+        "video_slides",
         "video_analysis_runs",
         "video_ai_chunks",
         "video_processing_metrics",
@@ -862,6 +905,7 @@ class VideoStore:
 
     def _move_to_recycle_bin(
         self, kind: str, video_ids: list[int], folder_ids: list[int], trash_root: str | Path,
+        slide_root: str | Path | None = None,
     ) -> dict[str, object]:
         operation_id = uuid.uuid4().hex
         trash_directory = Path(trash_root).expanduser().resolve() / operation_id
@@ -895,6 +939,29 @@ class VideoStore:
                             shutil.move(str(source), str(destination))
                             record.update(trash=str(destination), moved=True)
                         moved.append(record)
+                    if slide_root is not None:
+                        for slide in snapshot["related"].get("video_slides", []):
+                            if int(slide["video_id"]) != int(video["id"]):
+                                continue
+                            raw_path = str(slide.get("image_path") or "")
+                            if not raw_path:
+                                continue
+                            source = (Path(slide_root).expanduser().resolve() / raw_path).resolve()
+                            try:
+                                source.relative_to(Path(slide_root).expanduser().resolve())
+                            except ValueError:
+                                continue
+                            key = str(source).casefold()
+                            if key in seen_paths:
+                                continue
+                            seen_paths.add(key)
+                            record = {"role": "slide", "original": str(source), "moved": False}
+                            if source.is_file():
+                                destination = trash_directory / "slides" / f'{video["id"]}-{source.name}'
+                                destination.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.move(str(source), str(destination))
+                                record.update(trash=str(destination), moved=True)
+                            moved.append(record)
 
                 payload = {**snapshot, "files": moved}
                 connection.execute(
@@ -925,10 +992,14 @@ class VideoStore:
             "folders": len(snapshot["folders"]),
         }
 
-    def trash_video(self, video_id: int, trash_root: str | Path) -> dict[str, object]:
-        return self._move_to_recycle_bin("video", [int(video_id)], [], trash_root)
+    def trash_video(
+        self, video_id: int, trash_root: str | Path, slide_root: str | Path | None = None,
+    ) -> dict[str, object]:
+        return self._move_to_recycle_bin("video", [int(video_id)], [], trash_root, slide_root)
 
-    def trash_folder(self, folder_id: int, trash_root: str | Path) -> dict[str, object]:
+    def trash_folder(
+        self, folder_id: int, trash_root: str | Path, slide_root: str | Path | None = None,
+    ) -> dict[str, object]:
         with self.connect() as connection:
             folders = self._folder_tree(connection, int(folder_id))
             if not folders:
@@ -939,7 +1010,7 @@ class VideoStore:
                 f"SELECT id FROM videos WHERE library_folder_id IN ({placeholders})", tuple(ids),
             ).fetchall()
             video_ids = [int(row["id"]) for row in videos]
-        return self._move_to_recycle_bin("folder", video_ids, ids, trash_root)
+        return self._move_to_recycle_bin("folder", video_ids, ids, trash_root, slide_root)
 
     def undo_latest_recycle(self, trash_root: str | Path) -> dict[str, object]:
         moved_back: list[dict[str, object]] = []
@@ -982,6 +1053,7 @@ class VideoStore:
                 related = payload.get("related", {})
                 for table in (
                     "video_transcript_segments", "video_keyword_hits", "video_markers",
+                    "video_slides",
                     "video_analysis_runs", "video_ai_chunks", "video_processing_metrics",
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
                     "llm_experiment_results",
@@ -1227,6 +1299,93 @@ class VideoStore:
         with self.connect() as connection:
             rows = connection.execute("SELECT * FROM video_transcript_segments WHERE video_id = ? ORDER BY start_ms", (video_id,)).fetchall()
         return [TranscriptSegment(int(row["segment_id"]), int(row["start_ms"]), int(row["end_ms"]), row["text"], json.loads(row["words_json"] or "[]")) for row in rows]
+
+    def list_slides(
+        self,
+        video_id: int,
+        *,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        include_auxiliary: bool = False,
+    ) -> list[sqlite3.Row]:
+        clauses = ["video_id = ?"]
+        values: list[object] = [int(video_id)]
+        if start_ms is not None and end_ms is not None:
+            clauses.extend(["end_ms > ?", "start_ms < ?"])
+            values.extend([int(start_ms), int(end_ms)])
+        if not include_auxiliary:
+            clauses.append("retention_class = 'primary'")
+        query = "SELECT * FROM video_slides WHERE " + " AND ".join(clauses)
+        query += " ORDER BY start_ms, id"
+        with self.connect() as connection:
+            return connection.execute(query, tuple(values)).fetchall()
+
+    def get_slide(self, slide_id: int) -> sqlite3.Row | None:
+        with self.connect() as connection:
+            return connection.execute(
+                "SELECT * FROM video_slides WHERE id = ?", (int(slide_id),)
+            ).fetchone()
+
+    def replace_video_slides(self, video_id: int, slides: list[dict[str, object]]) -> list[sqlite3.Row]:
+        previous_end = -1
+        for slide in slides:
+            start, end, representative = (int(slide[key]) for key in ("start_ms", "end_ms", "representative_ms"))
+            visible_start = int(slide.get("visible_from_ms", representative))
+            visible_end = int(slide.get("visible_until_ms", representative + 1))
+            if not (
+                previous_end <= start < end and start <= visible_start <= representative < visible_end <= end
+                and int(slide.get("page_start_ms", start)) <= start
+                and int(slide.get("page_end_ms", end)) >= end
+            ):
+                raise ValueError("PPT 时间范围无效或重叠")
+            previous_end = end
+        with self.connect() as connection:
+            connection.execute("DELETE FROM video_slides WHERE video_id = ?", (int(video_id),))
+            if slides:
+                connection.executemany(
+                    """
+                    INSERT INTO video_slides(
+                        video_id, start_ms, end_ms, representative_ms, image_path,
+                        image_hash, duration_ms, retention_class, confidence,
+                        roi_json, extraction_version, visible_from_ms, visible_until_ms,
+                        page_start_ms, page_end_ms, ignore_regions_json, cache_identity
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            int(video_id),
+                            int(slide["start_ms"]),
+                            int(slide["end_ms"]),
+                            int(slide["representative_ms"]),
+                            str(slide["image_path"]),
+                            str(slide["image_hash"]),
+                            int(slide["duration_ms"]),
+                            str(slide["retention_class"]),
+                            float(slide["confidence"]),
+                            str(slide["roi_json"]),
+                            str(slide["extraction_version"]),
+                            int(slide.get("visible_from_ms", slide["representative_ms"])),
+                            int(slide.get("visible_until_ms", int(slide["representative_ms"]) + 1)),
+                            int(slide.get("page_start_ms", slide["start_ms"])),
+                            int(slide.get("page_end_ms", slide["end_ms"])),
+                            str(slide.get("ignore_regions_json", "[]")),
+                            str(slide.get("cache_identity", "")),
+                        )
+                        for slide in slides
+                    ],
+                )
+            return connection.execute(
+                "SELECT * FROM video_slides WHERE video_id = ? ORDER BY start_ms, id",
+                (int(video_id),),
+            ).fetchall()
+
+    def slide_image_paths(self, video_id: int) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT image_path FROM video_slides WHERE video_id = ?",
+                (int(video_id),),
+            ).fetchall()
+        return [str(row["image_path"]) for row in rows if row["image_path"]]
 
     def has_transcript(self, video_id: int) -> bool:
         with self.connect() as connection:

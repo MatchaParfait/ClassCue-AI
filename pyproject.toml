@@ -14,9 +14,11 @@ dependencies = [
     "httpx>=0.28.1,<0.29",
     "openai>=1.0.0",
     "numpy>=1.26,<3",
+    "opencv-python-headless>=4.10,<5",
     "onnxruntime>=1.20,<2",
     "pydantic>=2.8.0",
     "python-dotenv>=1.0.0",
+    "scikit-image>=0.24,<1",
     "streamlit>=1.39.0",
     "uvicorn[standard]>=0.30.0",
 ]
