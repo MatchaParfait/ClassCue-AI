@@ -1,19 +1,18 @@
-# Contributing
+# 贡献指南
 
-## Development setup
+## 开发环境
 
-Application Python modules live in `classcue/`; `api/` contains HTTP routes and
-`scripts/` contains executable launch, preparation, and release tools. Use
-package imports such as `from classcue.video_store import VideoStore` and keep
-new application modules out of the repository root. See the directory map in
-the development guide for entry points and installation-relative resources.
+应用的 Python 模块位于 `classcue/`；`api/` 存放 HTTP 路由；`scripts/` 存放
+启动、准备和发行工具。请使用类似
+`from classcue.video_store import VideoStore` 的包导入方式，并将新的应用模块
+放在对应的包目录中，不要放在仓库根目录。入口和相对于安装目录的资源位置请
+参阅开发指南中的目录说明。
 
-See [the development guide](docs/development.md) for local setup, startup
-commands, API and model implementation details, and tests. Maintainers should
-also read [the release and announcement guide](docs/releases.md).
+本地环境、启动命令、API、模型实现和测试说明见[开发指南](docs/development.md)。
+维护者还应阅读[发行与公告维护指南](docs/releases.md)。
 
-Use Windows with Python 3.12 and Node.js 24 for the same environment as CI.
-Install `uv`, then run:
+请使用与 CI 一致的 Windows、Python 3.12 和 Node.js 24 环境。先安装 `uv`，
+然后运行：
 
 ```powershell
 uv sync --locked --group dev
@@ -28,40 +27,42 @@ npm run build
 Pop-Location
 ```
 
-Runtime dependencies are declared in `pyproject.toml`. When they change, run
-`uv lock` and commit the updated `uv.lock`; the one-click launcher uses the lock
-file and an isolated `.runtime` environment. Do not commit `.runtime`.
+运行时依赖在 `pyproject.toml` 中声明。依赖发生变化时，请运行 `uv lock` 并提交
+更新后的 `uv.lock`；一键启动器使用该锁定文件和隔离的 `.runtime` 环境。
+不要提交 `.runtime`。
 
-## Pull requests
+## 拉取请求
 
-- Keep changes focused and include tests for changed persistence or pipeline behavior.
-- Do not commit `data/`, `projects/`, `.env`, extracted audio, videos, models, or API keys.
-- Use anonymized media and subtitles in issue reports, tests, screenshots, and documentation.
-- Keep generated images, recovered assets, ASR run outputs, logs, and task caches local.
-  Only copy reviewed, required product assets into their intended source directories.
-- Stage explicit paths or use `git add -p`, then review `git diff --cached` and
-  `git diff --cached --check` before committing. Do not stage the whole workspace
-  without reviewing its contents.
-- Run the checks above before opening a pull request. The hygiene check inspects
-  the Git index, so rerun it after staging new or updated files.
-- Keep cleanup, CI changes, and unrelated product changes in separate commits.
-- Internal agent instructions and standalone experiment workflows stay private.
-  Required shared scene modules under `experiments/subtitle-cyberspace/src/`
-  remain application source.
-- Add new runtime files to `release_manifest.toml`. Public tests, documentation,
-  and build helpers do not automatically belong in the portable application.
+- 保持改动聚焦，并为变更后的持久化逻辑或处理流水线补充测试。
+- 不要提交 `data/`、`projects/`、`.env`、提取出的音频、视频、模型或 API Key。
+- 问题报告、测试、截图和文档只能使用匿名化或合成的媒体与字幕。
+- 生成图片、恢复的资源、ASR 运行结果、日志和任务缓存保留在本机；
+  只有经过审阅且确实需要的产品资源，才能复制到指定源码目录。
+- 暂存明确的文件路径，或使用 `git add -p`；提交前检查
+  `git diff --cached` 和 `git diff --cached --check`。未经审阅不要暂存整个工作区。
+- 暂存新增或修改文件后运行 `python scripts/check_repository_hygiene.py`。
+  该检查读取 Git 索引，因此每次暂存变化后都要重新运行。
+- 仓库清理、CI 改动和无关的产品改动应拆分到不同提交中。
+- 内部 Agent 指引和独立实验流程保持私有。`experiments/subtitle-cyberspace/src/`
+  下被应用使用的共享场景模块仍属于应用源码。
+- 新增运行时文件时更新 `release_manifest.toml`。公开测试、文档和构建辅助工具
+  不会自动包含在便携应用中。
 
-See [repository maintenance](docs/repository-maintenance.md) for public/private
-backup boundaries and the handling of previously published sensitive material.
+公共与私有备份边界，以及已发布敏感材料的处理方式，见[仓库维护指南](docs/repository-maintenance.md)。
 
-## Optional browser regressions
+## 可选的浏览器回归测试
 
-Install Playwright in `frontend` with `npm install --no-save --package-lock=false playwright`,
-then run the browser scripts in `tests/` against isolated fixture services.
-Alternatively set `CLASSROOM_PLAYWRIGHT_MODULE` to an installed Playwright module.
-Do not use real videos, credentials, or paid services for regression fixtures.
+在 `frontend` 中安装 Playwright：
 
-## Security and privacy
+```powershell
+npm install --no-save --package-lock=false playwright
+```
 
-Report exposed credentials privately to the repository maintainers. Do not post
-real DeepSeek keys or classroom recordings in public issues.
+然后针对隔离的测试服务运行 `tests/` 中的浏览器脚本。也可以将
+`CLASSROOM_PLAYWRIGHT_MODULE` 设置为已安装的 Playwright 模块路径。
+回归测试不得使用真实视频、凭据或付费服务。
+
+## 安全与隐私
+
+发现凭据泄露时，请私下报告给仓库维护者。不要在公开问题中发布真实的
+DeepSeek Key 或课堂录音。

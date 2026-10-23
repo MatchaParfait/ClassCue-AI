@@ -67,6 +67,23 @@ def test_accepts_explicit_documentation_placeholders_and_public_keys(placeholder
     assert not hygiene.secret_violations(placeholder.encode())
 
 
+@pytest.mark.parametrize("prefix", ["C:/Users/", "C:\\Users\\", "C:\\\\Users\\\\", "/Users/", "/home/"])
+def test_detects_personal_home_paths_without_disclosing_usernames(prefix):
+    path = prefix + "local-owner" + "/private/package"
+    reasons = hygiene.secret_violations(path.encode())
+    assert reasons == ["possible personal home-directory path"]
+    assert all("local-owner" not in reason and path not in reason for reason in reasons)
+
+
+@pytest.mark.parametrize("path", [
+    "C:/Users/username/example", "/Users/example/example", "/home/test/example",
+    "C:/Users/Public/example", "/home/${USER}/example", "/home/<username>/example",
+    "C:/Program Files/example", "tests/fixtures/example",
+])
+def test_accepts_generic_or_placeholder_paths(path):
+    assert not hygiene.secret_violations(path.encode())
+
+
 @pytest.fixture
 def repository(tmp_path):
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
@@ -128,6 +145,15 @@ def test_credentials_are_rejected_even_in_documentation_and_sample_env(repositor
     assert all("OpenAI" in reason for path, reason in findings)
 
 
+def test_staged_personal_path_is_rejected_without_disclosing_it(repository, capsys):
+    path = "C:/Users/" + "local-owner" + "/private/package"
+    stage(repository, "tests/browser.cjs", f"require({path!r});")
+    assert hygiene.main(["--root", str(repository)]) == 1
+    output = capsys.readouterr().out
+    assert "tests/browser.cjs" in output and "home-directory" in output
+    assert "local-owner" not in output and path not in output
+
+
 def test_git_errors_fail_closed(tmp_path, capsys):
     assert hygiene.main(["--root", str(tmp_path)]) == 2
     assert "could not complete" in capsys.readouterr().err
@@ -139,6 +165,8 @@ def test_gitignore_covers_local_artifacts_without_hiding_scene_code(repository):
     ignored = [
         "output/image.png", "outputs/image.png", "recovered-images/image.png", ".env.local",
         "Agent.md", "agent.md", "AGENTS.md", "前端开发.md",
+        "nested/AGENTS.md", "nested/Agent.md", "nested/前端开发.md",
+        "api_key.dpapi", "identity.p12", "identity.pfx", "signing/private.key",
         "experiments/new-run/jobs/id/state.json", "experiments/new-run/worker.log",
         "experiments/firered-bs8-20261011/summary.json",
         "experiments/firered-routing-20261011/verified-telemetry/subtitles.json",

@@ -18,11 +18,15 @@ models/
 *.sqlite
 *.sqlite3
 *.db
+*.dpapi
+*.p12
+*.pfx
+*.key
 
 # Internal collaboration instructions stay local.
-/[Aa][Gg][Ee][Nn][Tt].md
-/[Aa][Gg][Ee][Nn][Tt][Ss].md
-/前端开发.md
+[Aa][Gg][Ee][Nn][Tt].md
+[Aa][Gg][Ee][Nn][Tt][Ss].md
+前端开发.md
 
 # Only the application's shared scene source belongs in this directory.
 /experiments/*

@@ -1,4 +1,4 @@
-"""Check the Git index for private/generated files and recognizable credentials.
+"""Check the Git index for private files, credentials, and personal home paths.
 
 Run after staging a public commit: python scripts/check_repository_hygiene.py.
 Only indexed content is inspected, so unstaged edits and local backups are not
@@ -23,6 +23,14 @@ LOCAL_ROOTS = frozenset({
 CACHE_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache", "node_modules"})
 EXAMPLE_ENV_FILES = frozenset({".env.example", ".env.sample", ".env.template"})
 PRIVATE_INSTRUCTIONS = frozenset({"agent.md", "agents.md", "前端开发.md"})
+PERSONAL_HOME_PATH = re.compile(
+    rb"(?i)(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]+Users[\\/]+|/(?:Users|home)/)"
+    rb"([^\\/\s\"'<>]+)"
+)
+HOME_PLACEHOLDERS = frozenset({
+    b"user", b"username", b"your-user", b"yourname", b"example", b"example-user",
+    b"test", b"test-user", b"public", b"default", b"...",
+})
 SECRET_PATTERNS = (
     ("OpenAI API key", re.compile(
         rb"(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}"
@@ -88,6 +96,12 @@ def secret_violations(content: bytes) -> list[str]:
             if kind == "PEM private key" or not is_placeholder(match.group()):
                 reasons.append(f"possible {kind}")
                 break
+    for match in PERSONAL_HOME_PATH.finditer(content):
+        username = match.group(1).lower()
+        if username in HOME_PLACEHOLDERS or username.startswith((b"$", b"%", b"{", b"[")):
+            continue
+        reasons.append("possible personal home-directory path")
+        break
     return reasons
 
 
