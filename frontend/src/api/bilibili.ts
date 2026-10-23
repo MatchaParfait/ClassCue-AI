@@ -5,6 +5,10 @@ export interface BiliQuery { text: string; purpose: string }
 export interface BiliTarget {
   course: string; keywords: string[]; unknowns: string[];
   requirements: { id: string; text: string; required: boolean; depth: "concept" | "method" | "example"; sources: string[] }[];
+  comparison?: {
+    kind: "exercise" | "topic"; conditions: string[]; tasks: string[]; knowledge_points: string[];
+    inferred_methods: string[]; allowed_variations: string[]; unknowns: string[];
+  } | null;
 }
 export interface BiliEvidence { id: number; start_ms: number; end_ms: number; text: string; url: string }
 export interface BiliUnit {

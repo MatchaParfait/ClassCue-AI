@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,11 +30,25 @@ class Requirement(Strict):
     sources: list[str] = Field(min_length=1, max_length=20)
 
 
+ComparisonText = Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class QuestionComparison(Strict):
+    kind: Literal["exercise", "topic"]
+    conditions: list[ComparisonText] = Field(default_factory=list, max_length=30)
+    tasks: list[ComparisonText] = Field(default_factory=list, max_length=30)
+    knowledge_points: list[ComparisonText] = Field(default_factory=list, max_length=12)
+    inferred_methods: list[ComparisonText] = Field(default_factory=list, max_length=8)
+    allowed_variations: list[ComparisonText] = Field(default_factory=list, max_length=8)
+    unknowns: list[ComparisonText] = Field(default_factory=list, max_length=12)
+
+
 class Target(Strict):
     course: str = Field(default="", max_length=200)
     requirements: list[Requirement] = Field(min_length=1, max_length=8)
     keywords: list[str] = Field(default_factory=list, max_length=12)
     unknowns: list[str] = Field(default_factory=list, max_length=8)
+    comparison: QuestionComparison | None = None
 
     @model_validator(mode="after")
     def validate_requirements(self):
@@ -84,6 +98,9 @@ def validate_sources(target: Target, snapshot: dict, *, allow_user=False):
     allowed = {"marker.title", "marker.note", "marker.source_quote"}
     allowed.update("context." + key for key, value in snapshot["context"].items() if value)
     allowed.update(f"classroom:{s['id']}" for s in snapshot["classroom_segments"])
+    question = snapshot.get("question") or {}
+    if question.get("status") == "ready":
+        allowed.update(source for requirement in question["target"]["requirements"] for source in requirement["sources"])
     if allow_user:
         allowed.add("user.confirmed")
     if any(source not in allowed for req in target.requirements for source in req.sources):
@@ -201,6 +218,9 @@ class HarnessService:
     def plan(self, run):
         self.bind(run)
         try:
+            question = run["input"].get("question")
+            if question and question.get("status") != "ready":
+                raise ValueError("题目材料需先完成分析或补充信息")
             self.status("planning", "正在建立目标及两阶段搜索方案")
             result = self.request(
                 "生成检索目标和两组搜索词。target包含course、requirements(id,text,required,depth,sources)、"
@@ -208,8 +228,11 @@ class HarnessService:
                 "marker.source_quote、非空context字段(context.course等)或classroom:字幕id。"
                 "要求必须有输入依据，不编造题干。exact_queries为精准知识点搜索；course_queries为失败后"
                 "使用的课程类别搜索，各最多3条(text,purpose)。课程不明确时course留空且不生成课程搜索词。"
-                "有例题需求时设置example深度；没有具体题目也可要求同知识点例题，不要求原题。",
+                "有例题需求时设置example深度；没有具体题目也可要求同知识点例题，不要求原题。"
+                "若输入包含question.target，按该目标生成搜索词并原样返回target，不得放宽核心要求。",
                 run["input"], Plan)
+            if question:
+                result.target = Target.model_validate(question["target"])
             validate_sources(result.target, run["input"])
             if not result.target.course and result.course_queries:
                 raise ValueError("课程类别不明确，请补充课程信息")

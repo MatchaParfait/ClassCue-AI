@@ -303,6 +303,8 @@ class VideoStore:
             )
             initialize_subtitle_search(connection)
             initialize_bilibili(connection)
+            from classcue.question_store import initialize_questions
+            initialize_questions(connection)
             self._restore_completed_analysis_status(connection)
 
     @staticmethod

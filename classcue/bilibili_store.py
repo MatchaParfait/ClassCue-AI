@@ -95,14 +95,14 @@ class BilibiliStore:
             )
         return value
 
-    def snapshot(self, marker_id: int) -> dict:
+    def snapshot(self, marker_id: int, *, include_question: bool = True) -> dict:
         marker = self.marker(marker_id)
         segments = self.store.get_segments(marker["video_id"])
         transcript = [
             {"id": item.id, "start_ms": item.start_ms, "end_ms": item.end_ms, "text": item.text}
             for item in segments
         ]
-        return {
+        snapshot = {
             "version": VERSION,
             "marker": {key: marker[key] for key in (
                 "id", "video_id", "start_ms", "end_ms", "title", "note", "source_quote", "analysis_mode",
@@ -114,6 +114,12 @@ class BilibiliStore:
             ],
             "transcript_hash": digest(transcript),
         }
+        if include_question:
+            from classcue.question_store import QuestionStore
+            question = QuestionStore(self.store).search_projection(marker_id, snapshot)
+            if question is not None:
+                snapshot["question"] = question
+        return snapshot
 
     def create_run(self, snapshot: dict, profile: dict) -> dict:
         run = {

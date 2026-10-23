@@ -135,7 +135,7 @@ class OpenAICompatibleJudge:
         return self._validate_selection(selection, chunk, strict_mode)
 
     def _request_content(
-        self, prompt: str, system_prompt: str, max_tokens: int,
+        self, prompt: str | list[dict[str, Any]], system_prompt: str, max_tokens: int,
         *, json_mode: bool | None = None,
     ) -> str:
         if not self.model:

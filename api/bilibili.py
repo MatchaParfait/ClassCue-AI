@@ -181,6 +181,8 @@ def router(provider, jobs, account_directory: Path) -> APIRouter:
             snapshot = repo.snapshot(marker_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="考点不存在") from None
+        if snapshot.get("question") and snapshot["question"]["status"] != "ready":
+            raise HTTPException(status_code=409, detail="请先完成题目分析或补充题目信息")
         profile, key = model_settings()
         run = repo.create_run(snapshot, profile.model_dump(exclude={"credential_id"}))
         return submit(repo, run, profile, key, "bilibili_plan")
