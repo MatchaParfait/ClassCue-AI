@@ -8,6 +8,7 @@ import { TopBar } from "../components/TopBar";
 import { useReviewTabs } from "../components/ReviewTabs";
 import { parseSearchSeek } from "../searchNavigation";
 import { ReviewSidebar } from "../components/ReviewSidebar";
+import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
 import { VideoPanel } from "../components/VideoPanel";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useStudyData } from "../hooks/useStudyData";
@@ -52,6 +53,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
   const [lastRemoved, setLastRemoved] = useState<{ marker: Marker; previous: ReviewStatus } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bilibiliMarkerId, setBilibiliMarkerId] = useState<number | null>(null);
   const reviewBackground = useRef<HTMLDivElement>(null);
   const reviewDialog = useRef<HTMLElement>(null);
   const reviewDialogClose = useRef<HTMLButtonElement>(null);
@@ -257,6 +259,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               getCurrentTimeMs={() => (videoRef.current?.currentTime ?? currentTime) * 1000}
               onSaveTime={saveJumpTime}
               onChangeImportance={async (marker, importance) => { await importanceMutation.mutateAsync({ marker, importance }); }}
+              onSearchBilibili={mockMode ? undefined : marker => setBilibiliMarkerId(marker.id)}
               onChangeStatus={updateStatus}
               onUndo={undoRemove}
               canUndo={Boolean(lastRemoved)}
@@ -268,6 +271,9 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
         </div>
       </main>
       </div>
+      {!mockMode && allMarkers.some(marker => marker.id === bilibiliMarkerId) && <BilibiliStudyPanel
+        key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
+        backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}
       <AnimatePresence>{notice && (
         <AnimatedPopup key="notice" duration={.18} className="toast" role="status">
           <CheckCircle2 size={17} /><span>{notice}</span>

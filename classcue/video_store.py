@@ -12,6 +12,7 @@ from pathlib import Path
 
 from classcue.core import TranscriptSegment, TriggerMatch
 from classcue.sqlite_connection import ClosingConnection
+from classcue.bilibili_store import initialize_bilibili
 from classcue.subtitle_search import initialize_subtitle_search, search_subtitles
 
 
@@ -301,6 +302,7 @@ class VideoStore:
                 """
             )
             initialize_subtitle_search(connection)
+            initialize_bilibili(connection)
             self._restore_completed_analysis_status(connection)
 
     @staticmethod

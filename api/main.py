@@ -89,6 +89,7 @@ from classcue.slide_extractor import SlideRoi, extract_and_store_slides
 from classcue.recall_schemes import ModeId, RecallPromptInput, RecallSchemeInput, freeze_schemes, preview_recall_prompt
 from classcue.subtitle_search import MAX_PAGE_SIZE, MAX_QUERY_LENGTH, MAX_SQLITE_INTEGER, validate_query
 from api.denoise import router as denoise_router
+from api.bilibili import router as bilibili_router
 from classcue.video_library import register_managed_video, video_filename
 from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
 from classcue.api_failure import ApiUnavailable
@@ -929,6 +930,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     api = FastAPI(title="课堂视频重点复习 API", version=VERSION, lifespan=lifespan)
     api.include_router(denoise_router)
+    from classcue.app_storage import DATA_DIR
+    api.include_router(bilibili_router(
+        provider, jobs, store.path.parent if store is not None else DATA_DIR,
+    ))
     api.include_router(update_router(update_center, jobs, provider, storage_migrating, updating))
     api.state.update_center = update_center
     api.state.updating = updating

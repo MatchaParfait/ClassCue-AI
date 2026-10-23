@@ -107,7 +107,10 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
             if path.is_file()} <= files
     assert {path.relative_to(ROOT).as_posix() for path in (ROOT / "assets").rglob("*")
             if path.is_file()} <= files
-    assert {name for name in files if name.startswith("docs/")} == {"docs/dolphin_upstream_LICENSE.txt"}
+    assert {name for name in files if name.startswith("docs/")} == {
+        "docs/dolphin_upstream_LICENSE.txt", "docs/dsh_bili_humanism_LICENSE.txt",
+        "docs/bilibili-study.md", "docs/bilibili-harness-plan.md",
+    }
     assert not any(name.startswith(("tests/", "experiments/", ".github/")) for name in files)
     assert not {f"scripts/{name}" for name in source_only_scripts} & files
     assert {"LICENSE", "scripts/desktop_launcher.vbs", "api/main.py", "classcue/pages/review.py"} <= files

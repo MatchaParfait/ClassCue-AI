@@ -1,6 +1,6 @@
 import { useShortcuts, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedListItem, AnimatedQuote, Collapse, FadeRegion, SelectionIndicator, useEntryMotion, useSelectionScope } from "./Motion";
-import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, Pencil, Trash2, Undo2 } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, Pencil, Search, Trash2, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AnalysisRun, Marker, MarkerImportance, MarkerMode, RecallMode, ReviewFilter, ReviewStatus } from "../types";
 import { recallLabel, useRecallSchemes } from "../hooks/useRecallSchemes";
@@ -37,6 +37,7 @@ interface ReviewSidebarProps {
   getCurrentTimeMs: () => number;
   onSaveTime: (marker: Marker, timeMs: number | null) => Promise<void>;
   onChangeImportance: (marker: Marker, importance: MarkerImportance) => Promise<void>;
+  onSearchBilibili?: (marker: Marker) => void;
 }
 
 export function ReviewSidebar({
@@ -66,6 +67,7 @@ export function ReviewSidebar({
   getCurrentTimeMs,
   onSaveTime,
   onChangeImportance,
+  onSearchBilibili,
 }: ReviewSidebarProps) {
   const shortcuts = useShortcuts();
   const schemes = useRecallSchemes(Boolean(analysisVideoId));
@@ -177,6 +179,10 @@ export function ReviewSidebar({
                 onClick={() => setExpandedQuotes((current) => { const next = new Set(current); if (next.has(marker.id)) next.delete(marker.id); else next.add(marker.id); return next; })}>{expandedQuotes.has(marker.id) ? "收起原文" : "展开原文"}<ChevronDown size={14} /></button>}
             </div>
             <div className="marker-actions">
+              {onSearchBilibili && <button className="text-button compact" type="button"
+                title={`查找 B 站讲解：${marker.title}`} onClick={() => onSearchBilibili(marker)}>
+                <Search size={14} /><span>B 站讲解</span>
+              </button>}
               <button className="danger-action" type="button" disabled={timeSaving} onClick={() => onChangeStatus(marker, "excluded")} title="移除这个重点">
                 <Trash2 size={14} />
                 <span>移除</span>

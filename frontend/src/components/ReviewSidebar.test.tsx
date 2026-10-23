@@ -27,6 +27,7 @@ describe("recall review navigation", () => {
       editingMarkerId: null, timeSaving: false, onEditMarker: vi.fn(), durationMs: 10000, currentTimeMs: 0,
       getCurrentTimeMs: () => 0, onSaveTime: vi.fn().mockResolvedValue(undefined),
       onChangeImportance: vi.fn().mockResolvedValue(undefined),
+      onSearchBilibili: vi.fn(),
     };
     try {
       render(<ReviewSidebar {...props} />);
@@ -44,6 +45,9 @@ describe("recall review navigation", () => {
       expect(props.onSelectMarker).toHaveBeenCalledTimes(1);
       expect(props.onSelectMarker).toHaveBeenCalledWith(markers[0]);
       props.onSelectMarker.mockClear();
+      act(() => container.querySelector<HTMLButtonElement>('[title^="查找 B 站讲解"]')!.click());
+      expect(props.onSearchBilibili).toHaveBeenCalledWith(markers[0]);
+      expect(props.onSelectMarker).not.toHaveBeenCalled();
       for (const selector of [".marker-main strong", ".marker-note", ".marker-quote", ".marker-evidence", ".marker-item"]) {
         act(() => container.querySelector<HTMLElement>(selector)!.click());
         expect(props.onSelectMarker).toHaveBeenCalledTimes(1);

@@ -73,7 +73,7 @@ export async function downloadStudyShare(video: Video): Promise<void> {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
