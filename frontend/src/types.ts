@@ -90,6 +90,8 @@ export interface VideoSlide {
   image_hash: string;
   retention_class: SlideRetentionClass;
   confidence: number;
+  is_llm_preferred: boolean;
+  information_score: number;
   roi: { x: number; y: number; width: number; height: number };
   ignore_regions: { x: number; y: number; width: number; height: number }[];
   extraction_version: string;

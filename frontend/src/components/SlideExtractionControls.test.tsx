@@ -19,6 +19,7 @@ const saved: VideoSlide = {
   id: 1, video_id: 7, start_ms: 0, end_ms: 12000, representative_ms: 11000,
   visible_from_ms: 8000, visible_until_ms: 12000, page_start_ms: 0, page_end_ms: 12000,
   duration_ms: 12000, image_hash: "synthetic", retention_class: "primary", confidence: 0.9,
+  is_llm_preferred: true, information_score: 0.9,
   roi: { x: 0, y: 0, width: 640, height: 360 },
   ignore_regions: [{ x: 540, y: 270, width: 80, height: 70 }],
   extraction_version: "slide-v2", image_url: "/fixture.jpg",

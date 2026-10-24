@@ -68,8 +68,8 @@
 }
 .slide-roi-note { color: var(--ui-muted); font-size: 12px; }
 .slide-extraction-job { display: grid; gap: 8px; padding-top: 4px; }
-.ppt-viewer-backdrop { z-index: 1300; padding: 24px; background: rgb(10 14 13 / 76%); }
-.ppt-viewer-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: min(1420px, 100%); height: min(900px, calc(100dvh - 48px)); min-width: 0; overflow: hidden; border: 1px solid var(--ui-border-strong); border-radius: 10px; background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 28px 90px rgb(0 0 0 / 34%); }
+.ppt-viewer-backdrop { z-index: 1300; padding: 14px; background: rgb(10 14 13 / 76%); }
+.ppt-viewer-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: min(1840px, calc(100vw - 28px)); height: min(1020px, calc(100dvh - 28px)); min-width: 0; overflow: hidden; border: 1px solid var(--ui-border-strong); border-radius: 10px; background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 28px 90px rgb(0 0 0 / 34%); }
 .ppt-viewer-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 20px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface-soft); }
 .ppt-viewer-heading, .ppt-viewer-header-meta, .ppt-viewer-page-title > div, .ppt-viewer-time-grid span, .ppt-viewer-actions, .ppt-viewer-nav { display: flex; align-items: center; }
 .ppt-viewer-heading { min-width: 0; gap: 11px; color: var(--ui-accent-strong); }
@@ -77,6 +77,14 @@
 .ppt-viewer-heading h2 { margin: 0; font-size: 18px; }
 .ppt-viewer-heading p { max-width: min(560px, 55vw); margin: 3px 0 0; overflow: hidden; color: var(--ui-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .ppt-viewer-header-meta { flex: 0 0 auto; gap: 14px; color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-export { position: relative; }
+.ppt-viewer-export-options { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; display: grid; gap: 12px; width: 288px; max-width: calc(100vw - 44px); padding: 16px; border: 1px solid var(--ui-border-strong); border-radius: 8px; background: var(--ui-surface); box-shadow: 0 8px 28px rgb(0 0 0 / 18%); color: var(--ui-text); }
+.ppt-viewer-export-options fieldset { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.ppt-viewer-export-options legend { margin-bottom: 12px; font-weight: 600; }
+.ppt-viewer-export-options label { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; }
+.ppt-viewer-export-options label span { margin-left: auto; color: var(--ui-muted); white-space: nowrap; }
+.ppt-viewer-export-options input { accent-color: var(--ui-accent-strong); }
+.ppt-viewer-export-options p { margin: 0; color: var(--ui-red); font-size: 12px; overflow-wrap: anywhere; }
 .ppt-viewer-time-axis { display: grid; gap: 6px; padding: 16px 20px 13px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
 .ppt-viewer-axis-labels { position: relative; height: 16px; color: var(--ui-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .ppt-viewer-axis-labels span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
@@ -91,9 +99,13 @@
 .ppt-viewer-axis-segment:hover, .ppt-viewer-axis-segment.is-selected { opacity: 1; filter: brightness(1.12); transform: translateY(-1px); z-index: 1; }
 .ppt-viewer-axis-segment.is-selected { box-shadow: 0 0 0 2px var(--ui-surface), 0 0 0 3px currentColor; }
 .ppt-viewer-axis-caption { display: flex; justify-content: space-between; gap: 12px; color: var(--ui-muted); font-size: 10px; }
-.ppt-viewer-body { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); min-height: 0; }
+.ppt-viewer-body { display: grid; grid-template-columns: minmax(232px, 24%) minmax(0, 1fr); min-height: 0; }
 .ppt-viewer-timeline { min-width: 0; overflow: hidden; border-right: 1px solid var(--ui-border); background: var(--ui-surface-soft); }
-.ppt-viewer-timeline-heading { display: flex; justify-content: space-between; gap: 12px; padding: 13px 14px; border-bottom: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 12px; }
+.ppt-viewer-mode-switch { display: inline-flex; min-width: 0; padding: 2px; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface); }
+.ppt-viewer-mode-switch button { min-width: 0; padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--ui-muted); font-size: 11px; cursor: pointer; }
+.ppt-viewer-mode-switch button:hover { color: var(--ui-text); background: var(--ui-surface-soft); }
+.ppt-viewer-mode-switch button.is-active { background: var(--ui-accent-soft); color: var(--ui-accent-strong); font-weight: 700; }
 .ppt-viewer-list { height: calc(100% - 44px); overflow: auto; padding: 6px; }
 .ppt-viewer-item { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ui-text); text-align: left; cursor: pointer; }
 .ppt-viewer-item:hover { background: var(--ui-surface); border-color: var(--ui-border); }
@@ -105,7 +117,13 @@
 .ppt-viewer-item-copy span { color: var(--ui-muted); font-size: 11px; line-height: 1.4; }
 .ppt-viewer-item-copy small { width: fit-content; font-size: 10px; }
 .ppt-viewer-preview { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; background: color-mix(in srgb, var(--ui-surface-soft) 52%, #101413); }
-.ppt-viewer-image-wrap { display: grid; place-items: center; min-height: 0; padding: 24px; background: #101413; }
+.ppt-viewer-media-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-self: center; width: 100%; aspect-ratio: 16 / 9; min-width: 0; max-height: 100%; gap: 1px; background: var(--ui-border); }
+.ppt-viewer-video-panel, .ppt-viewer-image-wrap { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; padding: 12px; background: #101413; }
+.ppt-viewer-media-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; padding: 0 2px 8px; color: var(--ui-muted); font-size: 11px; }
+.ppt-viewer-media-heading span { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text); font-weight: 600; }
+.ppt-viewer-media-heading time { font-variant-numeric: tabular-nums; }
+.ppt-viewer-video { display: block; align-self: center; justify-self: center; width: 100%; height: auto; aspect-ratio: 16 / 9; max-height: 100%; min-height: 0; background: #050706; object-fit: contain; box-shadow: 0 12px 34px rgb(0 0 0 / 28%); }
+.ppt-viewer-image-wrap { place-items: center; }
 .ppt-viewer-image-wrap img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 12px 34px rgb(0 0 0 / 28%); }
 .ppt-viewer-details { display: grid; gap: 14px; padding: 16px 20px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
 .ppt-viewer-page-title { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
@@ -144,8 +162,13 @@
   .ppt-viewer-item { flex: 0 0 206px; }
   .ppt-viewer-item-copy { display: none; }
   .ppt-viewer-item-thumb { width: 100%; }
-  .ppt-viewer-image-wrap { padding: 12px; }
+  .ppt-viewer-media-grid { align-self: stretch; width: auto; aspect-ratio: auto; grid-template-columns: 1fr; grid-template-rows: minmax(170px, .9fr) minmax(170px, 1.1fr); }
+  .ppt-viewer-video-panel, .ppt-viewer-image-wrap { padding: 10px; }
   .ppt-viewer-heading p { max-width: 45vw; }
+  .ppt-viewer-header { flex-wrap: wrap; gap: 10px; padding: 12px; }
+  .ppt-viewer-header-meta { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .ppt-viewer-header-meta > span { margin-right: auto; }
+  .ppt-viewer-export-options { right: -44px; }
 }
 .slide-extraction-job .job-progress { width: 100%; }
 .process-page .video-info-selected { margin-top: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }

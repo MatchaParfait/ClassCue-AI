@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Ban, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Image as ImageIcon, LoaderCircle, MapPin, Presentation, X } from "lucide-react";
+import { AlertCircle, Ban, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download, Film, Image as ImageIcon, LoaderCircle, MapPin, Presentation, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
-import { cancelJob, extractVideoSlides, getJob, getSlideImageUrl, getVideoSlides } from "../api/client";
+import { cancelJob, downloadSlidePdf, extractVideoSlides, getJob, getSlideImageUrl, getStreamUrl, getVideoSlides } from "../api/client";
 import type { Job, Video, VideoSlide } from "../types";
 import { canOpenReview, formatTime } from "../utils";
 import { AnimatedOverlay, motion, useMotionTransition, useReducedMotion } from "./Motion";
@@ -25,13 +25,18 @@ export function PptViewer({
   const open = active && video !== null;
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const inlineVideoRef = useRef<HTMLVideoElement>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [inlineVideoTime, setInlineVideoTime] = useState(0);
   const [jobId, setJobId] = useState<string | number | null>(null);
   const [extractError, setExtractError] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const reduced = useReducedMotion();
   const transition = useMotionTransition(.18);
+  const [viewMode, setViewMode] = useState<"timeline_states" | "preferred_pages">("preferred_pages");
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMode, setExportMode] = useState<"timeline_states" | "preferred_pages">("preferred_pages");
   const slides = useQuery({
     queryKey: ["slides", video?.id, "viewer"],
     queryFn: () => getVideoSlides(video!.id, { include_auxiliary: true }),
@@ -61,10 +66,16 @@ export function PptViewer({
     onSuccess: (result) => queryClient.setQueryData(["jobs", jobId], result),
     onError: (reason) => setExtractError(reason instanceof Error ? reason.message : "停止提取失败"),
   });
+  const exportPdf = useMutation({
+    mutationFn: () => downloadSlidePdf(video!, exportMode),
+    onSuccess: () => setExportOpen(false),
+  });
 
   useModalFocus(open, dialogRef, closeRef, onClose, backgroundRef);
 
-  const items = useMemo(() => [...(slides.data ?? [])].sort((a, b) => a.start_ms - b.start_ms), [slides.data]);
+  const allItems = useMemo(() => [...(slides.data ?? [])].sort((a, b) => a.start_ms - b.start_ms), [slides.data]);
+  const preferredItems = useMemo(() => allItems.filter((slide) => slide.is_llm_preferred), [allItems]);
+  const items = viewMode === "preferred_pages" ? preferredItems : allItems;
   const selected = items.find((slide) => slide.id === selectedId) ?? items[0] ?? null;
   const selectedIndex = selected ? items.findIndex((slide) => slide.id === selected.id) : -1;
   const timelineDuration = Math.max(1, video?.duration_ms ?? 0, items.at(-1)?.end_ms ?? 0);
@@ -82,16 +93,48 @@ export function PptViewer({
   useEffect(() => {
     if (!open) {
       setSelectedId(null);
+      setViewMode("preferred_pages");
+      setExportOpen(false);
       return;
     }
     if (items.length && !items.some((slide) => slide.id === selectedId)) setSelectedId(items[0].id);
   }, [items, open, selectedId]);
+
+  useEffect(() => {
+    setViewMode("preferred_pages");
+    setExportMode("preferred_pages");
+    setExportOpen(false);
+    setSelectedId(null);
+  }, [video?.id]);
 
   const selectRelative = (offset: number) => {
     if (selectedIndex < 0 || items.length === 0) return;
     const next = Math.max(0, Math.min(items.length - 1, selectedIndex + offset));
     setSelectedId(items[next].id);
   };
+
+  const seekInlineVideo = (slide: VideoSlide | null) => {
+    if (!slide) return;
+    const target = Math.max(0, slide.representative_ms / 1000);
+    const element = inlineVideoRef.current;
+    if (element) {
+      const duration = Number.isFinite(element.duration) && element.duration > 0
+        ? element.duration
+        : (video?.duration_ms ?? 0) / 1000;
+      element.currentTime = duration > 0 ? Math.min(target, duration) : target;
+    }
+    setInlineVideoTime(target);
+  };
+
+  useEffect(() => {
+    if (!open) {
+      inlineVideoRef.current?.pause();
+      setSelectedId(null);
+      setInlineVideoTime(0);
+      return;
+    }
+    if (selected) seekInlineVideo(selected);
+  }, [open, selected?.id]);
 
   const jumpToVideo = (slide: VideoSlide) => {
     if (!video || !canOpenReview(video.status, Boolean(video.has_transcript))) return;
@@ -128,7 +171,45 @@ export function PptViewer({
             </div>
           </div>
           <div className="ppt-viewer-header-meta">
-            <span>{items.length} 个时间实例</span>
+            <span>{viewMode === "preferred_pages" ? `${items.length} 个精选页面` : `${items.length} 个时间状态`}</span>
+            <div className="ppt-viewer-export">
+              <button
+                className="secondary-button compact"
+                type="button"
+                disabled={allItems.length === 0 || slides.isPending || slides.isError || exportPdf.isPending}
+                aria-expanded={exportOpen}
+                aria-controls="ppt-export-options"
+                onClick={() => {
+                  setExportOpen(!exportOpen);
+                  setExportMode("preferred_pages");
+                  exportPdf.reset();
+                }}
+              ><Download size={15} />导出 PDF</button>
+              {exportOpen && (
+                <div className="ppt-viewer-export-options" id="ppt-export-options">
+                  <fieldset disabled={exportPdf.isPending}>
+                    <legend>导出范围</legend>
+                    <label><input type="radio" name="ppt-export-mode" value="preferred_pages"
+                      checked={exportMode === "preferred_pages"}
+                      onChange={() => setExportMode("preferred_pages")} />
+                      PPT 页面精选 <span>{preferredItems.length} 页</span>
+                    </label>
+                    <label><input type="radio" name="ppt-export-mode" value="timeline_states"
+                      checked={exportMode === "timeline_states"}
+                      onChange={() => setExportMode("timeline_states")} />
+                      PPT 时间轴状态 <span>{allItems.length} 页</span>
+                    </label>
+                  </fieldset>
+                  {exportPdf.isError && <p role="alert">{exportPdf.error instanceof Error ? exportPdf.error.message : "PDF 导出失败，请重试"}</p>}
+                  <button className="primary-button compact" type="button"
+                    disabled={exportPdf.isPending || (exportMode === "preferred_pages" ? preferredItems.length : allItems.length) === 0}
+                    onClick={() => exportPdf.mutate()}>
+                    {exportPdf.isPending ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+                    {exportPdf.isPending ? "正在导出…" : "下载 PDF"}
+                  </button>
+                </div>
+              )}
+            </div>
             <button ref={closeRef} className="icon-button" type="button" onClick={onClose} aria-label="关闭 PPT 查看器" title="关闭">
               <X size={19} />
             </button>
@@ -136,7 +217,7 @@ export function PptViewer({
         </header>
 
         {!slides.isPending && !slides.isError && items.length > 0 && (
-          <section className="ppt-viewer-time-axis" aria-label="视频中的 PPT 时间轴">
+          <section className="ppt-viewer-time-axis" aria-label={viewMode === "preferred_pages" ? "PPT 页面精选时间轴" : "PPT 时间轴状态"}>
             <div className="ppt-viewer-axis-labels" aria-hidden="true">
               {timeTicks.map((percent) => <span key={percent} style={{ left: `${percent}%` }}>{formatTime(timelineDuration * percent / 100)}</span>)}
             </div>
@@ -169,12 +250,23 @@ export function PptViewer({
             <div><strong>PPT 图片读取失败</strong><p>{slides.error instanceof Error ? slides.error.message : "请稍后重试。"}</p></div>
           </div>
         )}
-        {!slides.isPending && !slides.isError && items.length === 0 && (
+        {!slides.isPending && !slides.isError && allItems.length > 0 && items.length === 0 && (
+          <div className="ppt-viewer-state">
+            <ImageIcon size={28} />
+            <div>
+              <strong>暂无 PPT 页面精选</strong>
+              <p>当前提取结果还没有可供视觉分析的精选页面。</p>
+              <button className="secondary-button compact" type="button"
+                onClick={() => setViewMode("timeline_states")}>查看 PPT 时间轴状态</button>
+            </div>
+          </div>
+        )}
+        {!slides.isPending && !slides.isError && allItems.length === 0 && (
           <div className="ppt-viewer-state ppt-viewer-empty-state">
             <ImageIcon size={28} />
             <div>
               <strong>还没有提取出的 PPT 页面</strong>
-              <p>可以直接从这里开始提取，完成后会自动显示时间轴和页面截图。</p>
+              <p>可以直接从这里开始提取，完成后会自动显示 PPT 时间轴状态和页面精选。</p>
               <button className="primary-button compact" type="button" onClick={() => extraction.mutate()} disabled={isExtracting}>
                 {isExtracting ? <LoaderCircle className="spin" size={15} /> : <Presentation size={15} />}
                 {isExtracting ? "正在提取 PPT…" : "提取 PPT 页面"}
@@ -192,9 +284,24 @@ export function PptViewer({
         )}
         {!slides.isPending && !slides.isError && selected && (
           <div className="ppt-viewer-body">
-            <aside className="ppt-viewer-timeline" aria-label="PPT 时间轴">
+            <aside className="ppt-viewer-timeline" aria-label={viewMode === "preferred_pages" ? "PPT 页面精选" : "PPT 时间轴状态"}>
               <div className="ppt-viewer-timeline-heading">
-                <span>时间轴</span>
+                <div className="ppt-viewer-mode-switch" role="tablist" aria-label="PPT 查看模式">
+                  <button
+                    className={viewMode === "preferred_pages" ? "is-active" : ""}
+                    type="button"
+                    role="tab"
+                    aria-selected={viewMode === "preferred_pages"}
+                    onClick={() => setViewMode("preferred_pages")}
+                  >页面精选</button>
+                  <button
+                    className={viewMode === "timeline_states" ? "is-active" : ""}
+                    type="button"
+                    role="tab"
+                    aria-selected={viewMode === "timeline_states"}
+                    onClick={() => setViewMode("timeline_states")}
+                  >时间轴状态</button>
+                </div>
                 <span>{selectedIndex + 1} / {items.length}</span>
               </div>
               <div className="ppt-viewer-list">
@@ -220,8 +327,33 @@ export function PptViewer({
             </aside>
 
             <section className="ppt-viewer-preview" aria-label={`页面 ${selectedIndex + 1} 预览`}>
-              <div className="ppt-viewer-image-wrap">
-                <img src={getSlideImageUrl(selected)} alt={`PPT 页面 ${selectedIndex + 1}`} />
+              <div className="ppt-viewer-media-grid">
+                <div className="ppt-viewer-video-panel">
+                  <div className="ppt-viewer-media-heading">
+                    <span><Film size={15} aria-hidden="true" />视频画面</span>
+                    <time>{formatTime(inlineVideoTime * 1000)}</time>
+                  </div>
+                  <video
+                    ref={inlineVideoRef}
+                    className="ppt-viewer-video"
+                    src={getStreamUrl(video.id)}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    aria-label="当前 PPT 对应的视频画面"
+                    onLoadedMetadata={() => seekInlineVideo(selected)}
+                    onTimeUpdate={(event) => setInlineVideoTime(event.currentTarget.currentTime)}
+                  >
+                    你的浏览器不支持视频播放。
+                  </video>
+                </div>
+                <div className="ppt-viewer-image-wrap">
+                  <div className="ppt-viewer-media-heading">
+                    <span><Presentation size={15} aria-hidden="true" />PPT 截图</span>
+                    <time>{formatTime(selected.representative_ms)}</time>
+                  </div>
+                  <img src={getSlideImageUrl(selected)} alt={`PPT 页面 ${selectedIndex + 1}`} />
+                </div>
               </div>
               <div className="ppt-viewer-details">
                 <div className="ppt-viewer-page-title">

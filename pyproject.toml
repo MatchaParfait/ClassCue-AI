@@ -19,6 +19,7 @@ dependencies = [
     "pydantic>=2.8.0",
     "python-dotenv>=1.0.0",
     "qrcode>=8.2,<9",
+    "reportlab>=4.4,<5",
     "scikit-image>=0.24,<1",
     "streamlit>=1.39.0",
     "uvicorn[standard]>=0.30.0",
@@ -27,6 +28,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
+    "pypdf>=6,<7",
 ]
 
 [project.optional-dependencies]

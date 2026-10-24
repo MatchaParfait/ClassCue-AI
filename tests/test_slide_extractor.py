@@ -128,16 +128,19 @@ def test_incremental_formulas_save_only_complete_image_and_actual_visibility(tmp
     second = slide_image("x = a + b", "y = x * 2")
     final = slide_image("x = a + b", "y = x * 2", "z = x + y")
     result = extract_images(tmp_path, [(first, 6), (second, 6), (final, 3)])
-    assert len(result.slides) == 1
-    slide = result.slides[0]
-    assert (slide.start_ms, slide.end_ms) == (0, 15_000)
+    assert len(result.slides) == 3
+    preferred = [slide for slide in result.slides if slide.is_llm_preferred]
+    assert len(preferred) == 1
+    slide = preferred[0]
+    assert (slide.start_ms, slide.end_ms) == (12_000, 15_000)
     assert slide.visible_from_ms == 12_000
     assert slide.visible_until_ms == 15_000
     assert 12_000 <= slide.representative_ms < 15_000
     assert slide.retention_class == "primary"
     assert (slide.page_start_ms, slide.page_end_ms) == (0, 15_000)
     assert np.abs(decode_image(slide.image_path).astype(float) - final).mean() < 2
-    assert len(list((tmp_path / "frames").glob("*.jpg"))) == 1
+    assert sum(slide.retention_class == "animation" for slide in result.slides) == 2
+    assert len(list((tmp_path / "frames").glob("*.jpg"))) == 3
 
 
 def test_small_persistent_formula_below_old_area_gate_is_retained(tmp_path):
@@ -145,10 +148,39 @@ def test_small_persistent_formula_below_old_area_gate_is_retained(tmp_path):
     final = first.copy()
     cv2.putText(final, "E=mc2", (390, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (10, 10, 10), 1)
     result = extract_images(tmp_path, [(first, 12), (final, 3)])
-    assert len(result.slides) == 1
-    assert result.slides[0].visible_from_ms == 12_000
-    assert np.abs(decode_image(result.slides[0].image_path)[278:300, 385:455].astype(float)
+    assert len(result.slides) == 2
+    slide = max(result.slides, key=lambda item: item.information_score)
+    assert slide.is_llm_preferred
+    assert slide.visible_from_ms == 12_000
+    assert np.abs(decode_image(slide.image_path)[278:300, 385:455].astype(float)
                   - final[278:300, 385:455]).mean() < 3
+
+
+def test_visual_evidence_sends_only_preferred_animation_state(tmp_path, monkeypatch):
+    first = slide_image("x = a + b")
+    second = slide_image("x = a + b", "y = x * 2")
+    final = slide_image("x = a + b", "y = x * 2", "z = x + y")
+    source = tmp_path / "formula.mkv"
+    make_slide_video(source, [(first, 6), (second, 6), (final, 3)], width=640, height=360)
+    store = VideoStore(tmp_path / "data" / "project.db")
+    video_id = store.create_video("e" * 64, source.name, str(source), "audio.wav", 15_000)
+    root = tmp_path / "slides"
+    extract_and_store_slides(store, video_id, root)
+    monkeypatch.setattr(api_main.asr_storage, "slide_directory", lambda *args: root)
+    with TestClient(create_app(store)) as client:
+        payload = client.get(
+            f"/api/videos/{video_id}/visual-evidence?start_ms=0&end_ms=15000&context_ms=0"
+        ).json()
+        early_payload = client.get(
+            f"/api/videos/{video_id}/visual-evidence?start_ms=0&end_ms=1000&context_ms=0"
+        ).json()
+    assert len(payload["slides"]) == 3
+    assert sum(slide["is_llm_preferred"] for slide in payload["slides"]) == 1
+    assert len(payload["images"]) == 1
+    assert payload["images"][0]["slide_ids"] == [payload["slides"][-1]["id"]]
+    assert len(early_payload["slides"]) == 1
+    assert len(early_payload["images"]) == 1
+    assert early_payload["images"][0]["time_instances"][0]["visible_from_ms"] == 12_000
 
 
 def test_question_replaced_by_answer_keeps_complementary_images(tmp_path):
@@ -169,6 +201,7 @@ def test_erased_derivation_keeps_both_complementary_states(tmp_path):
         (slide_image("x = a + b", "z = a / b"), 6),
     ])
     assert len(result.slides) == 2
+    assert all(slide.is_llm_preferred for slide in result.slides)
 
 
 def test_removed_line_does_not_produce_redundant_image(tmp_path):
@@ -176,9 +209,12 @@ def test_removed_line_does_not_produce_redundant_image(tmp_path):
         (slide_image("x = a + b", "y = x * 2"), 8),
         (slide_image("x = a + b"), 4),
     ])
-    assert len(result.slides) == 1
+    assert len(result.slides) == 2
     assert result.slides[0].visible_until_ms == 8000
-    assert result.slides[0].end_ms == 12000
+    assert result.slides[0].end_ms == 8000
+    assert result.slides[1].end_ms == 12000
+    assert result.slides[0].is_llm_preferred
+    assert not result.slides[1].is_llm_preferred
 
 
 def test_formula_symbol_change_is_not_treated_as_extra_information(tmp_path):
@@ -188,6 +224,7 @@ def test_formula_symbol_change_is_not_treated_as_extra_information(tmp_path):
     cv2.line(final, (261, 89), (261, 111), (20, 20, 20), 2)
     result = extract_images(tmp_path, [(first, 6), (final, 6)])
     assert len(result.slides) == 2
+    assert all(slide.is_llm_preferred for slide in result.slides)
 
 
 def test_change_of_existing_formula_colour_is_not_discarded(tmp_path):
@@ -196,6 +233,7 @@ def test_change_of_existing_formula_colour_is_not_discarded(tmp_path):
         (slide_image("x = a + b", color=(230, 20, 20)), 6),
     ])
     assert len(result.slides) == 2
+    assert all(slide.is_llm_preferred for slide in result.slides)
 
 
 def test_one_second_overlay_is_not_published(tmp_path):
@@ -217,9 +255,11 @@ def test_gradual_formula_appearance_is_accumulated_against_stable_baseline(tmp_p
         scenes.append((gradual, 0.5))
     scenes.append((final, 3))
     result = extract_images(tmp_path, scenes)
-    assert len(result.slides) == 1
-    assert np.abs(decode_image(result.slides[0].image_path).astype(float) - final).mean() < 2
-    assert result.slides[0].visible_from_ms >= 6000
+    assert len(result.slides) == 2
+    preferred = [slide for slide in result.slides if slide.is_llm_preferred]
+    assert len(preferred) == 1
+    assert np.abs(decode_image(preferred[0].image_path).astype(float) - final).mean() < 2
+    assert preferred[0].visible_from_ms >= 9000
 
 
 def test_ignored_camera_changes_do_not_remove_camera_from_output(tmp_path):

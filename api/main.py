@@ -20,12 +20,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, RLock
-from tempfile import TemporaryDirectory
+from tempfile import SpooledTemporaryFile, TemporaryDirectory
 from typing import Annotated, Any, Callable, Literal
 from urllib.parse import quote, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -86,6 +87,7 @@ from classcue.video_pipeline import (
 from classcue.app_storage import load_data_root
 from classcue.video_store import VideoStore
 from classcue.slide_extractor import SlideRoi, extract_and_store_slides
+from classcue.slide_export import write_slide_pdf
 from classcue.recall_schemes import ModeId, RecallPromptInput, RecallSchemeInput, freeze_schemes, preview_recall_prompt
 from classcue.subtitle_search import MAX_PAGE_SIZE, MAX_QUERY_LENGTH, MAX_SQLITE_INTEGER, validate_query
 from api.denoise import router as denoise_router
@@ -2869,6 +2871,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "image_hash": str(row["image_hash"]),
             "retention_class": str(row["retention_class"]),
             "confidence": float(row["confidence"]),
+            "is_llm_preferred": bool(row["is_llm_preferred"] if row["is_llm_preferred"] is not None else 1),
+            "information_score": float(row["information_score"] if row["information_score"] is not None else 0),
             "roi": json.loads(row["roi_json"] or "{}"),
             "ignore_regions": json.loads(row["ignore_regions_json"] or "[]"),
             "extraction_version": str(row["extraction_version"]),
@@ -2951,6 +2955,48 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         )
         return [slide_payload(row, video_id) for row in rows]
 
+    @api.get("/api/videos/{video_id}/slides/export")
+    def export_video_slides(
+        video_id: int,
+        mode: Literal["preferred_pages", "timeline_states"] = Query(default="preferred_pages"),
+    ):
+        store = provider.get()
+        video = _video_or_404(store, video_id)
+        rows = store.list_slides(video_id, include_auxiliary=True)
+        if mode == "preferred_pages":
+            rows = [row for row in rows if row["is_llm_preferred"]]
+        if not rows:
+            raise HTTPException(status_code=409, detail="当前模式没有可导出的 PPT 图片")
+        label = "PPT 页面精选" if mode == "preferred_pages" else "PPT 时间轴状态"
+        title = str(video["display_name"] or video["filename"])
+        # Large exports spill to a temporary file instead of retaining every PDF byte in RAM.
+        output = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+        try:
+            write_slide_pdf(
+                rows, asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                output, title=f"{title} - {label}",
+            )
+            length = output.tell()
+            output.seek(0)
+        except (OSError, ValueError) as exc:
+            output.close()
+            raise HTTPException(status_code=409, detail="PPT 图片缺失或无法读取，请重新提取后再导出") from exc
+        except BaseException:
+            output.close()
+            raise
+        filename = "".join("_" if ord(char) < 32 or char in '<>:"/\\|?*' else char for char in title)[:140]
+        return StreamingResponse(
+            iter(lambda: output.read(64 * 1024), b""),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": 'attachment; filename="slides.pdf"; filename*=UTF-8\'\''
+                + quote(f"{filename} - {label}.pdf"),
+                "Content-Length": str(length),
+                "Cache-Control": "no-store",
+            },
+            background=BackgroundTask(output.close),
+        )
+
     @api.get("/api/videos/{video_id}/visual-evidence")
     def get_visual_evidence(
         video_id: int,
@@ -2978,8 +3024,18 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 include_auxiliary=True,
             )
         ]
+        matched_page_groups = {
+            (int(slide["page_start_ms"]), int(slide["page_end_ms"]))
+            for slide in slides
+        }
+        preferred_slides = [
+            slide_payload(row, video_id)
+            for row in store.list_slides(video_id, include_auxiliary=True)
+            if bool(row["is_llm_preferred"] if row["is_llm_preferred"] is not None else 1)
+            and (int(row["page_start_ms"]), int(row["page_end_ms"])) in matched_page_groups
+        ]
         images: dict[str, dict] = {}
-        for slide in slides:
+        for slide in preferred_slides:
             image = images.setdefault(slide["image_hash"], {
                 "image_hash": slide["image_hash"], "image_url": slide["image_url"],
                 "slide_ids": [], "time_instances": [],

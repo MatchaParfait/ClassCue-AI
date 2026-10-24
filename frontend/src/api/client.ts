@@ -73,6 +73,28 @@ export async function downloadStudyShare(video: Video): Promise<void> {
   }
 }
 
+export async function downloadSlidePdf(
+  video: Video, mode: "preferred_pages" | "timeline_states" = "preferred_pages",
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/videos/${video.id}/slides/export?mode=${mode}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(payload?.detail || `导出失败：HTTP ${response.status}`);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  const title = (video.display_name || video.filename).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 140);
+  const label = mode === "preferred_pages" ? "PPT 页面精选" : "PPT 时间轴状态";
+  anchor.href = url;
+  anchor.download = `${title} - ${label}.pdf`;
+  document.body.append(anchor);
+  try { anchor.click(); }
+  finally {
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,

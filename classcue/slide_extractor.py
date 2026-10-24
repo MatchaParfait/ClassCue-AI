@@ -16,7 +16,7 @@ import numpy as np
 from skimage.metrics import structural_similarity
 
 
-SLIDE_EXTRACTION_VERSION = "slide-v2-stable-coverage"
+SLIDE_EXTRACTION_VERSION = "slide-v4-overlay-aware-preferred"
 SAMPLE_INTERVAL_MS = 500
 STABLE_WINDOW_MS = 1500
 REPRESENTATIVE_TAIL_MS = 500
@@ -38,6 +38,12 @@ EDGE_LOW = 50
 EDGE_HIGH = 120
 COVERAGE_LOSS_RATIO = 0.002
 COVERAGE_PIXEL_THRESHOLD = 28
+SELECTION_LOSS_RATIO = 0.02
+SELECTION_COLOR_THRESHOLD = 40
+SELECTION_COMPONENT_PIXELS = 10
+CAPTION_BAND_START = 0.8
+CAPTION_CORE_CHANGE_RATIO = 0.004
+CAPTION_MIN_REPLACEMENTS = 3
 
 ProgressCallback = Callable[[float, str, str | None], None]
 
@@ -76,6 +82,8 @@ class SlideDraft:
     visible_until_ms: int
     page_start_ms: int
     page_end_ms: int
+    is_llm_preferred: bool
+    information_score: float
 
 
 @dataclass
@@ -98,6 +106,8 @@ def _slide_row_payload(result: SlideExtractionResult, slide: SlideDraft, image_p
         "image_path": image_path, "image_hash": slide.image_hash,
         "duration_ms": slide.duration_ms, "retention_class": slide.retention_class,
         "confidence": slide.confidence,
+        "is_llm_preferred": slide.is_llm_preferred,
+        "information_score": slide.information_score,
         "roi_json": json.dumps(result.roi.as_dict(), sort_keys=True),
         "ignore_regions_json": json.dumps([r.as_dict() for r in result.ignore_regions], sort_keys=True),
         "extraction_version": result.extraction_version, "cache_identity": result.cache_identity,
@@ -315,6 +325,7 @@ class _Candidate:
     feature: dict
     path: Path
     image_hash: str
+    information_score: float
 
 
 class _PageCollector:
@@ -333,14 +344,6 @@ class _PageCollector:
         self.previous = feature
         if not self.candidates:
             self.page_start = start
-        elif _covers(self.candidates[-1].feature, feature):
-            return
-        inherited_start = start
-        while self.candidates and _covers(feature, self.candidates[-1].feature):
-            removed = self.candidates.pop()
-            inherited_start = removed.start_ms
-            if removed.path not in self.published_paths and all(c.path != removed.path for c in self.candidates):
-                removed.path.unlink(missing_ok=True)
         encoded = _encode_jpeg(rgb)
         image_hash = hashlib.sha256(encoded).hexdigest()
         path = self.directory / f"{image_hash}.jpg"
@@ -348,28 +351,185 @@ class _PageCollector:
             temporary = path.with_suffix(".tmp")
             temporary.write_bytes(encoded)
             temporary.replace(path)
-        self.candidates.append(_Candidate(inherited_start, start, end, representative,
-                                          feature, path, image_hash))
+        if self.candidates and self.candidates[-1].image_hash == image_hash:
+            # A short overlay or cursor excursion can return to the exact same
+            # stable image; keep one detailed state instead of duplicating it.
+            self.candidates[-1].visible_until_ms = end
+            self.previous = feature
+            return
+        self.candidates.append(_Candidate(
+            start, start, end, representative, feature, path, image_hash,
+            _information_score(feature),
+        ))
 
     def flush(self, end: int) -> None:
         if not self.candidates:
             return
         primary = end - self.page_start >= PRIMARY_MIN_DURATION_MS
+        preferred = _preferred_candidates(self.candidates)
         for index, candidate in enumerate(self.candidates):
             stop = self.candidates[index + 1].start_ms if index + 1 < len(self.candidates) else end
+            is_preferred = index in preferred
             self.slides.append(SlideDraft(
                 start_ms=candidate.start_ms, end_ms=stop,
                 representative_ms=candidate.representative_ms, image_path=candidate.path,
                 image_hash=candidate.image_hash, duration_ms=stop - candidate.start_ms,
-                retention_class="primary" if primary else "auxiliary",
-                confidence=0.9 if primary else 0.7, roi=self.roi,
+                retention_class=("primary" if primary else "auxiliary") if is_preferred else "animation",
+                confidence=(0.9 if primary else 0.7) if is_preferred else 0.65, roi=self.roi,
                 visible_from_ms=candidate.visible_from_ms,
                 visible_until_ms=min(candidate.visible_until_ms, stop),
                 page_start_ms=self.page_start, page_end_ms=end,
+                is_llm_preferred=is_preferred,
+                information_score=candidate.information_score,
             ))
             self.published_paths.add(candidate.path)
         self.candidates.clear()
         self.previous = None
+
+
+def _information_score(feature: dict) -> float:
+    """Estimate stable visual information without OCR or semantic inference."""
+    valid = feature["valid"]
+    if not valid.any():
+        return 0.0
+    edge_density = float(feature["edges"][valid].mean())
+    contrast = min(1.0, float(np.std(feature["gray"][valid])) / 96.0)
+    return round(min(1.0, 0.7 * min(1.0, edge_density * 8.0) + 0.3 * contrast), 6)
+
+
+def _preferred_candidates(candidates: list[_Candidate]) -> set[int]:
+    """Select content representatives without deleting any time-addressable state."""
+    if not candidates:
+        return set()
+    features = _selection_features([candidate.feature for candidate in candidates])
+    # Select representatives directly, so approximate equality cannot discard
+    # both members of a pair or collapse a chain with no surviving endpoint.
+    order = sorted(range(len(candidates)), key=lambda i: (
+        int(features[i]["edges"].sum()), candidates[i].information_score,
+        candidates[i].visible_until_ms - candidates[i].visible_from_ms,
+        candidates[i].start_ms,
+    ), reverse=True)
+    preferred: set[int] = set()
+    for index in order:
+        if any(_selection_covers(features[other], features[index]) for other in preferred):
+            continue
+        replaced = {other for other in preferred
+                    if _selection_covers(features[index], features[other])}
+        preferred.difference_update(replaced)
+        preferred.add(index)
+    return preferred
+
+
+def _has_selection_detail(mask: np.ndarray) -> bool:
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    if count <= 1:
+        return False
+    components = stats[1:]
+    return bool(np.any(
+        (components[:, cv2.CC_STAT_AREA] >= SELECTION_COMPONENT_PIXELS)
+        & (np.maximum(components[:, cv2.CC_STAT_WIDTH],
+                      components[:, cv2.CC_STAT_HEIGHT]) >= 5)
+    ))
+
+
+def _selection_covers(complete: dict, partial: dict) -> bool:
+    """Tolerate recording noise, but retain coherent missing or modified strokes."""
+    valid = complete["valid"] & partial["valid"]
+    edges = partial["edges"] & valid
+    count = int(edges.sum())
+    if count < 8:
+        return _covers(complete, partial)
+    kernel = np.ones((3, 3), np.uint8)
+    nearby = cv2.dilate(complete["edges"].astype(np.uint8), kernel) > 0
+    # Blur suppresses JPEG/antialiasing noise without weakening geometric checks.
+    complete_rgb = cv2.GaussianBlur(complete["rgb"], (3, 3), 0)
+    partial_rgb = cv2.GaussianBlur(partial["rgb"], (3, 3), 0)
+    delta = np.max(cv2.absdiff(complete_rgb, partial_rgb), axis=2)
+    # Canny may toggle a faint compression/watermark edge even when the actual
+    # pixels barely changed. Such an edge is not missing page information.
+    lost = edges & ~nearby & (delta > PIXEL_THRESHOLD)
+    recolored = edges & (delta > SELECTION_COLOR_THRESHOLD)
+    missing = lost | recolored
+    if int(missing.sum()) > max(3, int(count * SELECTION_LOSS_RATIO)):
+        return False
+    if _has_selection_detail(missing):
+        return False
+    # New strokes intersecting an old symbol may turn "-" into "+", not merely
+    # complete an animation. Ignore subpixel edge jitter, not such modifications.
+    old_nearby = cv2.dilate(edges.astype(np.uint8), kernel) > 0
+    added = complete["edges"] & valid & ~old_nearby & (delta > PIXEL_THRESHOLD)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(added.astype(np.uint8), 8)
+    near_old = cv2.dilate(edges.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+    for component in range(1, count):
+        x, y, width, height, area = stats[component]
+        if area < SELECTION_COMPONENT_PIXELS or max(width, height) < 5:
+            continue
+        region = labels[y:y + height, x:x + width] == component
+        if np.any(region & near_old[y:y + height, x:x + width]):
+            return False
+    return True
+
+
+def _selection_features(features: list[dict]) -> list[dict]:
+    """Ignore recurrent footer replacements only within repeated-body clusters."""
+    if len(features) <= CAPTION_MIN_REPLACEMENTS:
+        return features
+    height, width = features[0]["gray"].shape
+    band_start = round(height * CAPTION_BAND_START)
+    groups: list[list[int]] = []
+    blurred = [cv2.GaussianBlur(feature["rgb"], (3, 3), 0) for feature in features]
+    for index, feature in enumerate(features):
+        for group in groups:
+            anchor = group[0]
+            valid = feature["valid"][:band_start] & features[anchor]["valid"][:band_start]
+            delta = np.max(cv2.absdiff(blurred[index][:band_start],
+                                      blurred[anchor][:band_start]), axis=2)
+            if valid.any() and float((delta[valid] > PIXEL_THRESHOLD).mean()) <= CAPTION_CORE_CHANGE_RATIO:
+                group.append(index)
+                break
+        else:
+            groups.append([index])
+    selected = list(features)
+    kernel = np.ones((3, 3), np.uint8)
+    replacements: list[tuple[list[int], list[np.ndarray]]] = []
+    for group in groups:
+        row_changes = []
+        for previous, current in zip(group, group[1:]):
+            before = features[previous]["edges"][band_start:]
+            after = features[current]["edges"][band_start:]
+            delta = np.max(cv2.absdiff(blurred[previous][band_start:],
+                                      blurred[current][band_start:]), axis=2)
+            changed = delta > PIXEL_THRESHOLD
+            lost = before & ~(cv2.dilate(after.astype(np.uint8), kernel) > 0) & changed
+            added = after & ~(cv2.dilate(before.astype(np.uint8), kernel) > 0) & changed
+            # Require repeated replacement, not just lines accumulating at the
+            # bottom of a slide. A single formula change must remain visible.
+            if int(lost.sum()) < 12 or int(added.sum()) < 12:
+                continue
+            changes = lost | added
+            xs = np.nonzero(changes)[1]
+            if xs.size and int(xs.max() - xs.min()) >= width * 0.15:
+                row_changes.append(changes.any(axis=1))
+        if row_changes:
+            replacements.append((group, row_changes))
+    all_changes = [change for _, changes in replacements for change in changes]
+    if len(all_changes) < CAPTION_MIN_REPLACEMENTS:
+        return features
+    recurring = np.sum(all_changes, axis=0) >= 2
+    for group, changes in replacements:
+        # A subtitle band learned from several body layouts also applies to a
+        # page shown for only two spoken sentences, not only long-held pages.
+        rows = np.any(changes, axis=0) & recurring
+        if not rows.any():
+            continue
+        rows = cv2.dilate(rows.astype(np.uint8)[:, None], np.ones((5, 1), np.uint8))[:, 0] > 0
+        for index in group:
+            original = features[index]
+            feature = {key: value.copy() for key, value in original.items()}
+            for value in feature.values():
+                value[band_start:][rows] = 0
+            selected[index] = feature
+    return selected
 
 
 def extract_slides(

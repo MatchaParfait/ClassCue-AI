@@ -98,6 +98,8 @@ class VideoStore:
                     duration_ms INTEGER NOT NULL,
                     retention_class TEXT NOT NULL,
                     confidence REAL NOT NULL DEFAULT 1.0,
+                    is_llm_preferred INTEGER NOT NULL DEFAULT 1,
+                    information_score REAL NOT NULL DEFAULT 0,
                     roi_json TEXT NOT NULL DEFAULT '{}',
                     extraction_version TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -228,6 +230,8 @@ class VideoStore:
                 ("page_end_ms", "INTEGER"),
                 ("ignore_regions_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("cache_identity", "TEXT NOT NULL DEFAULT ''"),
+                ("is_llm_preferred", "INTEGER NOT NULL DEFAULT 1"),
+                ("information_score", "REAL NOT NULL DEFAULT 0"),
             ):
                 if column not in slide_columns:
                     connection.execute(f"ALTER TABLE video_slides ADD COLUMN {column} {definition}")
@@ -1351,9 +1355,10 @@ class VideoStore:
                     INSERT INTO video_slides(
                         video_id, start_ms, end_ms, representative_ms, image_path,
                         image_hash, duration_ms, retention_class, confidence,
+                        is_llm_preferred, information_score,
                         roi_json, extraction_version, visible_from_ms, visible_until_ms,
                         page_start_ms, page_end_ms, ignore_regions_json, cache_identity
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -1366,6 +1371,8 @@ class VideoStore:
                             int(slide["duration_ms"]),
                             str(slide["retention_class"]),
                             float(slide["confidence"]),
+                            1 if slide.get("is_llm_preferred", True) else 0,
+                            float(slide.get("information_score", 0)),
                             str(slide["roi_json"]),
                             str(slide["extraction_version"]),
                             int(slide.get("visible_from_ms", slide["representative_ms"])),
