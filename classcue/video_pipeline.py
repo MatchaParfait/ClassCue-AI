@@ -6,6 +6,7 @@ from classcue.paths import PROJECT_ROOT
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from inspect import signature
 import hashlib
 import json
 import re
@@ -50,6 +51,11 @@ def _audio_path(store: VideoStore, video) -> Path:
 
 class SemanticJudge(Protocol):
     def judge_semantic_chunk(self, chunk: tuple[TranscriptSegment, ...]) -> SemanticSelection: ...
+
+
+def _check_stop(should_stop: Callable[[], bool] | None) -> None:
+    if should_stop and should_stop():
+        raise ProcessingCancelled("用户已请求停止 AI 筛选")
 
 
 def _chunk_cache_key(
@@ -251,8 +257,13 @@ def create_semantic_markers(
     analysis_mode: str = "high_recall",
     filter_formula_noise: bool = True,
     filter_formula: str | None = None,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+    replace_existing: bool = False,
+    complete_analysis: bool = False,
 ) -> int:
     """Screen all transcript chunks with at most four in-flight API requests."""
+    _check_stop(should_stop)
     chunks = build_screening_chunks(
         segments,
         use_keyword_prefilter,
@@ -284,10 +295,16 @@ def create_semantic_markers(
     def drafts_from_selection(selection: SemanticSelection) -> list[MarkerDraft]:
         return [_draft_from_candidate(candidate, segments_by_id) for candidate in selection.candidates]
 
-    def review_chunk(chunk: tuple[TranscriptSegment, ...]) -> tuple[list[MarkerDraft], SemanticSelection | None]:
+    try:
+        cancellable = "should_stop" in signature(judge.judge_semantic_chunk).parameters
+    except (TypeError, ValueError):
+        cancellable = False
+
+    def review_chunk(chunk, cache_key) -> tuple[list[MarkerDraft], SemanticSelection | None]:
+        _check_stop(should_stop)
         try:
-            selection = validate_selection(judge.judge_semantic_chunk(chunk), chunk)
-            return drafts_from_selection(selection), selection
+            options = {"should_stop": should_stop} if cancellable else {}
+            selection = validate_selection(judge.judge_semantic_chunk(chunk, **options), chunk)
         except SemanticResponseError:
             # Keep this entire chunk for review instead of losing a video to malformed model JSON.
             return [
@@ -301,9 +318,13 @@ def create_semantic_markers(
                     0.0,
                 )
             ], None
+        # Keep a completed response even when cancellation stops publication.
+        store.save_ai_chunk_selection(video_id, analysis_mode, cache_key, selection.model_dump_json())
+        return drafts_from_selection(selection), selection
 
     pending_chunks: list[tuple[tuple[TranscriptSegment, ...], str]] = []
     for chunk in chunks:
+        _check_stop(should_stop)
         cache_key = _chunk_cache_key(chunk, judge, analysis_mode, filter_formula_noise, filter_formula)
         cached = store.get_ai_chunk_selection(video_id, analysis_mode, cache_key)
         if cached is None:
@@ -330,36 +351,34 @@ def create_semantic_markers(
         thread_name_prefix="subtitle-ai",
     ) as executor:
         futures = {
-            executor.submit(review_chunk, chunk): (chunk, cache_key)
+            executor.submit(review_chunk, chunk, cache_key): (chunk, cache_key)
             for chunk, cache_key in pending_chunks
         }
         cached_count = len(chunks) - len(pending_chunks)
         for completed, future in enumerate(as_completed(futures), start=1):
             _chunk, cache_key = futures[future]
             chunk_drafts, selection = future.result()
+            _check_stop(should_stop)
             drafts.extend(chunk_drafts)
-            if selection is not None:
-                store.save_ai_chunk_selection(
-                    video_id, analysis_mode, cache_key, selection.model_dump_json()
-                )
             if progress:
                 progress(
                     (cached_count + completed) / max(len(chunks), 1),
                     f"AI 正在筛选{mode}片段 {cached_count + completed}/{len(chunks)}（最多 {request_concurrency} 路）",
                 )
-    for draft in merge_semantic_drafts(drafts):
-        store.add_marker(
-            video_id,
-            draft.start_ms,
-            draft.end_ms,
-            draft.title,
-            draft.note,
-            draft.source_quote,
-            f"AI-{draft.level}",
-            draft.confidence,
-            analysis_mode,
-        )
-    return len(merge_semantic_drafts(drafts))
+    merged = merge_semantic_drafts(drafts)
+    if progress:
+        progress(1.0, f"AI 筛选完成，准备保存 {len(merged)} 个候选")
+    _check_stop(should_stop)
+    store.publish_semantic_markers(
+        video_id, analysis_mode, [
+            dict(start_ms=draft.start_ms, end_ms=draft.end_ms, title=draft.title,
+                 note=draft.note, source_quote=draft.source_quote,
+                 trigger_phrase=f"AI-{draft.level}", confidence=draft.confidence)
+            for draft in merged
+        ], replace_existing=replace_existing, complete_analysis=complete_analysis,
+        should_stop=should_stop,
+    )
+    return len(merged)
 
 
 @asr_session()
@@ -459,6 +478,7 @@ def analyze_prepared_video_once(
     if not segments:
         raise ValueError("该视频还没有可复用的字幕，无法开始 AI 筛选")
     try:
+        _check_stop(should_stop)
         store.set_analysis_run(video_id, analysis_mode, "processing")
         if progress:
             progress(0.0, f"{video['filename']}：AI 正在筛选完整字幕")
@@ -483,15 +503,13 @@ def analyze_prepared_video_once(
             analysis_mode=analysis_mode,
             filter_formula_noise=filter_formula_noise,
             filter_formula=filter_formula,
+            should_stop=should_stop,
+            complete_analysis=True,
         )
         ai_elapsed = time.perf_counter() - ai_started
         # A cache-only rerun should not replace useful historical speed data with near-zero time.
         if ai_elapsed >= 0.2 and chunk_count:
             store.record_ai_metrics(video_id, ai_elapsed, chunk_count)
-        store.set_analysis_run(video_id, analysis_mode, "completed", count)
-        store.set_status(video_id, "review_ready")
-        if progress:
-            progress(1.0, f"{video['filename']}：完成，生成 {count} 个候选")
         return "completed", count
     except Exception:
         store.set_analysis_run(video_id, analysis_mode, "failed")
@@ -616,6 +634,7 @@ def process_saved_analysis_once(
         if outcome in {"completed", "skipped"}:
             store.set_status(video_id, "review_ready")
         return outcome, count
+    _check_stop(should_stop)
     previous = store.get_analysis_run(video_id, analysis_mode)
     if previous and previous["status"] == "completed" and not force:
         store.set_status(video_id, "review_ready")
@@ -625,7 +644,6 @@ def process_saved_analysis_once(
         raise ValueError("该视频还没有可复用的字幕，请先完成一次基础处理。")
     try:
         store.set_analysis_run(video_id, analysis_mode, "processing")
-        store.delete_markers_for_mode(video_id, analysis_mode)
         chunk_count = len(
             build_screening_chunks(
                 segments,
@@ -647,12 +665,13 @@ def process_saved_analysis_once(
             analysis_mode=analysis_mode,
             filter_formula_noise=filter_formula_noise,
             filter_formula=filter_formula,
+            should_stop=should_stop,
+            replace_existing=True,
+            complete_analysis=True,
         )
         ai_elapsed = time.perf_counter() - ai_started
         if ai_elapsed >= 0.2 and chunk_count:
             store.record_ai_metrics(video_id, ai_elapsed, chunk_count)
-        store.set_analysis_run(video_id, analysis_mode, "completed", count)
-        store.set_status(video_id, "review_ready")
         return "completed", count
     except Exception:
         store.set_analysis_run(video_id, analysis_mode, "failed")

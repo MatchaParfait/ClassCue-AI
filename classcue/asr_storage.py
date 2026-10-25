@@ -90,6 +90,13 @@ def slide_directory(project_root: Path, data_root: Path) -> Path:
     """Return the persistent local directory for extracted slide images."""
     if root := configured_media_root(project_root):
         return root / "slides"
+    # The pin is keyed to one relocated library so independent databases
+    # (for example isolated test installs) never resolve to its screenshots.
+    saved = read_configuration(project_root).get("library_identity", {})
+    if (isinstance(saved, dict) and isinstance(saved.get("database"), str)
+            and Path(saved["database"]).resolve() == (data_root / "project.db").resolve()
+            and saved.get("slides_dir") is not None):
+        return validate_directory(saved["slides_dir"])
     return data_root / "slides"
 
 

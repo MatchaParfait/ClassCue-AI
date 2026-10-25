@@ -294,13 +294,33 @@ def paired_values(f, destination):
             "media_storage_root": str(destination)}
 
 
+def add_slide_image(f, relative="hash/board.jpg", content=b"slide-image"):
+    image = f.root / "slides" / relative
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(content)
+    f.store.replace_video_slides(f.video_id, [dict(
+        start_ms=0, end_ms=2000, representative_ms=1500, image_path=relative,
+        image_hash="synthetic-slide", duration_ms=2000, retention_class="stable",
+        confidence=.9, roi_json="{}", extraction_version="synthetic")])
+    return image
+
+
+def slide_files_still_served(f):
+    root = asr_storage.slide_directory(f.project, f.root)
+    relatives = f.store.slide_image_paths(f.video_id)
+    assert relatives
+    for relative in relatives:
+        assert (root / relative).read_bytes() == b"slide-image"
+    return root
+
+
 def test_shared_root_moves_videos_and_audio_together_and_persists_binding(library):
     f = library
     destination = f.root.parent / "media"
     values = paired_values(f, destination)
     preview = f.client.post("/api/settings/directories/preview", json=values)
     assert preview.status_code == 200, preview.text
-    assert {section["label"] for section in preview.json()["sections"]} == {"视频库", "临时音频与转写缓存"}
+    assert {section["label"] for section in preview.json()["sections"]} == {"视频库", "临时音频与转写缓存", "PPT 截图"}
     assert not destination.exists()
     response = f.client.put("/api/settings/directories", json=values)
     assert response.status_code == 200, response.text
@@ -395,3 +415,103 @@ def test_conflict_in_either_child_preserves_both_originals(library):
     assert conflict.read_bytes() == b"unrelated"
     assert f.settings.read_bytes() == before
     assert not (destination / "audio" / "hash.wav").exists()
+
+
+def test_media_binding_moves_existing_slide_images(library):
+    f = library
+    image = add_slide_image(f)
+    destination = f.root.parent / "media"
+    preview = f.client.post("/api/settings/directories/preview", json=paired_values(f, destination))
+    assert preview.status_code == 200, preview.text
+    sections = {section["label"]: section for section in preview.json()["sections"]}
+    assert sections["PPT 截图"]["source"] == str(f.root / "slides")
+    assert sections["PPT 截图"]["target"] == str(destination / "slides")
+    assert sections["PPT 截图"]["files"] == 1
+    assert sections["PPT 截图"]["bytes"] == len(b"slide-image")
+    response = f.client.put("/api/settings/directories", json=paired_values(f, destination))
+    assert response.status_code == 200, response.text
+    assert slide_files_still_served(f) == destination / "slides"
+    assert not image.exists()
+    assert not (f.root / "slides" / "hash").exists()
+
+
+def test_rebinding_media_root_moves_slide_images_again(library):
+    f = library
+    image = add_slide_image(f)
+    first, second = f.root.parent / "first", f.root.parent / "second"
+    response = f.client.put("/api/settings/directories", json=paired_values(f, first))
+    assert response.status_code == 200, response.text
+    assert (first / "slides" / "hash" / "board.jpg").read_bytes() == b"slide-image"
+    assert not image.exists()
+    response = f.client.put("/api/settings/directories", json=paired_values(f, second))
+    assert response.status_code == 200, response.text
+    assert (second / "slides" / "hash" / "board.jpg").read_bytes() == b"slide-image"
+    assert not (first / "slides" / "hash" / "board.jpg").exists()
+    assert slide_files_still_served(f) == second / "slides"
+
+
+def test_slide_target_conflict_blocks_migration_and_keeps_originals(library):
+    f = library
+    image = add_slide_image(f)
+    destination = f.root.parent / "media"
+    conflict = destination / "slides" / "hash" / "board.jpg"
+    conflict.parent.mkdir(parents=True)
+    conflict.write_bytes(b"unrelated")
+    before = f.settings.read_bytes()
+    response = f.client.put("/api/settings/directories", json=paired_values(f, destination))
+    assert response.status_code == 400
+    assert "同名" in response.json()["detail"]
+    assert image.read_bytes() == b"slide-image"
+    assert conflict.read_bytes() == b"unrelated"
+    assert f.settings.read_bytes() == before
+    assert f.video.exists() and f.audio.exists()
+    assert not (destination / "videos" / "hash" / "lesson.mp4").exists()
+    assert not (destination / "audio" / "hash.wav").exists()
+    assert slide_files_still_served(f) == f.root / "slides"
+
+
+def test_legacy_migration_without_media_root_leaves_slides_untouched(library):
+    f = library
+    image = add_slide_image(f)
+    assert migration.migrate(f.project, f.store, f.values)["committed"]
+    assert image.read_bytes() == b"slide-image"
+    assert asr_storage.slide_directory(f.project, f.root) == f.root / "slides"
+    assert not (Path(f.values["video_library_dir"]) / "slides").exists()
+
+
+def test_binding_to_library_parent_keeps_default_slides_in_place(library):
+    f = library
+    image = add_slide_image(f)
+    response = f.client.put("/api/settings/directories", json=paired_values(f, f.root))
+    assert response.status_code == 200, response.text
+    assert asr_storage.slide_directory(f.project, f.root) == f.root / "slides"
+    assert image.read_bytes() == b"slide-image"
+    assert (f.root / "audio" / "hash.wav").read_bytes() == b"audio"
+
+
+def test_media_binding_after_application_data_migration_moves_pinned_slides(library):
+    f = library
+    previous_library = f.root.parent / "previous-library"
+    pinned = previous_library / "slides"
+    image = pinned / "hash" / "board.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"slide-image")
+    f.store.replace_video_slides(f.video_id, [dict(
+        start_ms=0, end_ms=2000, representative_ms=1500, image_path="hash/board.jpg",
+        image_hash="synthetic-slide", duration_ms=2000, retention_class="stable",
+        confidence=.9, roi_json="{}", extraction_version="synthetic")])
+    settings = json.loads(f.settings.read_text())
+    settings["library_identity"] = {"database": str(f.root / "project.db"), "id": "0123456789ab",
+                                    "scope": str(previous_library), "slides_dir": str(pinned)}
+    f.settings.write_text(json.dumps(settings))
+    assert asr_storage.slide_directory(f.project, f.root) == pinned
+    destination = f.root.parent / "media"
+    preview = f.client.post("/api/settings/directories/preview", json=paired_values(f, destination))
+    sections = {section["label"]: section for section in preview.json()["sections"]}
+    assert sections["PPT 截图"]["source"] == str(pinned)
+    assert sections["PPT 截图"]["target"] == str(destination / "slides")
+    assert sections["PPT 截图"]["files"] == 1
+    response = f.client.put("/api/settings/directories", json=paired_values(f, destination))
+    assert response.status_code == 200, response.text
+    assert slide_files_still_served(f) == destination / "slides"
+    assert not image.exists() and not pinned.exists()

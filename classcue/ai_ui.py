@@ -9,7 +9,8 @@ import streamlit as st
 
 from classcue.ai_provider import (
     ProviderProfile, ProviderSettings, create_judge, default_profiles, interface_key_path,
-    interface_provider, load_provider_settings, resolve_interface_key, save_provider_settings,
+    interface_provider, load_provider_settings, provider_settings_lock, resolve_interface_key,
+    save_provider_settings,
 )
 from classcue.local_credentials import delete_api_key, save_api_key
 from classcue.openai_judge import OpenAICompatibleJudge
@@ -17,12 +18,51 @@ from classcue.openai_judge import OpenAICompatibleJudge
 
 def _forget_key(key_path: str) -> None:
     try:
-        delete_api_key(Path(key_path))
+        with provider_settings_lock():
+            delete_api_key(Path(key_path))
         st.session_state["_ai_interface_key"] = ""
         st.session_state["ai_interface_key"] = ""
         st.session_state["_ai_key_message"] = "已删除本机记忆的 API Key。"
     except (OSError, RuntimeError) as exc:
         st.session_state["_ai_key_error"] = str(exc)
+
+
+def _save_active_connection(
+    active_connection_id: str, profile: ProviderProfile, render_fallback: ProviderSettings | None,
+) -> None:
+    """Save the edited connection under the lock shared with the local API.
+
+    The configuration is reloaded inside the lock, so concurrent connection
+    changes survive; only the connection rendered on this page is updated.
+    """
+    with provider_settings_lock():
+        try:
+            latest = load_provider_settings()
+        except ValueError:
+            # The render already replaced an unreadable configuration with the
+            # same fallback; keep saving that fallback instead of failing here.
+            if render_fallback is None:
+                raise
+            latest = render_fallback
+        if not latest.connections:
+            if active_connection_id:
+                raise ValueError("本页编辑的连接已不存在，请刷新后保存。")
+            updated = latest.with_active_profile(profile)
+        else:
+            target = next(
+                (connection for connection in latest.connections
+                 if connection.id == active_connection_id), None,
+            )
+            if target is None:
+                raise ValueError("本页编辑的连接已不存在，请刷新后保存。")
+            values = latest.model_dump()
+            for connection in values["connections"]:
+                if connection["id"] == active_connection_id:
+                    connection["profile"] = profile.model_copy(
+                        update={"credential_id": target.profile.credential_id},
+                    ).model_dump()
+            updated = ProviderSettings.model_validate(values)
+        save_provider_settings(updated)
 
 
 def _clear_models(prefix: str) -> None:
@@ -60,6 +100,10 @@ def render_ai_settings() -> tuple[str, ProviderProfile, str]:
     except ValueError as exc:
         st.error(str(exc))
         saved = ProviderSettings(profile=default_profiles(use_environment=False)["deepseek"])
+        render_fallback = saved
+    else:
+        render_fallback = None
+    render_active_id = saved.active_connection_id
     st.caption("统一使用 OpenAI 兼容 Chat Completions 接口；默认地址为 DeepSeek 官方 API，也可填写任意兼容中转站。")
     st.caption("有效的 Base URL、模型和接口参数会自动保存，下次打开时恢复上次使用的配置。")
 
@@ -126,8 +170,9 @@ def render_ai_settings() -> tuple[str, ProviderProfile, str]:
         disabled=not api_key or current_key_path is None, use_container_width=True,
     ):
         try:
-            save_api_key(current_key_path, api_key)
-            current_key_path.with_suffix(".disabled").unlink(missing_ok=True)
+            with provider_settings_lock():
+                save_api_key(current_key_path, api_key)
+                current_key_path.with_suffix(".disabled").unlink(missing_ok=True)
             st.success("API Key 已加密保存在本机。")
         except (OSError, RuntimeError, ValueError) as exc:
             st.error(f"无法记住 API Key：{exc}")
@@ -195,8 +240,7 @@ def render_ai_settings() -> tuple[str, ProviderProfile, str]:
             try:
                 # Keep the last valid endpoint/model across application restarts.
                 # Credentials remain outside this ordinary JSON configuration.
-                saved = saved.with_active_profile(profile)
-                save_provider_settings(saved)
+                _save_active_connection(render_active_id, profile, render_fallback)
             except (OSError, ValueError) as exc:
                 st.warning(f"当前 AI 配置未能自动保存：{exc}")
     if fetch_clicked and valid:
@@ -259,8 +303,7 @@ def render_ai_settings() -> tuple[str, ProviderProfile, str]:
         key="ai_save", disabled=not valid, use_container_width=True,
     ):
         try:
-            saved = saved.with_active_profile(profile)
-            save_provider_settings(saved)
+            _save_active_connection(render_active_id, profile, render_fallback)
             st.success("服务配置已保存。")
         except (OSError, ValueError) as exc:
             st.error(f"无法保存配置：{exc}")

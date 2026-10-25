@@ -12,8 +12,8 @@ from pathlib import Path
 
 from classcue.core import TranscriptSegment, TriggerMatch
 from classcue.sqlite_connection import ClosingConnection
-from classcue.bilibili_store import initialize_bilibili
 from classcue.subtitle_search import initialize_subtitle_search, search_subtitles
+from classcue.bilibili_store import initialize_bilibili
 
 
 def source_directory_key(path: str | Path) -> str:
@@ -839,6 +839,11 @@ class VideoStore:
         "video_processing_metrics",
         "video_experiments",
         "video_share_imports",
+        "question_analyses",
+        "question_captures",
+        "bili_frames",
+        "bili_study_runs",
+        "bili_read_cache",
     )
 
     @staticmethod
@@ -894,6 +899,19 @@ class VideoStore:
                 f"SELECT * FROM {table} WHERE {column} IN ({','.join('?' for _ in experiment_ids)})",
                 tuple(experiment_ids),
             ) if experiment_ids else []
+        marker_ids = [int(row["id"]) for row in related["video_markers"]]
+        for table in ("question_materials", "bili_marker_context"):
+            related[table] = self._json_rows(
+                connection,
+                f"SELECT * FROM {table} WHERE marker_id IN ({','.join('?' for _ in marker_ids)})",
+                tuple(marker_ids),
+            ) if marker_ids else []
+        run_ids = [str(row["id"]) for row in related["bili_study_runs"]]
+        related["bili_run_trace"] = self._json_rows(
+            connection,
+            f"SELECT * FROM bili_run_trace WHERE run_id IN ({','.join('?' for _ in run_ids)})",
+            tuple(run_ids),
+        ) if run_ids else []
         return {"videos": videos, "folders": folders, "related": related}
 
     @staticmethod
@@ -910,6 +928,56 @@ class VideoStore:
             ORDER BY tree.depth DESC, f.id
             """, (int(folder_id),),
         ).fetchall()]
+
+    @staticmethod
+    def _rollback_moved_files(moved: list[dict[str, object]], trash_directory: Path) -> list[str]:
+        """Move trashed files back after a failed delete.
+
+        Files whose original location is occupied by a new conflict, or whose
+        move-back fails, stay in the trash directory: recovery material is
+        never deleted and conflicts are never overwritten.  Returns the trash
+        paths that had to be retained.
+        """
+        retained: list[str] = []
+        for record in reversed(moved):
+            if not record.get("moved"):
+                continue
+            source = Path(str(record["trash"]))
+            destination = Path(str(record["original"]))
+            if not source.exists():
+                continue
+            if destination.exists():
+                retained.append(str(source))
+                continue
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(destination))
+            except OSError:
+                retained.append(str(source))
+        if not retained:
+            shutil.rmtree(trash_directory, ignore_errors=True)
+        return retained
+
+    @staticmethod
+    def _move_file_into_trash(source: Path, destination: Path) -> dict[str, object]:
+        """Move one managed file into the trash, recording its byte identity.
+
+        The size and SHA-256 of the preserved bytes let a later undo decide
+        whether a same-name file at the original location really is the
+        recycle material rather than an unrelated external file.
+        """
+        # Read identity before moving: a failed read must not leave an
+        # unrecorded moved file outside the caller's rollback list.
+        identity = {
+            "size": source.stat().st_size,
+            "sha256": VideoStore.file_hash(source),
+        }
+        shutil.move(str(source), str(destination))
+        return {
+            "trash": str(destination),
+            "moved": True,
+            **identity,
+        }
 
     def _move_to_recycle_bin(
         self, kind: str, video_ids: list[int], folder_ids: list[int], trash_root: str | Path,
@@ -944,8 +1012,7 @@ class VideoStore:
                         if source.is_file() and not is_external_source:
                             destination = trash_directory / role / f'{video["id"]}-{source.name}'
                             destination.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.move(str(source), str(destination))
-                            record.update(trash=str(destination), moved=True)
+                            record.update(self._move_file_into_trash(source, destination))
                         moved.append(record)
                     if slide_root is not None:
                         for slide in snapshot["related"].get("video_slides", []):
@@ -963,13 +1030,38 @@ class VideoStore:
                             if key in seen_paths:
                                 continue
                             seen_paths.add(key)
-                            record = {"role": "slide", "original": str(source), "moved": False}
+                            record = {
+                                "role": "slide",
+                                "original": str(source),
+                                "relative": raw_path,
+                                "moved": False,
+                            }
                             if source.is_file():
                                 destination = trash_directory / "slides" / f'{video["id"]}-{source.name}'
                                 destination.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.move(str(source), str(destination))
-                                record.update(trash=str(destination), moved=True)
+                                record.update(self._move_file_into_trash(source, destination))
                             moved.append(record)
+
+                # Marker-owned screenshots join the same recycle record so undo
+                # restores their bytes through the shared file rollback below.
+                from classcue.question_captures import QuestionCaptures
+                from classcue.bilibili_frames import FrameStore
+                for role, table, owner in (
+                    ("capture", "question_captures", QuestionCaptures(self)),
+                    ("frame", "bili_frames", FrameStore(self)),
+                ):
+                    for row in snapshot["related"].get(table, []):
+                        source = owner.path(str(row["id"]))
+                        key = str(source).casefold()
+                        if key in seen_paths:
+                            continue
+                        seen_paths.add(key)
+                        record = {"role": role, "original": str(source), "moved": False}
+                        if source.is_file():
+                            destination = trash_directory / f"{role}s" / f'{row["video_id"]}-{source.name}'
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            record.update(self._move_file_into_trash(source, destination))
+                        moved.append(record)
 
                 payload = {**snapshot, "files": moved}
                 connection.execute(
@@ -983,16 +1075,17 @@ class VideoStore:
                     )
                 for folder in snapshot["folders"]:
                     connection.execute("DELETE FROM video_folders WHERE id = ?", (int(folder["id"]),))
-        except Exception:
-            for record in reversed(moved):
-                if record.get("moved"):
-                    source = Path(str(record["trash"]))
-                    destination = Path(str(record["original"]))
-                    if source.exists() and not destination.exists():
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(source), str(destination))
-            shutil.rmtree(trash_directory, ignore_errors=True)
+        except Exception as error:
+            retained = self._rollback_moved_files(moved, trash_directory)
+            if retained:
+                raise OSError(
+                    f"删除失败，{len(retained)} 个未能还原的原件已保留在 {trash_directory}"
+                ) from error
             raise
+        from classcue.question_captures import QuestionCaptures
+        QuestionCaptures(self).collect()
+        from classcue.bilibili_frames import FrameStore
+        FrameStore(self).collect()
         return {
             "operation_id": operation_id,
             "kind": kind,
@@ -1020,7 +1113,62 @@ class VideoStore:
             video_ids = [int(row["id"]) for row in videos]
         return self._move_to_recycle_bin("folder", video_ids, ids, trash_root, slide_root)
 
-    def undo_latest_recycle(self, trash_root: str | Path) -> dict[str, object]:
+    @staticmethod
+    def _matches_trash_record(record: dict[str, object], destination: Path) -> bool:
+        """Only a same-name file with the exact bytes preserved at delete time
+        counts as recycle material that a failed undo left in place."""
+        expected_size = record.get("size")
+        expected_hash = record.get("sha256")
+        if type(expected_size) is not int or not expected_hash:
+            return False
+        try:
+            if not destination.is_file() or destination.stat().st_size != expected_size:
+                return False
+            return VideoStore.file_hash(destination) == expected_hash
+        except OSError:
+            return False
+
+    @staticmethod
+    def _slide_restore_destination(
+        record: dict[str, object], slide_root: Path, payload: dict[str, object],
+    ) -> Path | None:
+        """Resolve a recycled slide image against the active slide root.
+
+        Slide rows address images relative to the slide directory, so after a
+        media-root change between delete and undo the file must come back under
+        the current root, not the recorded absolute original.  Legacy payloads
+        predate the stored relative path; theirs is recovered from the
+        snapshotted slide rows by suffix match.  Returns None when no safe
+        relative path is known, in which case the caller keeps the original.
+        """
+        relative = str(record.get("relative") or "")
+        if not relative:
+            original_parts = [os.path.normcase(part) for part in Path(str(record["original"])).parts]
+            candidates = [
+                raw for raw in (
+                    str(row.get("image_path") or "")
+                    for row in payload.get("related", {}).get("video_slides", [])
+                )
+                if raw and not Path(raw).is_absolute()
+                and original_parts[-len(Path(raw).parts):] == [
+                    os.path.normcase(part) for part in Path(raw).parts
+                ]
+            ]
+            if candidates:
+                relative = max(candidates, key=lambda item: len(Path(item).parts))
+        if not relative or Path(relative).is_absolute():
+            return None
+        root = slide_root.expanduser().resolve()
+        destination = (slide_root / relative).resolve()
+        try:
+            destination.relative_to(root)
+        except ValueError:
+            return None
+        return destination
+
+    def undo_latest_recycle(
+        self, trash_root: str | Path, slide_root: str | Path | None = None,
+    ) -> dict[str, object]:
         moved_back: list[dict[str, object]] = []
         with self.connect() as connection:
             row = connection.execute(
@@ -1030,13 +1178,53 @@ class VideoStore:
                 raise ValueError("没有可撤销的删除操作")
             payload = json.loads(row["payload_json"])
             files = payload.get("files", [])
+            # Legacy payloads predate per-file byte identities; their trash
+            # copies are the only identity basis left.  All fallible stat/hash
+            # work and its commit happen before any move so a restore that
+            # later fails (and rolls back its own transaction) cannot lose the
+            # evidence that recognizes bytes a failed compensation left in place.
+            backfilled = False
+            for record in files:
+                if not record.get("moved"):
+                    continue
+                if type(record.get("size")) is int and record.get("sha256"):
+                    continue
+                source = Path(str(record["trash"]))
+                if not source.is_file():
+                    continue
+                record["size"] = source.stat().st_size
+                record["sha256"] = VideoStore.file_hash(source)
+                backfilled = True
+            if backfilled:
+                connection.execute(
+                    "UPDATE recycle_bin SET payload_json = ? WHERE operation_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), row["operation_id"]),
+                )
+                connection.commit()
             try:
                 for record in files:
                     if not record.get("moved"):
                         continue
                     source = Path(str(record["trash"]))
                     destination = Path(str(record["original"]))
+                    if slide_root is not None and record.get("role") == "slide":
+                        relocated = self._slide_restore_destination(
+                            record, Path(slide_root), payload)
+                        if relocated is not None:
+                            destination = relocated
                     if not source.is_file():
+                        if self._matches_trash_record(record, destination):
+                            # A previous undo restored this file in place and
+                            # then failed to return it; accept it and continue.
+                            continue
+                        if destination.exists():
+                            if record.get("sha256"):
+                                raise ValueError(
+                                    f"回收站文件不存在：{source.name}；"
+                                    "原位置同名文件与删除时的字节记录不一致，未覆盖")
+                            raise ValueError(
+                                f"回收站文件不存在：{source.name}；"
+                                "原位置已有同名文件且缺少删除时的字节记录，未覆盖")
                         raise ValueError(f"回收站文件不存在：{source.name}")
                     if destination.exists():
                         raise ValueError(f"原位置已有同名文件：{destination.name}")
@@ -1066,19 +1254,50 @@ class VideoStore:
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
                     "llm_experiment_results",
                     "video_share_imports",
+                    "question_materials", "question_analyses", "question_captures",
+                    "bili_marker_context", "bili_study_runs", "bili_run_trace",
+                    "bili_frames", "bili_read_cache",
                 ):
                     self._insert_rows(connection, table, related.get(table, []))
+                # Undo recreates these rows and their files; keeping the queued
+                # cleanup entries would let the next collect() delete the
+                # restored screenshots, so remove exactly the restored ids here.
+                for table, garbage_table in (
+                    ("question_captures", "question_capture_garbage"),
+                    ("bili_frames", "bili_frame_garbage"),
+                ):
+                    restored_ids = [str(item["id"]) for item in related.get(table, [])]
+                    if restored_ids:
+                        connection.executemany(
+                            f"DELETE FROM {garbage_table} WHERE id = ?",
+                            [(value,) for value in restored_ids],
+                        )
                 connection.execute(
                     "UPDATE recycle_bin SET undone_at = CURRENT_TIMESTAMP WHERE operation_id = ?",
                     (row["operation_id"],),
                 )
-            except Exception:
+                # Commit failures must use the same file rollback as failed inserts.
+                connection.commit()
+            except Exception as error:
+                retained: list[str] = []
                 for record in reversed(moved_back):
                     source = Path(record["source"])
                     destination = Path(record["destination"])
-                    if source.exists() and not destination.exists():
+                    if not source.exists():
+                        continue
+                    if destination.exists():
+                        retained.append(str(source))
+                        continue
+                    try:
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(source), str(destination))
+                    except OSError:
+                        retained.append(str(source))
+                if retained:
+                    raise OSError(
+                        f"撤销失败，{len(retained)} 个未能退回回收站的原件已保留在原位置："
+                        f"{'、'.join(retained)}；排除故障后可重试撤销"
+                    ) from error
                 raise
         return {
             "operation_id": row["operation_id"],
@@ -1451,20 +1670,67 @@ class VideoStore:
         confidence: float,
         analysis_mode: str = "high_recall",
     ) -> int:
+        with self.connect() as connection:
+            return self._add_marker(
+                connection, video_id, start_ms, end_ms, title, note, source_quote,
+                trigger_phrase, confidence, analysis_mode,
+            )
+
+    def _add_marker(
+        self, connection, video_id, start_ms, end_ms, title, note, source_quote,
+        trigger_phrase, confidence, analysis_mode,
+    ) -> int:
         if end_ms <= start_ms:
             raise ValueError("结束时间必须晚于开始时间")
+        existing = connection.execute(
+            "SELECT id FROM video_markers WHERE video_id = ? AND start_ms = ? AND end_ms = ? AND trigger_phrase = ? AND analysis_mode = ?",
+            (video_id, start_ms, end_ms, trigger_phrase, analysis_mode),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = connection.execute(
+            "INSERT INTO video_markers(video_id, start_ms, end_ms, title, note, source_quote, trigger_phrase, confidence, analysis_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (video_id, start_ms, end_ms, title.strip(), note.strip(), source_quote, trigger_phrase, confidence, analysis_mode),
+        )
+        return int(cursor.lastrowid)
+
+    def publish_semantic_markers(
+        self, video_id: int, analysis_mode: str, markers: list[dict], *,
+        replace_existing: bool = False, complete_analysis: bool = False, should_stop=None,
+    ) -> None:
+        from classcue.processing_control import ProcessingCancelled
+
+        def checkpoint():
+            if should_stop and should_stop():
+                raise ProcessingCancelled("用户已请求停止 AI 筛选")
+
         with self.connect() as connection:
-            existing = connection.execute(
-                "SELECT id FROM video_markers WHERE video_id = ? AND start_ms = ? AND end_ms = ? AND trigger_phrase = ? AND analysis_mode = ?",
-                (video_id, start_ms, end_ms, trigger_phrase, analysis_mode),
-            ).fetchone()
-            if existing:
-                return int(existing["id"])
-            cursor = connection.execute(
-                "INSERT INTO video_markers(video_id, start_ms, end_ms, title, note, source_quote, trigger_phrase, confidence, analysis_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (video_id, start_ms, end_ms, title.strip(), note.strip(), source_quote, trigger_phrase, confidence, analysis_mode),
-            )
-            return int(cursor.lastrowid)
+            connection.execute("BEGIN IMMEDIATE")
+            checkpoint()
+            if replace_existing:
+                connection.execute(
+                    "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
+                    "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard'",
+                    (video_id, analysis_mode),
+                )
+            for marker in markers:
+                self._add_marker(
+                    connection, video_id, marker["start_ms"], marker["end_ms"],
+                    marker["title"], marker["note"], marker["source_quote"],
+                    marker["trigger_phrase"], marker["confidence"], analysis_mode,
+                )
+            if complete_analysis:
+                connection.execute(
+                    """INSERT INTO video_analysis_runs(
+                        video_id, analysis_mode, status, candidate_count, updated_at
+                    ) VALUES (?, ?, 'completed', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(video_id, analysis_mode) DO UPDATE SET
+                        status = 'completed', candidate_count = excluded.candidate_count,
+                        updated_at = CURRENT_TIMESTAMP""",
+                    (video_id, analysis_mode, len(markers)),
+                )
+                connection.execute("UPDATE videos SET status = 'review_ready' WHERE id = ?", (video_id,))
+            checkpoint()
 
     def list_markers(self, video_id: int, analysis_mode: str | None = None) -> list[sqlite3.Row]:
         with self.connect() as connection:

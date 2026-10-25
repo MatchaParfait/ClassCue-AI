@@ -11,6 +11,7 @@ import { ReviewSidebar } from "../components/ReviewSidebar";
 import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
 import { VideoPanel } from "../components/VideoPanel";
 import { useModalFocus } from "../hooks/useModalFocus";
+import { captureVideoFrame } from "../utils/captureVideoFrame";
 import { useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useStudyData } from "../hooks/useStudyData";
 import type { Marker, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
@@ -273,6 +274,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       </div>
       {!mockMode && allMarkers.some(marker => marker.id === bilibiliMarkerId) && <BilibiliStudyPanel
         key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
+        onCaptureFrame={() => captureVideoFrame(videoRef.current)}
         backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}
       <AnimatePresence>{notice && (
         <AnimatedPopup key="notice" duration={.18} className="toast" role="status">

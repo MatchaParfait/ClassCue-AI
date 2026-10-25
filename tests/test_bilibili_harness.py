@@ -1,11 +1,13 @@
 """Synthetic end-to-end controller tests using the real evidence verifier."""
 
 from copy import deepcopy
+import json
 
 import pytest
 
 from classcue.bilibili import BilibiliError
-from classcue.bilibili_harness import HarnessService, LIMITS, PROTOCOL
+from classcue.bilibili_harness import BudgetStop, EXACT_LIMITS, HarnessService, LIMITS, PROTOCOL
+from classcue.bilibili_study import StudyResponseError
 from classcue.processing_control import ProcessingCancelled
 
 
@@ -131,6 +133,34 @@ def searches(client):
     return [value for kind, value in client.calls if kind == "search"]
 
 
+def test_search_planning_asks_for_short_topic_queries_not_instance_conditions():
+    run = run_state()
+    run["input"].update(marker={"video_id": 7, "title": "属性闭包"}, context={"course": "数据库"},
+                        classroom_segments=[])
+    store = FakeStore()
+    client = FakeClient({})
+
+    class Planner:
+        def ask(self, task, material, schema):
+            assert schema.__name__ == "Plan"
+            assert "不得把原题的实例字母、数值、完整条件列表、中间步骤和最终答案拼进搜索词" in task
+            assert "不是搜索词模板或原题相等约束" in task
+            assert "不能机械删除所有数字或数学符号" in task
+            assert "至少包含一条最简洁" in task
+            assert "course_queries仅检索课程或较宽的章节" in task
+            return schema(target={
+                "course": "数据库", "requirements": [{"id": "r1", "text": "属性闭包计算例题",
+                "depth": "example", "sources": ["marker.title"]}], "keywords": ["属性闭包"],
+            }, exact_queries=[{"text": "数据库 属性闭包 例题", "purpose": "同知识点例题"}],
+                course_queries=[{"text": "数据库原理 课程", "purpose": "课程目录"}])
+
+    HarnessService(store, Planner(), client).plan(run)
+    assert run["version"] == PROTOCOL
+    assert run["queries"][0]["text"] == "数据库 属性闭包 例题"
+    assert run["course_queries"][0]["text"] == "数据库原理 课程"
+    assert client.calls == []
+
+
 def test_exact_success_stops_before_other_candidate_or_course():
     run, client = run_state(), FakeClient({EXACT: [BV_A, BV_B], COURSE: [BV_C]})
     execute(run, client, FakeModel(good=[BV_A, BV_B]))
@@ -139,6 +169,34 @@ def test_exact_success_stops_before_other_candidate_or_course():
     assert ("metadata", BV_B) not in client.calls
     assert run["budget"]["verified"] == 1
     assert run["candidates"][0]["units"][0]["evidence"][1]["start_ms"] == 1000
+
+
+def test_format_repair_receives_validation_feedback_within_budget_gate():
+    class RepairingModel(FakeModel):
+        def ask(self, task, material, schema):
+            result = super().ask(task, material, schema)
+            if schema.__name__ == "EvidenceAssessment":
+                if "format_feedback" not in material:
+                    invalid = result.model_dump()
+                    invalid["assessments"][0]["step_ids"] = [3] * 25
+                    try:
+                        schema.model_validate(invalid)
+                    except ValueError as error:
+                        raise StudyResponseError(json.dumps(invalid), error) from None
+                feedback = material["format_feedback"]
+                assert feedback["errors"] == [{
+                    "type": "too_long", "field": ["assessments", 0, "step_ids"],
+                }]
+                assert "previous_response" in feedback
+                assert "上次返回未通过JSON结构校验" in task
+            return result
+
+    run, model = run_state(), RepairingModel(good=[BV_A])
+    store = execute(run, FakeClient({EXACT: [BV_A]}), model)
+    assert run["stop_reason"] == "success"
+    assert run["budget"]["llm"] == 4
+    assert any(event["action"] == "format_repair" for event in run["trace"])
+    assert all("format_feedback" not in saved for saved in store.saved)
 
 
 def test_exact_failure_falls_back_to_plain_course_video():
@@ -232,11 +290,86 @@ def test_task_budget_continuation_inherits_spent_requests():
     execute(run, client, FakeModel(good=[BV_A]), store)
     assert run["stop_reason"] == "budget"
     assert run["budget"]["platform"] == 1
+    stopped = deepcopy(run["budget_stop"])
+    assert stopped == {"scope": "task", "resource": "platform", "phase": "exact",
+                       "used": 1, "limit": 1, "requested": 1, "reserve": 0}
+    assert run["trace"][-1]["budget_stop"] == stopped
     run["limits"]["platform"] = 10
     execute(run, client, FakeModel(good=[BV_A]), store)
     assert run["stop_reason"] == "success"
     assert searches(client) == [EXACT]
     assert run["budget"]["platform"] == 3
+    assert "budget_stop" not in run
+    assert any(event.get("budget_stop") == stopped for event in run["trace"])
+
+
+@pytest.mark.parametrize("resource", ["platform", "llm", "tokens", "seconds", "videos", "attempts", "verified"])
+def test_every_task_limit_records_resource_and_keeps_other_balances(resource):
+    run = run_state()
+    run.update(phase="course", limits={**LIMITS, resource: 0})
+    client = FakeClient({COURSE: [BV_A]})
+    store = execute(run, client, FakeModel())
+    stop = run["budget_stop"]
+    assert run["status"] == "budget_exhausted"
+    assert stop["scope"] == "task" and stop["resource"] == resource
+    assert stop["phase"] == "course" and stop["limit"] == 0
+    assert stop["used"] >= 0 and stop["requested"] >= 0
+    assert run["trace"][-1]["budget_stop"] == stop
+    assert store.saved[-1]["budget_stop"] == stop
+    assert run["phase_limits"]["exact"] == EXACT_LIMITS
+    assert run["budget"]["verified"] == 0
+
+
+@pytest.mark.parametrize("resource", ["llm", "tokens"])
+def test_next_step_reservation_can_stop_with_remaining_budget_without_charging(resource):
+    from classcue.bilibili_evidence import EvidenceExtraction
+
+    run = run_state()
+    run["phase"] = "course"
+    model = FakeModel()
+    service = HarnessService(FakeStore(), model, FakeClient({}))
+    service.bind(run)
+    run["budget"][resource] = LIMITS[resource] - 1
+    before = deepcopy(run["budget"])
+    material = {"target": run["target"], "unit": part(BV_A),
+                "segments": [{"id": 1, "text": "合成字幕", "start_ms": 0, "end_ms": 1000}]}
+    with pytest.raises(BudgetStop) as caught:
+        service.request("提取合成证据", material, EvidenceExtraction)
+    detail = service.budget_detail(caught.value)
+    assert detail["resource"] == resource
+    assert detail["used"] < detail["limit"]
+    assert detail["used"] + detail["requested"] > detail["limit"]
+    assert detail["reserve"] > 0
+    assert detail["requested"] > detail["reserve"]
+    assert model.calls == []
+    assert run["budget"] == before
+
+
+def test_exact_phase_limit_records_transition_reason_not_task_exhaustion():
+    run = run_state()
+    run["phase_limits"] = {"exact": {**EXACT_LIMITS, "videos": 0}}
+    client = FakeClient({EXACT: [BV_A], COURSE: [BV_B]})
+    execute(run, client, FakeModel(good=[BV_B]))
+    event = next(row for row in run["trace"] if row["action"] == "phase_budget")
+    assert event["budget_stop"] == {"scope": "exact", "resource": "videos", "phase": "exact",
+                                    "used": 0, "limit": 0, "requested": 1, "reserve": 0}
+    assert run["stop_reason"] == "success"
+    assert run["phase"] == "course"
+    assert "budget_stop" not in run
+
+
+def test_planning_budget_failure_records_limit_instead_of_only_model_failure():
+    run = run_state()
+    run["limits"] = {**LIMITS, "llm": 0}
+    model = FakeModel()
+    store = FakeStore()
+    with pytest.raises(BudgetStop):
+        HarnessService(store, model, FakeClient({})).plan(run)
+    assert run["status"] == "failed"
+    assert "运行额度限制" in run["error"]
+    assert run["budget_stop"]["resource"] == "llm"
+    assert any(row["action"] == "budget_stop" for row in run["trace"])
+    assert model.calls == []
 
 
 def test_unapproved_rewrite_is_saved_but_never_searched():
@@ -252,6 +385,24 @@ def test_unapproved_rewrite_is_saved_but_never_searched():
     execute(run, client, model, store)
     assert searches(client) == [EXACT, COURSE, REWRITE]
     assert run["stop_reason"] == "success"
+
+
+def test_fallback_rewrite_keeps_same_generalized_search_rules():
+    run = run_state()
+    client = FakeClient({EXACT: [], COURSE: []})
+    model = FakeModel(rewrite=True)
+    original = model.ask
+
+    def ask(task, material, schema):
+        if schema.__name__ == "Rewrite":
+            assert "不得把原题的实例字母、数值、完整条件列表、中间步骤和最终答案拼进搜索词" in task
+            assert "不把原题实例条件补回搜索词" in task
+        return original(task, material, schema)
+
+    model.ask = ask
+    execute(run, client, model)
+    assert run["status"] == "awaiting_approval"
+    assert searches(client) == [EXACT, COURSE]
 
 
 def test_invalid_ranked_candidate_never_triggers_metadata_read():
@@ -280,6 +431,8 @@ def test_transport_budget_is_reported_as_budget_stop():
     execute(run, client, FakeModel())
     assert run["status"] == "budget_exhausted"
     assert run["stop_reason"] == "budget"
+    assert run["budget_stop"]["scope"] == "transport"
+    assert run["budget_stop"]["resource"] is None
 
 
 def test_cancel_during_model_response_does_not_repeat_completed_request():

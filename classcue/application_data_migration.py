@@ -22,7 +22,7 @@ from classcue.storage_migration import _hash, _identity, _overlaps, _safe, _writ
 
 CONFIG_FILES = (
     "ai_providers.json", "asr_settings.json", "video_trigger_library.json",
-    "deepseek_api_key.dpapi", "openai_compatible_api_key.dpapi",
+    "deepseek_api_key.dpapi", "openai_compatible_api_key.dpapi", "bilibili_cookie.dpapi",
     "desktop_settings.json",
 )
 
@@ -42,6 +42,9 @@ def managed_configs(directory):
     _safe(keys)
     if keys.exists():
         files.extend(keys.glob("*.dpapi"))
+        # Empty sidecar markers left by key removal; losing one would reactivate
+        # a credential the user deleted after migration.
+        files.extend(keys.glob("*.disabled"))
     for path in sorted(files):
         _safe(path)
         _identity(path)
@@ -216,6 +219,7 @@ def apply_pending(project, database):
             "library_identity": {
                 "database": str(target_database), "id": current["library_id"],
                 "scope": asr_storage.library_scope(project, database),
+                "slides_dir": str(asr_storage.slide_directory(project, database.parent)),
             },
         }
         try:

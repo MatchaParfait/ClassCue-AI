@@ -455,9 +455,9 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
             </details>
           </div>}
 
-          {registeredVideo && !showSpace && <ProcessVideoPreview key={registeredVideo.id} video={registeredVideo} active={active} />}
+          {registeredVideo && !showSpace && <ProcessVideoPreview key={`preview:${registeredVideo.id}`} video={registeredVideo} active={active} />}
           {registeredVideo && !showSpace && <SlideExtractionControls
-            key={registeredVideo.id}
+            key={`slides:${registeredVideo.id}`}
             video={registeredVideo}
             active={active}
             busy={fileChangesBusy || isProcessing}

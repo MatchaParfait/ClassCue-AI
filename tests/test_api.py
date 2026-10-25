@@ -614,7 +614,7 @@ def test_ai_key_reveal_is_explicit_and_not_cacheable(ai_key_client):
     response = ai_key_client.post(
         "/api/settings/ai/key/reveal",
         json={"base_url": "https://example.test/v1"},
-        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+        headers={"Origin": "http://127.0.0.1:8765", "Sec-Fetch-Site": "same-origin"},
     )
     assert response.status_code == 200
     assert response.json() == {"api_key": "test-only-secret"}

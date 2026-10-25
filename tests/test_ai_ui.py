@@ -1,3 +1,6 @@
+from contextlib import contextmanager
+from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +10,7 @@ import classcue.ai_provider as ai_provider
 import classcue.ai_ui as ai_ui
 import classcue.asr_models as asr_models
 import classcue.asr_ui as asr_ui
+from classcue.ai_provider import ProviderProfile, ProviderSettings, SavedConnection
 from classcue.core import TranscriptSegment
 import classcue.app_storage as app_storage
 from classcue.video_store import VideoStore
@@ -189,3 +193,197 @@ def test_management_and_review_share_unsaved_unified_profile(isolated_settings, 
     assert app.text_input(key="ai_interface_review_model").value == "relay-gpt"
     assert app.text_input(key="ai_interface_review_key").value == "relay-test-key"
     assert app.text_input(key="ai_interface_review_base_url").value == "https://relay.example/v1"
+
+
+def _start_locked_writer(monkeypatch, mutate, order=None):
+    """Compete for the real configuration lock; mutate(order) runs while the UI waits."""
+    if order is None:
+        order = []
+    waits: list[bool] = []
+    held = Event()
+    ui_requested = Event()
+    real_lock = ai_provider.provider_settings_lock
+
+    @contextmanager
+    def observed_lock():
+        order.append("ui-requested")
+        ui_requested.set()
+        with real_lock():
+            order.append("ui-acquired")
+            yield
+
+    monkeypatch.setattr(ai_ui, "provider_settings_lock", observed_lock, raising=False)
+
+    def writer():
+        with real_lock():
+            order.append("writer-acquired")
+            held.set()
+            waits.append(ui_requested.wait(5))
+            mutate(order)
+            order.append("writer-mutated")
+
+    thread = Thread(target=writer, daemon=True)
+    thread.start()
+    assert held.wait(5), "competing writer never acquired the configuration lock"
+    return thread, order, waits
+
+
+def test_auto_save_waits_for_shared_lock_and_keeps_concurrent_connection_switch(
+    isolated_settings, monkeypatch,
+):
+    ai_provider.save_provider_settings(ProviderSettings(
+        active_connection_id="default",
+        connections=[SavedConnection(
+            id="default", name="当前连接",
+            profile=ProviderProfile(base_url="https://relay.test/v1", model="old-model"),
+        )],
+    ))
+
+    def switch_active_connection(order):
+        values = ai_provider.load_provider_settings().model_dump()
+        values["connections"].append(SavedConnection(
+            id="second", name="备用",
+            profile=ProviderProfile(base_url="https://second.test/v1", model="second-model"),
+        ).model_dump())
+        values["active_connection_id"] = "second"
+        ai_provider.save_provider_settings(ProviderSettings.model_validate(values))
+
+    app = settings_app()
+    thread, order, waits = _start_locked_writer(monkeypatch, switch_active_connection)
+    try:
+        app.text_input(key="ai_interface_model").set_value("relay-gpt")
+        app.run(timeout=30)
+    finally:
+        thread.join(10)
+    assert not thread.is_alive()
+    assert waits == [True], "自动保存没有经过共享配置锁"
+    assert "ui-acquired" in order and "writer-mutated" in order
+    assert order.index("writer-acquired") < order.index("ui-requested")
+    assert order.index("ui-requested") < order.index("writer-mutated") < order.index("ui-acquired")
+    saved = ai_provider.load_provider_settings()
+    assert [connection.id for connection in saved.connections] == ["default", "second"]
+    assert saved.active_connection_id == "second"
+    assert saved.active_profile.model == "second-model"
+    edited = saved.connections[0].profile
+    assert edited.model == "relay-gpt" and edited.base_url == "https://relay.test/v1"
+    assert not app.exception
+
+
+def test_manual_save_reports_when_rendered_connection_disappears(isolated_settings, monkeypatch):
+    ai_provider.save_provider_settings(ProviderSettings(
+        active_connection_id="default",
+        connections=[
+            SavedConnection(id="default", name="当前连接",
+                            profile=ProviderProfile(base_url="https://relay.test/v1", model="old-model")),
+            SavedConnection(id="second", name="备用",
+                            profile=ProviderProfile(base_url="https://second.test/v1", model="second-model")),
+        ],
+    ))
+
+    def delete_rendered_connection(order):
+        values = ai_provider.load_provider_settings().model_dump()
+        values["connections"] = [item for item in values["connections"] if item["id"] != "default"]
+        values["active_connection_id"] = "second"
+        ai_provider.save_provider_settings(ProviderSettings.model_validate(values))
+
+    app = settings_app()
+    thread, order, waits = _start_locked_writer(monkeypatch, delete_rendered_connection)
+    try:
+        app.button(key="ai_save").click()
+        app.run(timeout=30)
+    finally:
+        thread.join(10)
+    assert not thread.is_alive()
+    assert waits == [True], "手动保存没有经过共享配置锁"
+    assert order.index("ui-requested") < order.index("writer-mutated") < order.index("ui-acquired")
+    assert any("已不存在" in error.value for error in app.error)
+    saved = ai_provider.load_provider_settings()
+    assert [connection.id for connection in saved.connections] == ["second"]
+    assert saved.active_connection_id == "second"
+    assert saved.active_profile.model == "second-model"
+    assert not app.exception
+
+
+def test_auto_save_from_empty_collection_still_creates_default_connection(isolated_settings):
+    ai_provider.save_provider_settings(ProviderSettings(connections=[]))
+    app = settings_app()
+    app.text_input(key="ai_interface_base_url").set_value("https://relay.example/v1").run()
+    app.text_input(key="ai_interface_model").set_value("relay-gpt").run()
+    saved = ai_provider.load_provider_settings()
+    assert [connection.id for connection in saved.connections] == ["default"]
+    assert saved.active_connection_id == "default"
+    assert saved.active_profile.model == "relay-gpt"
+    assert not app.exception
+
+
+def test_forget_key_waits_for_shared_lock_and_survives_locked_rollback(isolated_settings, monkeypatch):
+    monkeypatch.setattr(app_storage, "DATA_DIR", isolated_settings)
+    key_path = ai_provider.interface_key_path(ProviderProfile(base_url="https://api.deepseek.com"))
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(b"synthetic-original-secret")
+    order: list[str] = []
+
+    def fake_delete(path):
+        Path(path).unlink()
+        order.append("ui-delete")
+
+    monkeypatch.setattr(ai_ui, "delete_api_key", fake_delete)
+
+    def rollback_new_key(order):
+        previous = key_path.read_bytes()
+        key_path.write_bytes(b"synthetic-replaced-secret")
+        # Same locked sequence as the API: write the key, then restore the
+        # previous bytes when the configuration commit fails.
+        key_path.write_bytes(previous)
+        order.append("writer-restored")
+
+    app = settings_app()
+    thread, order, waits = _start_locked_writer(monkeypatch, rollback_new_key, order)
+    try:
+        app.button(key="ai_forget").click()
+        app.run(timeout=30)
+    finally:
+        thread.join(10)
+    assert not thread.is_alive()
+    assert waits == [True], "删除密钥记忆没有经过共享配置锁"
+    assert order.index("ui-requested") < order.index("writer-restored") < order.index("ui-acquired")
+    assert order.index("ui-delete") > order.index("ui-acquired")
+    assert not key_path.exists()
+    assert not key_path.with_suffix(".disabled").exists()
+    assert any("已删除" in message.value for message in app.success)
+    assert not app.exception
+
+
+def test_remember_key_writes_inside_shared_lock_and_clears_disabled_marker(
+    isolated_settings, monkeypatch,
+):
+    monkeypatch.setattr(app_storage, "DATA_DIR", isolated_settings)
+    key_path = ai_provider.interface_key_path(ProviderProfile(base_url="https://api.deepseek.com"))
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    order: list[str] = []
+
+    def fake_save(path, value):
+        Path(path).write_bytes(value.encode())
+        order.append("ui-save")
+
+    monkeypatch.setattr(ai_ui, "save_api_key", fake_save)
+
+    def set_disabled_marker(order):
+        key_path.with_suffix(".disabled").touch()
+        order.append("writer-marked")
+
+    app = settings_app()
+    thread, order, waits = _start_locked_writer(monkeypatch, set_disabled_marker, order)
+    try:
+        app.button(key="ai_remember").click()
+        app.run(timeout=30)
+    finally:
+        thread.join(10)
+    assert not thread.is_alive()
+    assert waits == [True], "记住密钥没有经过共享配置锁"
+    assert order.index("ui-requested") < order.index("writer-marked") < order.index("ui-acquired")
+    assert order.index("ui-save") > order.index("ui-acquired")
+    assert key_path.read_bytes() == b"deepseek-test-key"
+    assert not key_path.with_suffix(".disabled").exists()
+    assert any("已加密保存" in message.value for message in app.success)
+    assert not app.exception

@@ -1,5 +1,6 @@
 import json
 import time
+from threading import Event
 
 import pytest
 
@@ -417,6 +418,89 @@ def test_cancel_after_encoding_before_commit_keeps_previous_generation(tmp_path)
                                  progress=progress, should_stop=lambda: stop)
     assert set(root.rglob("*.jpg")) == paths
     assert [dict(row) for row in store.list_slides(video_id, include_auxiliary=True)] == before
+
+
+@pytest.mark.parametrize("report_progress", [False, True])
+def test_cancel_after_commit_returns_published_generation(tmp_path, monkeypatch, report_progress):
+    _, store, video_id, root = registered_video(tmp_path)
+    previous = extract_and_store_slides(store, video_id, root)["slides"]
+    old_paths = {row["image_path"] for row in previous}
+    cancelled = Event()
+    replace = store.replace_video_slides
+
+    def commit_then_cancel(*args, **kwargs):
+        rows = replace(*args, **kwargs)
+        cancelled.set()
+        return rows
+
+    def progress(*_args):
+        if cancelled.is_set():
+            raise ProcessingCancelled("Synthetic cancellation after publication")
+
+    monkeypatch.setattr(store, "replace_video_slides", commit_then_cancel)
+    result = extract_and_store_slides(
+        store, video_id, root, force=True, should_stop=cancelled.is_set,
+        progress=progress if report_progress else None,
+    )
+    assert result["status"] == "completed" and result["committed"] is True
+    rows = store.list_slides(video_id, include_auxiliary=True)
+    assert list(result["slides"]) == list(rows)
+    assert {row["image_path"] for row in rows}.isdisjoint(old_paths)
+    assert all((root / row["image_path"]).is_file() for row in rows)
+
+
+def test_api_cancel_after_slide_commit_completes_published_job(tmp_path, monkeypatch):
+    _, store, video_id, root = registered_video(tmp_path)
+    previous = extract_and_store_slides(store, video_id, root)["slides"]
+    old_paths = {row["image_path"] for row in previous}
+    ready = Event()
+    replace = store.replace_video_slides
+    monkeypatch.setattr(api_main.asr_storage, "slide_directory", lambda *_args: root)
+    app = create_app(store)
+    job_id = None
+
+    def gated_extract(*args, **kwargs):
+        assert ready.wait(10), "API did not return the job id"
+        return extract_and_store_slides(*args, **kwargs)
+
+    def commit_then_cancel(*args, **kwargs):
+        rows = replace(*args, **kwargs)
+        app.state.jobs.cancel(job_id)
+        return rows
+
+    monkeypatch.setattr(api_main, "extract_and_store_slides", gated_extract)
+    monkeypatch.setattr(store, "replace_video_slides", commit_then_cancel)
+    with TestClient(app) as client:
+        try:
+            started = client.post(f"/api/videos/{video_id}/slides/extract", json={"force": True})
+            assert started.status_code == 202
+            job_id = started.json()["job_id"]
+            future = app.state.jobs._futures[job_id]
+            ready.set()
+            future.result(timeout=20)
+            job = client.get(f"/api/jobs/{job_id}").json()
+            assert job["status"] == job["stage"] == "completed"
+            assert job["progress"] == 1.0
+            rows = store.list_slides(video_id, include_auxiliary=True)
+            assert {row["image_path"] for row in rows}.isdisjoint(old_paths)
+            assert all((root / row["image_path"]).is_file() for row in rows)
+        finally:
+            ready.set()
+
+
+def test_final_progress_error_is_not_hidden_after_publication(tmp_path):
+    _, store, video_id, root = registered_video(tmp_path)
+    old_paths = {row["image_path"] for row in extract_and_store_slides(store, video_id, root)["slides"]}
+
+    def progress(_value, _message, stage):
+        if stage == "completed":
+            raise RuntimeError("Synthetic progress failure")
+
+    with pytest.raises(RuntimeError, match="Synthetic progress failure"):
+        extract_and_store_slides(store, video_id, root, force=True, progress=progress)
+    rows = store.list_slides(video_id, include_auxiliary=True)
+    assert {row["image_path"] for row in rows}.isdisjoint(old_paths)
+    assert all((root / row["image_path"]).is_file() for row in rows)
 
 
 def test_overlap_boundaries_context_and_subtitles_remain_time_addressable(tmp_path, monkeypatch):

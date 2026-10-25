@@ -13,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from classcue.ai_provider import load_provider_settings, resolve_interface_key
 from classcue.bilibili import BilibiliAccount, BilibiliClient, BilibiliError
 from classcue.bilibili_login import BilibiliQrLogin
+from classcue.bilibili_frames import BrowserFrameReader, FrameStore
 from classcue.bilibili_store import BilibiliStore, StudyContext, digest
 from classcue.bilibili_study import StudyModel
-from classcue.bilibili_harness import HarnessService as StudyService, Query as SearchQuery, Target, PROTOCOL, validate_sources
+from classcue.bilibili_harness import HarnessService as StudyService, Query as SearchQuery, Target, current_protocol, validate_sources
+from classcue.question_service import load_slide_images
 
 
 class SearchPayload(BaseModel):
@@ -26,6 +28,7 @@ class SearchPayload(BaseModel):
     course_queries: list[SearchQuery] = Field(default_factory=list, max_length=3)
     target: Target | None = None
     auto_rewrite: bool = False
+    visual_verification: bool = Field(default=True, strict=True)
 
 
 class ContinuePayload(BaseModel):
@@ -78,13 +81,28 @@ def router(provider, jobs, account_directory: Path) -> APIRouter:
         repo.save_run(run)
 
         def operation(update, should_cancel):
+            original_images = ()
+            question = run["input"].get("question") or {}
+            if (kind != "bilibili_plan" and run.get("visual_verification")
+                    and run.get("prompt_style") == "light" and question.get("images")):
+                from classcue.asr_storage import slide_directory
+                from classcue.paths import PROJECT_ROOT
+                original_images = load_slide_images(
+                    repo.store, {"classroom": {"marker": run["input"]["marker"]},
+                                 "question": {"images": question["images"]}},
+                    slide_directory(PROJECT_ROOT, provider.data_root()))
             with StudyModel(profile, key) as model, BilibiliClient(
                 repo, cookie, should_cancel=should_cancel,
-            ) as client:
-                service = StudyService(repo, model, client, update, should_cancel)
+            ) as client, BrowserFrameReader(repo, cookie) as frame_reader:
+                service = StudyService(repo, model, client, update, should_cancel,
+                                       frame_reader=frame_reader, frame_store=FrameStore(repo.store),
+                                       original_images=original_images)
                 return service.plan(run) if kind == "bilibili_plan" else service.search(run)
 
         try:
+            # Callers hold jobs._lock across snapshot validation, run creation
+            # and this submit so a delete cannot invalidate the referenced
+            # marker mid-request; the study job itself runs outside the lock.
             job_id = jobs.submit(
                 kind, run["input"]["marker"]["video_id"], operation,
                 request={"bilibili_run_id": run["id"]}, job_id=run["job_id"],
@@ -165,112 +183,137 @@ def router(provider, jobs, account_directory: Path) -> APIRouter:
 
     @routes.put("/api/markers/{marker_id}/bilibili/context")
     def save_context(marker_id: int, payload: StudyContext):
-        idle()
+        # Marker validation and persistence share the delete/undo critical
+        # section; the insert must not race a marker cascade delete.
+        with jobs._lock:
+            idle()
+            try:
+                return repository().save_context(marker_id, payload)
+            except KeyError:
+                raise HTTPException(status_code=404, detail="考点不存在") from None
+
+    @routes.get("/api/markers/{marker_id}/bilibili/runs/{run_id}/frames/{frame_id}")
+    def candidate_frame(marker_id: int, run_id: str, frame_id: str):
+        frames = FrameStore(provider.get())
         try:
-            return repository().save_context(marker_id, payload)
+            record = frames.get(marker_id, run_id, frame_id)
+            image = frames.image(record)
         except KeyError:
-            raise HTTPException(status_code=404, detail="考点不存在") from None
+            raise HTTPException(status_code=404, detail="候选截图不存在或不属于当前考点") from None
+        except (OSError, ValueError):
+            raise HTTPException(status_code=410, detail="候选截图已不可用") from None
+        return Response(image.data, media_type=image.mime_type,
+                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     @routes.post("/api/markers/{marker_id}/bilibili/plan", status_code=202)
     def plan(marker_id: int, payload: PlanPayload):
-        idle()
-        if not payload.consent:
-            raise HTTPException(status_code=400, detail="请确认向所选 AI 服务发送考点依据及补充信息")
-        repo = repository()
-        try:
-            snapshot = repo.snapshot(marker_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="考点不存在") from None
-        if snapshot.get("question") and snapshot["question"]["status"] != "ready":
-            raise HTTPException(status_code=409, detail="请先完成题目分析或补充题目信息")
-        profile, key = model_settings()
-        run = repo.create_run(snapshot, profile.model_dump(exclude={"credential_id"}))
-        return submit(repo, run, profile, key, "bilibili_plan")
+        with jobs._lock:
+            idle()
+            if not payload.consent:
+                raise HTTPException(status_code=400, detail="请确认向所选 AI 服务发送考点依据及补充信息")
+            repo = repository()
+            try:
+                snapshot = repo.snapshot(marker_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail="考点不存在") from None
+            if snapshot.get("question") and snapshot["question"]["status"] != "ready":
+                raise HTTPException(status_code=409, detail="请先完成题目分析或补充题目信息")
+            profile, key = model_settings()
+            run = repo.create_run(snapshot, profile.model_dump(exclude={"credential_id"}))
+            return submit(repo, run, profile, key, "bilibili_plan")
 
     @routes.post("/api/markers/{marker_id}/bilibili/search", status_code=202)
     def search(marker_id: int, payload: SearchPayload):
-        idle()
-        if not payload.consent:
-            raise HTTPException(status_code=400, detail="请确认发送搜索词并将候选字幕提交所选 AI 服务")
-        repo = repository()
-        try:
-            source = repo.get_run(marker_id, payload.run_id)
-            snapshot = repo.snapshot(marker_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="考点或搜索方案不存在") from None
-        if source["input_hash"] != digest(snapshot):
-            raise HTTPException(status_code=409, detail="考点、字幕或补充信息已变化，请重新生成搜索方案")
-        if source["status"] != "ready" or not source["queries"]:
-            raise HTTPException(status_code=409, detail="搜索方案尚未生成完成")
-        if source.get("version") != PROTOCOL or not source.get("target"):
-            raise HTTPException(status_code=409, detail="旧版记录需要重新生成目标与搜索方案")
-        if repo.control("platform_pause"):
-            raise HTTPException(status_code=409, detail="B 站读取已暂停，请检查账号后手动恢复")
-        profile, key = model_settings()
-        identity = profile.model_dump(exclude={"credential_id"})
-        if identity != source["profile"]:
-            raise HTTPException(status_code=409, detail="AI 连接设置已变化，请重新生成搜索方案")
-        try:
-            cookie = account.load()
-        except (BilibiliError, ValueError):
-            raise HTTPException(status_code=400, detail="B 站登录状态不可用，请重新扫码或退出登录") from None
-        target = payload.target or Target.model_validate(source["target"])
-        try:
-            validate_sources(target, snapshot, allow_user=True)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="目标引用无效，请重新生成方案") from None
-        if payload.course_queries and not target.course:
-            raise HTTPException(status_code=400, detail="请明确课程类别后再搜索课程")
-        run = repo.create_run(snapshot, identity)
-        run.update(status="searching", queries=[query.model_dump() for query in payload.queries],
-                   version=PROTOCOL, target=target.model_dump(),
-                   course_queries=[q.model_dump() for q in payload.course_queries], auto_rewrite=payload.auto_rewrite,
-                   parent_run_id=source["id"], account_scope=digest(cookie) if cookie else "anonymous",
-                   budget=copy.deepcopy(source.get("budget", {})))
-        return submit(repo, run, profile, key, "bilibili_search", cookie)
+        with jobs._lock:
+            idle()
+            if not payload.consent:
+                raise HTTPException(status_code=400, detail="请确认发送搜索词并将候选字幕提交所选 AI 服务")
+            repo = repository()
+            try:
+                source = repo.get_run(marker_id, payload.run_id)
+                snapshot = repo.snapshot(marker_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail="考点或搜索方案不存在") from None
+            if source["input_hash"] != digest(snapshot):
+                raise HTTPException(status_code=409, detail="考点、字幕或补充信息已变化，请重新生成搜索方案")
+            if source["status"] != "ready" or not source["queries"]:
+                raise HTTPException(status_code=409, detail="搜索方案尚未生成完成")
+            if source.get("version") != current_protocol(source) or not source.get("target"):
+                raise HTTPException(status_code=409, detail="旧版记录需要重新生成目标与搜索方案")
+            if repo.control("platform_pause"):
+                raise HTTPException(status_code=409, detail="B 站读取已暂停，请检查账号后手动恢复")
+            profile, key = model_settings()
+            identity = profile.model_dump(exclude={"credential_id"})
+            if identity != source["profile"]:
+                raise HTTPException(status_code=409, detail="AI 连接设置已变化，请重新生成搜索方案")
+            try:
+                cookie = account.load()
+            except (BilibiliError, ValueError):
+                raise HTTPException(status_code=400, detail="B 站登录状态不可用，请重新扫码或退出登录") from None
+            target = payload.target or Target.model_validate(source["target"])
+            try:
+                validate_sources(target, snapshot, allow_user=True)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="目标引用无效，请重新生成方案") from None
+            if payload.course_queries and not target.course:
+                raise HTTPException(status_code=400, detail="请明确课程类别后再搜索课程")
+            run = repo.create_run(snapshot, identity)
+            run.update(status="searching", queries=[query.model_dump() for query in payload.queries],
+                       version=current_protocol(source), target=target.model_dump(),
+                       course_queries=[q.model_dump() for q in payload.course_queries], auto_rewrite=payload.auto_rewrite,
+                       visual_verification=payload.visual_verification,
+                       prompt_style=source.get("prompt_style", "structured"),
+                       parent_run_id=source["id"], account_scope=digest(cookie) if cookie else "anonymous",
+                       budget=copy.deepcopy(source.get("budget", {})),
+                       limits=copy.deepcopy(source.get("limits", {})),
+                       phase_limits=copy.deepcopy(source.get("phase_limits", {})))
+            return submit(repo, run, profile, key, "bilibili_search", cookie)
 
     @routes.post("/api/markers/{marker_id}/bilibili/continue", status_code=202)
     def continue_search(marker_id: int, payload: ContinuePayload):
-        idle()
-        if not payload.consent:
-            raise HTTPException(status_code=400, detail="请确认继续检索及字幕核验")
-        repo = repository()
-        try:
-            run = repo.get_run(marker_id, payload.run_id)
-            snapshot = repo.snapshot(marker_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="考点或搜索记录不存在") from None
-        if run.get("version") != PROTOCOL or run["input_hash"] != digest(snapshot):
-            raise HTTPException(status_code=409, detail="目标或材料已变化，请重新生成方案")
-        if run["status"] not in {"failed", "interrupted", "awaiting_approval", "budget_exhausted"}:
-            raise HTTPException(status_code=409, detail="该任务当前不能继续")
-        if repo.control("platform_pause"):
-            raise HTTPException(status_code=409, detail="B 站读取已暂停，请先处理平台提示")
-        profile, key = model_settings()
-        if profile.model_dump(exclude={"credential_id"}) != run["profile"]:
-            raise HTTPException(status_code=409, detail="AI 设置已变化，请重新生成方案")
-        try:
-            cookie = account.load()
-        except (BilibiliError, ValueError):
-            raise HTTPException(status_code=400, detail="读取凭据不可用") from None
-        if run.get("account_scope") != (digest(cookie) if cookie else "anonymous"):
-            raise HTTPException(status_code=409, detail="读取账号已变化，请重新生成方案")
-        if run["status"] == "awaiting_approval":
-            if not payload.queries:
-                raise HTTPException(status_code=400, detail="请确认新的课程搜索词")
-            queries = [q.model_dump() for q in payload.queries if q.text not in run["completed_queries"]]
-            if not queries:
-                raise HTTPException(status_code=400, detail="这些搜索词已执行")
-            run.update(course_queries=queries, round=3)
-            run.pop("pending_queries", None)
-        if run["status"] == "budget_exhausted":
-            if not payload.increase_budget:
-                raise HTTPException(status_code=400, detail="预算已耗尽，需明确确认追加预算")
-            if run.get("budget_extended"):
-                raise HTTPException(status_code=409, detail="本任务已经追加过预算，请结束并检查现有结果")
-            run["limits"] = {name: limit * 2 for name, limit in run["limits"].items()}
-            run["budget_extended"] = True
-        run.update(status="searching", error="")
-        return submit(repo, run, profile, key, "bilibili_search", cookie)
+        with jobs._lock:
+            idle()
+            if not payload.consent:
+                raise HTTPException(status_code=400, detail="请确认继续检索及字幕核验")
+            repo = repository()
+            try:
+                run = repo.get_run(marker_id, payload.run_id)
+                snapshot = repo.snapshot(marker_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail="考点或搜索记录不存在") from None
+            if run.get("version") != current_protocol(run) or run["input_hash"] != digest(snapshot):
+                raise HTTPException(status_code=409, detail="目标或材料已变化，请重新生成方案")
+            if run["status"] not in {"failed", "interrupted", "awaiting_approval", "budget_exhausted"}:
+                raise HTTPException(status_code=409, detail="该任务当前不能继续")
+            if repo.control("platform_pause"):
+                raise HTTPException(status_code=409, detail="B 站读取已暂停，请先处理平台提示")
+            profile, key = model_settings()
+            if profile.model_dump(exclude={"credential_id"}) != run["profile"]:
+                raise HTTPException(status_code=409, detail="AI 设置已变化，请重新生成方案")
+            try:
+                cookie = account.load()
+            except (BilibiliError, ValueError):
+                raise HTTPException(status_code=400, detail="读取凭据不可用") from None
+            if run.get("account_scope") != (digest(cookie) if cookie else "anonymous"):
+                raise HTTPException(status_code=409, detail="读取账号已变化，请重新生成方案")
+            if run["status"] == "awaiting_approval":
+                if not payload.queries:
+                    raise HTTPException(status_code=400, detail="请确认新的课程搜索词")
+                queries = [query.model_dump() for query in payload.queries if query.text not in run["completed_queries"]]
+                if not queries:
+                    raise HTTPException(status_code=400, detail="这些搜索词已执行")
+                run.update(course_queries=queries, round=3)
+                run.pop("pending_queries", None)
+            if run["status"] == "budget_exhausted":
+                if not payload.increase_budget:
+                    raise HTTPException(status_code=400, detail="预算已耗尽，需明确确认追加预算")
+                if run.get("budget_extended"):
+                    raise HTTPException(status_code=409, detail="本任务已经追加过预算，请结束并检查现有结果")
+                run["limits"] = {name: limit * 2 for name, limit in run["limits"].items()}
+                run["budget_extended"] = True
+            run.update(status="searching", error="")
+            run.pop("budget_stop", None)
+            run.pop("stop_reason", None)
+            return submit(repo, run, profile, key, "bilibili_search", cookie)
 
     return routes

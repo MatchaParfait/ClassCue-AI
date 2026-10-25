@@ -79,6 +79,120 @@ def test_offline_backup_moves_all_small_data_and_keeps_identity_and_large_paths(
     assert migration.read_journal(f.project)["status"] == "completed"
 
 
+def test_removed_key_disabled_marker_migrates_with_ai_keys(library):
+    f = library
+    marker = f.data / "ai_keys" / "removed-profile.disabled"
+    marker.write_bytes(b"")
+    plan = migration.plan(f.project, Path(f.store.path), str(f.destination))
+    assert plan["files_total"] == 4
+    assert str(marker) in [item["source"] for item in plan["files"]]
+    stage(f)
+    assert migration.apply_pending(f.project, Path(f.store.path)) == f.destination / "library"
+    moved = f.destination / "config/ai_keys/removed-profile.disabled"
+    assert moved.read_bytes() == marker.read_bytes()
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("target_state", ["absent", "identical", "conflicting"])
+def test_bilibili_login_state_migration_preserves_bytes_and_rejects_conflicts(library, target_state):
+    f = library
+    source = f.data / "bilibili_cookie.dpapi"
+    source.write_bytes(b"opaque-synthetic-login-never-decrypt")
+    unrelated = f.data / "unmanaged-login.dpapi"
+    unrelated.write_bytes(b"unmanaged-synthetic-file")
+    target = f.destination / "config" / source.name
+    if target_state != "absent":
+        target.parent.mkdir(parents=True)
+        target.write_bytes(source.read_bytes() if target_state == "identical" else b"other-synthetic-login")
+    if target_state == "conflicting":
+        with pytest.raises(ValueError, match="目标配置文件"):
+            migration.plan(f.project, Path(f.store.path), str(f.destination))
+        assert target.read_bytes() == b"other-synthetic-login"
+        assert source.read_bytes() == b"opaque-synthetic-login-never-decrypt"
+        assert not migration.journal_path(f.project).exists()
+        return
+    plan, _record = stage(f)
+    assert str(source) in [item["source"] for item in plan["files"]]
+    assert str(unrelated) not in [item["source"] for item in plan["files"]]
+    root = migration.apply_pending(f.project, Path(f.store.path))
+    assert asr_storage.application_config_directory(f.project) == target.parent
+    assert root == f.destination / "library"
+    assert target.read_bytes() == source.read_bytes()
+    assert unrelated.exists() and not (target.parent / unrelated.name).exists()
+
+
+def test_bilibili_login_copy_failure_rolls_back_new_files_and_keeps_originals(library, monkeypatch):
+    f = library
+    source = f.data / "bilibili_cookie.dpapi"
+    source.write_bytes(b"opaque-synthetic-login-never-decrypt")
+    before = (f.data / "asr_storage.json").read_bytes()
+    stage(f)
+    copy = migration.shutil.copy2
+
+    def fail_login_copy(src, dst):
+        if Path(src) == source:
+            raise PermissionError("synthetic login copy denied")
+        return copy(src, dst)
+
+    monkeypatch.setattr(migration.shutil, "copy2", fail_login_copy)
+    with pytest.raises(PermissionError, match="synthetic login copy denied"):
+        migration.apply_pending(f.project, Path(f.store.path))
+    assert (f.data / "asr_storage.json").read_bytes() == before
+    assert source.read_bytes() == b"opaque-synthetic-login-never-decrypt"
+    assert f.key.exists() and Path(f.store.path).exists()
+    assert not (f.destination / "library" / "project.db").exists()
+    assert not [path for path in f.destination.rglob("*") if path.is_file()]
+
+
+def add_slide_image(f):
+    image = asr_storage.slide_directory(f.project, f.old) / "hash" / "board.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"slide-image")
+    f.store.replace_video_slides(f.video, [dict(
+        start_ms=0, end_ms=2000, representative_ms=1500, image_path="hash/board.jpg",
+        image_hash="synthetic-slide", duration_ms=2000, retention_class="stable",
+        confidence=.9, roi_json="{}", extraction_version="synthetic")])
+    return image
+
+
+def test_relocated_library_keeps_existing_slide_images_readable(library):
+    f = library
+    image = add_slide_image(f)
+    stage(f)
+    root = migration.apply_pending(f.project, Path(f.store.path))
+    assert asr_storage.slide_directory(f.project, root) == f.old / "slides"
+    relatives = VideoStore(root / "project.db").slide_image_paths(f.video)
+    assert relatives and all((f.old / "slides" / relative).read_bytes() == b"slide-image"
+                             for relative in relatives)
+    assert image.exists() and not (root / "slides").exists()
+
+
+def test_slides_pin_only_applies_to_the_relocated_library(library):
+    f = library
+    add_slide_image(f)
+    stage(f)
+    root = migration.apply_pending(f.project, Path(f.store.path))
+    identity = asr_storage.read_configuration(f.project)["library_identity"]
+    assert identity["slides_dir"] == str(f.old / "slides")
+    independent = f.project / "isolated-test"
+    assert asr_storage.slide_directory(f.project, root) == f.old / "slides"
+    assert asr_storage.slide_directory(f.project, independent) == independent / "slides"
+
+
+def test_bound_media_root_keeps_slides_priority_after_relocation(library):
+    f = library
+    media = f.old.parent / "media"
+    (f.data / "asr_storage.json").write_text(json.dumps(
+        {"library_data_dir": str(f.old), "media_storage_root": str(media)}))
+    image = add_slide_image(f)
+    assert image == media / "slides" / "hash" / "board.jpg"
+    stage(f)
+    root = migration.apply_pending(f.project, Path(f.store.path))
+    assert asr_storage.slide_directory(f.project, root) == media / "slides"
+    assert (media / "slides" / "hash" / "board.jpg").read_bytes() == b"slide-image"
+    assert not (root / "slides").exists() and not (f.old / "slides").exists()
+
+
 def test_live_database_lease_prevents_copy_or_relocation(library):
     f = library
     stage(f)

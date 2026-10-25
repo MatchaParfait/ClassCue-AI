@@ -8,6 +8,7 @@ huggingface-hub>=0.34.0
 httpx>=0.28.1,<0.29
 av>=12.0.0
 pydantic>=2.8.0
+playwright>=1.55,<2
 pytest>=8.3.0
 openai>=1.0.0
 python-dotenv>=1.0.0

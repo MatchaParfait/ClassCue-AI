@@ -179,8 +179,13 @@ def run_process(command, *, env=None, cwd=None, should_stop=None, on_line=None, 
                 operation()
             except Exception as error:
                 cleanup_errors.append(error)
-                log_exception(LOGGER, "Owned worker cleanup failed", exc=error,
-                              stage=stage, pid=getattr(process, "pid", None))
+                try:
+                    log_exception(LOGGER, "Owned worker cleanup failed", exc=error,
+                                  stage=stage, pid=getattr(process, "pid", None))
+                except Exception:
+                    # Diagnostics must not abort the remaining cleanup steps or
+                    # mask the primary error and the first real cleanup failure.
+                    pass
 
         def close_tree():
             if job:

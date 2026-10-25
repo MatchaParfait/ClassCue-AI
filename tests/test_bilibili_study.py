@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from classcue.bilibili import BilibiliClient, BilibiliError, normalize_cookie, wbi_sign
 from classcue.bilibili_store import BilibiliStore, StudyContext, digest
 from classcue.bilibili_study import (
-    SearchPlan, StudyModel, StudyService, Verdict, subtitle_chunks, validate_verdict,
+    SearchPlan, StudyModel, StudyResponseError, StudyService, Verdict, subtitle_chunks, validate_verdict,
 )
 from classcue.core import TranscriptSegment
 from classcue.processing_control import ProcessingCancelled
@@ -39,6 +40,22 @@ def study(tmp_path):
 def unit():
     return {"id": BV + ":1", "bvid": BV, "page": 1, "cid": 100,
             "duration_ms": 100000, "part": "例题", "url": f"https://www.bilibili.com/video/{BV}/?p=1"}
+
+
+@pytest.mark.parametrize("raw,error_type", [
+    ("not valid json", "invalid_json"),
+    ('{"queries":[]}', "too_short"),
+])
+def test_model_format_feedback_is_private_and_does_not_change_public_error(raw, error_type):
+    model = object.__new__(StudyModel)
+    model.adapter = SimpleNamespace(
+        profile=SimpleNamespace(max_tokens=1024), _request_content=lambda *_: raw,
+    )
+    with pytest.raises(StudyResponseError) as caught:
+        model.ask("合成请求", {}, SearchPlan)
+    assert caught.value.feedback["errors"][0]["type"] == error_type
+    assert caught.value.feedback["previous_response"] == raw
+    assert raw not in str(caught.value)
 
 
 def response(data, code=0):
@@ -322,6 +339,7 @@ class FakeClient:
 def test_pipeline_deduplicates_caps_parts_and_keeps_original_marker(study):
     repo, marker, _ = study
     run = repo.create_run(repo.snapshot(marker), {"model": "fake"})
+    run["visual_verification"] = False
     service = StudyService(repo, FakeModel(), FakeClient())
     service.plan(run)
     run["account_scope"] = "synthetic"
@@ -340,6 +358,7 @@ def test_pipeline_deduplicates_caps_parts_and_keeps_original_marker(study):
 def test_cancellation_and_model_failure_preserve_completed_checks(study):
     repo, marker, _ = study
     run = repo.create_run(repo.snapshot(marker), {})
+    run["visual_verification"] = False
     run["queries"] = FakeModel().plan({})
     StudyService(repo, FakeModel(), FakeClient()).plan(run)
     run["account_scope"] = "synthetic"
@@ -360,6 +379,7 @@ def test_cancellation_and_model_failure_preserve_completed_checks(study):
 def test_failed_positive_evidence_never_recommended(study):
     repo, marker, _ = study
     run = repo.create_run(repo.snapshot(marker), {})
+    run["visual_verification"] = False
     run["queries"] = FakeModel().plan({})
     StudyService(repo, FakeModel(), FakeClient()).plan(run)
     run["account_scope"] = "synthetic"

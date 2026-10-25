@@ -11,6 +11,7 @@ from classcue.ai_provider import ProviderProfile, ProviderSettings
 from classcue.question_analysis import QuestionMaterial
 from tests.test_bilibili_api import Model as BiliModel, Network, wait
 from tests.test_question_analysis import FakeModel, add_slide, questions
+from tests.bilibili_visual_fakes import FakeFrameReader
 
 
 @pytest.fixture
@@ -139,6 +140,10 @@ def test_question_target_flows_through_search_to_cited_example(api, monkeypatch)
 
     monkeypatch.setattr(module, "StudyModel", SearchModel)
     monkeypatch.setattr(module, "BilibiliClient", Subtitles)
+    monkeypatch.setattr(module, "BrowserFrameReader", FakeFrameReader)
+    monkeypatch.setattr(
+        "classcue.bilibili_frames.library_scope", lambda _project, database: database.parent / "cache"
+    )
     analyzed = client.post(f"/api/markers/{marker}/question/analyze").json()
     assert wait(client, analyzed["job_id"])["status"] == "completed"
     planned = client.post(f"/api/markers/{marker}/bilibili/plan", json={"consent": True}).json()

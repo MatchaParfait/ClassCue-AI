@@ -58,6 +58,19 @@ def initialize_bilibili(connection) -> None:
         """CREATE TABLE IF NOT EXISTS bili_controls (
             key TEXT PRIMARY KEY, payload_json TEXT NOT NULL
         )""",
+        """CREATE TABLE IF NOT EXISTS bili_frames (
+            id TEXT PRIMARY KEY,
+            marker_id INTEGER NOT NULL REFERENCES video_markers(id) ON DELETE CASCADE,
+            video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+            run_id TEXT NOT NULL REFERENCES bili_study_runs(id) ON DELETE CASCADE,
+            unit_id TEXT NOT NULL, bvid TEXT NOT NULL, cid INTEGER NOT NULL, page INTEGER NOT NULL,
+            requested_ms INTEGER NOT NULL, captured_ms INTEGER NOT NULL, time_source TEXT NOT NULL,
+            image_hash TEXT NOT NULL, mime_type TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+            UNIQUE(run_id, unit_id, requested_ms)
+        )""",
+        "CREATE TABLE IF NOT EXISTS bili_frame_garbage (id TEXT PRIMARY KEY)",
+        """CREATE TRIGGER IF NOT EXISTS queue_bili_frame_cleanup AFTER DELETE ON bili_frames
+            BEGIN INSERT OR IGNORE INTO bili_frame_garbage(id) VALUES (OLD.id); END""",
     )
     for statement in statements:
         connection.execute(statement)
@@ -126,6 +139,7 @@ class BilibiliStore:
             "id": uuid.uuid4().hex, "status": "planning", "job_id": None,
             "input": snapshot, "input_hash": digest(snapshot), "profile": profile,
             "version": VERSION, "queries": [], "candidates": [], "error": "",
+            "visual_verification": True,
         }
         marker = snapshot["marker"]
         with self.store.connect() as connection:
@@ -156,11 +170,14 @@ class BilibiliStore:
         if row is None:
             raise KeyError("搜索记录不存在或不属于此考点")
         run = json.loads(row["payload_json"])
-        if run["status"] in {"planning", "searching", "screening", "reading", "checking"} and row["job_status"] not in {"queued", "running"}:
+        if run["status"] in {"planning", "searching", "screening", "reading", "checking",
+                             "locating", "capturing", "visual_checking"} and row["job_status"] not in {"queued", "running"}:
             run["status"] = "interrupted"
         return run
 
     def runs(self, marker_id: int) -> list[dict]:
+        from classcue.bilibili_harness import current_protocol
+
         fingerprint = digest(self.snapshot(marker_id))
         with self.store.connect() as connection:
             rows = connection.execute(
@@ -173,8 +190,9 @@ class BilibiliStore:
         for row in rows:
             run = json.loads(row["payload_json"])
             run["stale"] = run["input_hash"] != fingerprint
-            run["legacy"] = run.get("version") != "bilibili-harness-v2"
-            if run["status"] in {"planning", "searching", "screening", "reading", "checking"}:
+            run["legacy"] = run.get("version") != current_protocol(run)
+            if run["status"] in {"planning", "searching", "screening", "reading", "checking",
+                                 "locating", "capturing", "visual_checking"}:
                 if row["job_status"] not in {"queued", "running"}:
                     run["status"] = "interrupted"
             for candidate in run.get("candidates", []):
@@ -182,6 +200,12 @@ class BilibiliStore:
                 candidate.pop("unit_queue", None)
                 for unit in candidate.get("units", []):
                     unit.pop("subtitle", None)
+                    unit.pop("localization", None)
+                    if unit.get("visual"):
+                        unit["visual"].pop("batches", None)
+                    if unit.get("frames"):
+                        from classcue.bilibili_visual import frame_metadata
+                        unit["frames"] = [frame_metadata(frame) for frame in unit["frames"]]
                     verification = unit.pop("verification", {})
                     if not unit.get("coverage") and verification.get("coverage"):
                         unit["coverage"] = verification["coverage"]

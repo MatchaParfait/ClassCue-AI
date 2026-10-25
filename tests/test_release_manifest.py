@@ -110,6 +110,7 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
     assert {name for name in files if name.startswith("docs/")} == {
         "docs/dolphin_upstream_LICENSE.txt", "docs/dsh_bili_humanism_LICENSE.txt",
         "docs/bilibili-study.md", "docs/bilibili-harness-plan.md",
+        "docs/bilibili-visual-verification.md",
     }
     assert not any(name.startswith(("tests/", "experiments/", ".github/")) for name in files)
     assert not {f"scripts/{name}" for name in source_only_scripts} & files

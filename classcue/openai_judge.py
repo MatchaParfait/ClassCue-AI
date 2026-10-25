@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+import math
+import random
+import time
+from email.utils import mktime_tz, parsedate_tz
+from typing import Any, Callable
 
 from classcue.ai_provider import (
     DEFAULT_OUTPUT_TOKENS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES,
@@ -15,6 +19,12 @@ from classcue.core import (
     parse_semantic_json, semantic_json_repair_prompt, semantic_selection_prompt,
     strict_exam_intent_prompt,
 )
+from classcue.processing_control import ProcessingCancelled
+
+
+def _check_stop(should_stop: Callable[[], bool] | None) -> None:
+    if should_stop and should_stop():
+        raise ProcessingCancelled("用户已请求停止 AI 筛选")
 
 
 def _response_format_unsupported(error: Exception) -> bool:
@@ -28,6 +38,53 @@ def _response_format_unsupported(error: Exception) -> bool:
             "unknown", "unrecognized", "not allowed", "not permitted", "unexpected", "不支持",
         )
     )
+
+
+def _retry_after_seconds(headers) -> float | None:
+    if headers is None:
+        return None
+    try:
+        return float(headers.get("retry-after-ms")) / 1000
+    except (TypeError, ValueError):
+        pass
+    value = headers.get("retry-after")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = parsedate_tz(value)
+        return float(mktime_tz(parsed) - time.time()) if parsed is not None else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _transport_retry_delay(error: Exception, attempt: int) -> float | None:
+    response = getattr(error, "response", None)
+    headers = response.headers if response is not None else None
+    retry_after = _retry_after_seconds(headers)
+    if response is not None:
+        # Match the locked SDK's server directives and retryable status codes.
+        if retry_after is not None and math.isfinite(retry_after) and retry_after > 120:
+            return None
+        directive = headers.get("x-should-retry")
+        if directive == "false":
+            return None
+        if directive != "true" and response.status_code not in {408, 409, 429} and response.status_code < 500:
+            return None
+    if retry_after is not None and math.isfinite(retry_after) and 0 < retry_after <= 120:
+        return retry_after
+    return min(0.5 * 2 ** min(attempt, 4), 8.0) * (1 - 0.25 * random.random())
+
+
+def _wait_for_retry(delay: float, should_stop: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + delay
+    while True:
+        _check_stop(should_stop)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 0.05))
 
 
 class OpenAICompatibleJudge:
@@ -114,7 +171,11 @@ class OpenAICompatibleJudge:
         )
         parse_semantic_json(raw)
 
-    def judge_semantic_chunk(self, chunk: tuple[TranscriptSegment, ...]) -> SemanticSelection:
+    def judge_semantic_chunk(
+        self, chunk: tuple[TranscriptSegment, ...], *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> SemanticSelection:
+        _check_stop(should_stop)
         if not chunk:
             return SemanticSelection()
         strict_mode = self.mode == "strict_exam_intent"
@@ -124,19 +185,21 @@ class OpenAICompatibleJudge:
             if strict_mode
             else "你是严谨的课堂字幕考点筛选器。必须只输出合法 JSON 对象，不能输出 Markdown 或解释。"
         )
+        cancel_options = {"should_stop": should_stop} if should_stop is not None else {}
         try:
-            raw = self._request_content(prompt, system_prompt, self.profile.max_tokens)
+            raw = self._request_content(prompt, system_prompt, self.profile.max_tokens, **cancel_options)
         except SemanticResponseError:
-            raw = self._request_content(prompt, system_prompt, self.profile.max_tokens)
+            raw = self._request_content(prompt, system_prompt, self.profile.max_tokens, **cancel_options)
         try:
             selection = parse_semantic_json(raw)
         except ValueError:
-            selection = self._repair_selection(raw, strict_mode)
+            selection = self._repair_selection(raw, strict_mode, **cancel_options)
         return self._validate_selection(selection, chunk, strict_mode)
 
     def _request_content(
         self, prompt: str | list[dict[str, Any]], system_prompt: str, max_tokens: int,
-        *, json_mode: bool | None = None,
+        *, json_mode: bool | None = None, should_stop: Callable[[], bool] | None = None,
+        before_transport: Callable[[], None] | None = None,
     ) -> str:
         if not self.model:
             raise ValueError("请填写 AI 模型名称。")
@@ -152,13 +215,17 @@ class OpenAICompatibleJudge:
         use_json_mode = self.profile.json_mode if json_mode is None else json_mode
         if use_json_mode:
             request["response_format"] = {"type": "json_object"}
+
+        def send():
+            return self._send_completion(request, should_stop, before_transport)
+
         try:
-            response = self.client.chat.completions.create(**request)
+            response = send()
         except Exception as exc:
             if "response_format" not in request or not _response_format_unsupported(exc):
                 raise
             del request["response_format"]
-            response = self.client.chat.completions.create(**request)
+            response = send()
         try:
             choice = response.choices[0]
             content = choice.message.content
@@ -170,12 +237,50 @@ class OpenAICompatibleJudge:
             raise SemanticResponseError("AI 返回了空的 JSON 内容")
         return content
 
-    def _repair_selection(self, raw: str, strict_mode: bool) -> SemanticSelection:
+    def _send_completion(
+        self, request: dict[str, Any], should_stop: Callable[[], bool] | None,
+        before_transport: Callable[[], None] | None,
+    ):
+        client = self.client
+        retry_errors = ()
+        max_retries = 0
+        if should_stop is not None:
+            try:
+                from openai import APIConnectionError, APIStatusError, OpenAI
+            except ImportError:
+                pass
+            else:
+                if isinstance(client, OpenAI):
+                    # The SDK cannot poll cancellation during its internal retries.
+                    # This wrapper shares the borrowed transport; do not close it.
+                    max_retries = client.max_retries
+                    client = client.with_options(max_retries=0)
+                    retry_errors = (APIConnectionError, APIStatusError)
+        for attempt in range(max_retries + 1):
+            _check_stop(should_stop)
+            if before_transport is not None:
+                before_transport()
+            _check_stop(should_stop)
+            try:
+                return client.chat.completions.create(**request)
+            except retry_errors as exc:
+                _check_stop(should_stop)
+                if attempt == max_retries:
+                    raise
+                delay = _transport_retry_delay(exc, attempt)
+                if delay is None:
+                    raise
+                _wait_for_retry(delay, should_stop)
+
+    def _repair_selection(
+        self, raw: str, strict_mode: bool, *, should_stop: Callable[[], bool] | None = None,
+    ) -> SemanticSelection:
         try:
             repaired = self._request_content(
                 semantic_json_repair_prompt(raw, strict_mode),
                 "你是 JSON 修复器。只能输出合法 JSON 对象，不得补充新事实。",
                 self.profile.max_tokens,
+                **({"should_stop": should_stop} if should_stop is not None else {}),
             )
             return parse_semantic_json(repaired)
         except ValueError as exc:

@@ -390,8 +390,18 @@ def run_web_batch(
             if waiting else
             f"批处理结束：{summary['completed']} 个完成，{summary['skipped']} 个跳过，{summary['failed']} 个失败"
         )
-        update(1, message, "awaiting_api" if waiting else "completed")
-        return {"job_status": "awaiting_api" if waiting else "completed", "message": message, "summary": summary}
+        # With nothing retryable left, every result this batch owed is already
+        # durably published; a cancellation arriving only now cannot prevent anything.
+        committed = summary["retryable"] == 0
+        try:
+            update(1, message, "awaiting_api" if waiting else "completed")
+        except ProcessingCancelled:
+            if not committed:
+                raise
+        return {
+            "job_status": "awaiting_api" if waiting else "completed",
+            "message": message, "summary": summary, "committed": committed,
+        }
     finally:
         for judge in judges.values():
             judge.close()

@@ -97,6 +97,54 @@ def test_job_cleanup_failure_still_reaps_and_closes_without_masking_primary(monk
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows owned-job fault injection")
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_diagnostics_failure_does_not_abort_cleanup_or_mask_real_error(monkeypatch, cancelled):
+    actions, stop_checks, log_calls = [], [], []
+    process = SimpleNamespace(
+        pid=123, stdout=io.StringIO(),
+        poll=lambda: None,
+        kill=lambda: actions.append("kill") or None,
+        wait=lambda **_kwargs: actions.append("wait") or 0,
+    )
+    cleanup_error = RuntimeError("synthetic job close failure")
+
+    class Job:
+        def __init__(self, _child):
+            pass
+
+        def resume(self, _child):
+            pass
+
+        def close(self):
+            actions.append("job_close")
+            raise cleanup_error
+
+    def should_stop():
+        stop_checks.append(True)
+        return cancelled and len(stop_checks) > 1
+
+    def broken_logger(*_args, **kwargs):
+        log_calls.append(kwargs)
+        raise RuntimeError("synthetic logger failure")
+
+    monkeypatch.setattr(qwen_process.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(qwen_process, "WindowsJob", Job)
+    monkeypatch.setattr(qwen_process, "log_exception", broken_logger)
+    if cancelled:
+        with pytest.raises(ProcessingCancelled) as error:
+            qwen_process.run_process(["owned-worker"], should_stop=should_stop)
+        assert str(error.value) == "用户已请求停止处理"
+        assert actions == ["job_close", "kill", "wait"]
+    else:
+        with pytest.raises(RuntimeError) as error:
+            qwen_process.run_process(["owned-worker"])
+        assert error.value is cleanup_error
+        assert actions == ["wait", "job_close", "kill", "wait"]
+    assert process.stdout.closed
+    assert [call["stage"] for call in log_calls] == ["process_tree"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows owned-job fault injection")
 def test_wait_cleanup_failure_does_not_skip_pipe_close(monkeypatch):
     waits = []
     failure = qwen_process.subprocess.TimeoutExpired(["owned-worker"], 15)

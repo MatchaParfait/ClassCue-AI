@@ -99,6 +99,9 @@ def plan_migration(project: Path, store, values: dict) -> dict:
         audio_cache_dir=values.get("audio_cache_dir"), video_library_dir=values.get("video_library_dir"),
     )
     new_logs = asr_storage.validate_directory(values["log_dir"])
+    # Slide databases keep paths relative to slide_directory(), so binding or
+    # moving the media root must carry the existing images along.
+    slides = asr_storage.slide_directory(project, root)
     settings = {
         **old, "storage_root": str(new_assets), "audio_cache_dir": str(new_audio),
         "video_library_dir": str(new_videos), "log_dir": str(new_logs),
@@ -112,6 +115,7 @@ def plan_migration(project: Path, store, values: dict) -> dict:
         ("模型权重", assets / "models" / "asr", new_assets / "models" / "asr"),
         ("环境下载缓存", assets / ".runtime" / "cache", new_assets / ".runtime" / "cache"),
         ("视频库", videos, new_videos),
+        ("PPT 截图", slides, media / "slides" if media is not None else slides),
     ]
     protected = [Path(store.path).absolute(), project / "data" / "asr_storage.json",
                  project / "data" / "storage_migration.json", project / ".git",

@@ -12,6 +12,7 @@ vi.mock("../api/client", () => ({
   getStreamUrl: (videoId: number) => `/api/videos/${videoId}/stream`,
   getJob: vi.fn(), cancelJob: vi.fn(), getPicker: vi.fn(), getVideo: vi.fn(),
   getVideoProcessingOptions: vi.fn(), getLibraryStatus: vi.fn(),
+  getVideoSlides: vi.fn(), extractVideoSlides: vi.fn(),
   getAiSettings: vi.fn(),
   getRecallSchemes: vi.fn(),
   openPicker: vi.fn(), processVideo: vi.fn(), registerVideo: vi.fn(), retryVideo: vi.fn(),
@@ -53,6 +54,7 @@ beforeEach(() => {
     ai_service: { model: "configured-model", configured: true },
     active_job: null,
   });
+  vi.mocked(api.getVideoSlides).mockResolvedValue([]);
   vi.mocked(api.getAiSettings).mockResolvedValue({
     provider: "openai_compatible", base_url: "https://relay.test/v1", model: "configured-model",
     output_tokens: 16384, token_parameter: "max_tokens", json_mode: true,

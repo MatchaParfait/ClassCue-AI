@@ -17,6 +17,7 @@ from classcue.bilibili_study import Verdict
 from classcue.core import TranscriptSegment
 from classcue.video_store import VideoStore
 from tests.test_bilibili_login import PassportNetwork
+from tests.bilibili_visual_fakes import FakeFrameReader, assessment, light_assessment, localization
 
 
 BV = "BV1xx411c7mD"
@@ -49,6 +50,8 @@ class Model:
                 "course_queries": [{"text": "高等数学课程", "purpose": "课程补搜"}]})
         if schema.__name__ == "Ranking":
             return schema(items=[{"id": c["id"], "reason": "合成选择"} for c in material["candidates"]])
+        if schema.__name__ == "SubtitleLocalization":
+            return schema.model_validate(localization(material))
         if schema.__name__ == "EvidenceExtraction":
             return schema(findings=[{"requirement_id": "r1", "depth": "concept", "kind": "support",
                                      "reason": "合成解释", "segment_ids": [1]}])
@@ -56,6 +59,10 @@ class Model:
             return schema(reason="合成核验", assessments=[{"requirement_id": "r1", "status": "supported",
                           "depth": "concept", "reason": "解释了知识点", "evidence_ids": [f["id"] for f in material["findings"]]}])
         return schema(queries=[], reason="没有补充搜索词")
+
+    def ask_with_images(self, task, material, schema, images):
+        assert images and all(image.data for image in images)
+        return schema.model_validate((light_assessment if schema.__name__ == "LightVisualAssessment" else assessment)(material))
 
 
 class Network:
@@ -93,6 +100,8 @@ def client_data(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "resolve_interface_key", lambda *_: "synthetic-key")
     monkeypatch.setattr(module, "StudyModel", Model)
     monkeypatch.setattr(module, "BilibiliClient", Network)
+    monkeypatch.setattr(module, "BrowserFrameReader", FakeFrameReader)
+    monkeypatch.setattr("classcue.bilibili_frames.library_scope", lambda _project, database: database.parent / "cache")
     passport = PassportNetwork()
     monkeypatch.setattr(module, "BilibiliQrLogin", lambda account: BilibiliQrLogin(
         account, transport=httpx.MockTransport(passport.handle), clock=lambda: passport.now,
@@ -145,6 +154,49 @@ def test_full_flow_is_marker_scoped_and_planning_never_visits_bilibili(client_da
     assert dict(store.list_markers(1)[0]) == original
     assert client.get(f"/api/markers/{other}/bilibili").json()["runs"] == []
     assert "synthetic-key" not in str(runs)
+
+
+def test_light_backend_plan_and_search_load_original_picture(client_data, monkeypatch):
+    from types import SimpleNamespace
+    from classcue.question_analysis import LightSearchPlan, QuestionMaterial, light_analysis
+    from classcue.question_captures import QuestionCaptures
+    from classcue.question_service import analyze_question
+    from classcue.question_store import QuestionStore
+    from tests.bilibili_visual_fakes import synthetic_frame
+
+    client, store, marker, _, _ = client_data
+    capture = QuestionCaptures(store).add(marker, 1000, synthetic_frame())
+    response = client.put(f"/api/markers/{marker}/question", json={
+        "capture_ids": [capture["id"]], "prompt_style": "light",
+    })
+    assert response.status_code == 200
+    repo = QuestionStore(store)
+    value = light_analysis(LightSearchPlan(
+        kind="exercise", summary="合成单调性题", task="求单调区间", knowledge_point="单调性",
+        exact_queries=[{"text": "单调性 例题"}]), ["capture:" + capture["id"]])
+    run = repo.create_run(repo.snapshot(marker), {"model": "synthetic"})
+    analyze_question(repo, run, SimpleNamespace(analyze=lambda *_: value), [])
+    calls = []
+
+    class ComparingModel(Model):
+        def ask_with_images(self, task, material, schema, images):
+            calls.append(material)
+            assert images[0].source == "capture:" + capture["id"]
+            assert len(images) == len(material["frames"]) + 1
+            assert "original_analysis" not in material and "target" not in material
+            return super().ask_with_images(task, material, schema, images)
+
+    monkeypatch.setattr(importlib.import_module("api.bilibili"), "StudyModel", ComparingModel)
+    source = plan(client, marker)
+    assert source["prompt_style"] == "light" and source["budget"]["llm"] == 0
+    started = client.post(f"/api/markers/{marker}/bilibili/search", json={
+        "run_id": source["id"], "queries": source["queries"], "consent": True,
+    })
+    assert started.status_code == 202
+    assert wait(client, started.json()["job_id"])["status"] == "completed"
+    assert calls and calls[0]["original_images"] == ["capture:" + capture["id"]]
+    result = client.get(f"/api/markers/{marker}/bilibili").json()["runs"][0]
+    assert result["prompt_style"] == "light" and not result["legacy"]
 
 
 def test_consent_invalid_marker_and_cross_marker_run_rejected(client_data):
@@ -381,6 +433,34 @@ def test_continuation_requires_query_and_budget_confirmation(client_data):
     assert client.post(endpoint, json={"run_id": run_id, "consent": True, "increase_budget": True}).status_code == 409
 
 
+def test_budget_details_survive_read_and_restart_then_clear_on_explicit_continuation(client_data):
+    client, store, marker, _, _ = client_data
+    run_id = completed_search(client, marker)
+    repo = BilibiliStore(store)
+    run = repo.get_run(marker, run_id)
+    stop = {"resource": "videos", "scope": "task", "phase": "course",
+            "used": 10, "limit": 10, "requested": 1, "reserve": 0}
+    run.update(status="budget_exhausted", phase="course", stop_reason="budget", budget_stop=stop)
+    run["trace"].append({"seq": len(run["trace"]) + 1, "action": "stop", "phase": "course",
+                         "reason": "budget", "budget_stop": stop})
+    repo.save_run(run)
+    state = client.get(f"/api/markers/{marker}/bilibili").json()["runs"][0]
+    assert state["budget_stop"] == stop
+    assert state["phase_limits"]["exact"] == run["phase_limits"]["exact"]
+    reopened = BilibiliStore(VideoStore(store.path))
+    assert reopened.get_run(marker, run_id)["budget_stop"] == stop
+    response = client.post(f"/api/markers/{marker}/bilibili/continue", json={
+        "run_id": run_id, "consent": True, "increase_budget": True,
+    })
+    assert response.status_code == 202
+    assert wait(client, response.json()["job_id"])["status"] == "completed"
+    saved = repo.get_run(marker, run_id)
+    assert "budget_stop" not in saved
+    assert saved["limits"]["videos"] == run["limits"]["videos"] * 2
+    assert saved["phase_limits"] == run["phase_limits"]
+    assert any(row.get("budget_stop") == stop for row in saved["trace"])
+
+
 def test_continue_rejects_other_marker_changed_account_and_changed_input(client_data):
     client, store, marker, other, _ = client_data
     run_id = completed_search(client, marker)
@@ -435,3 +515,55 @@ def test_orphaned_active_run_can_continue_after_restart(client_data):
     response = client.post(f"/api/markers/{marker}/bilibili/continue", json={"run_id": run_id, "consent": True})
     assert response.status_code == 202
     assert wait(client, response.json()["job_id"])["status"] == "completed"
+
+
+def test_candidate_frame_route_is_marker_and_run_scoped_and_never_calls_platform(client_data):
+    client, store, marker, other, _ = client_data
+    run_id = completed_search(client, marker)
+    run = client.get(f"/api/markers/{marker}/bilibili").json()["runs"][0]
+    unit = run["candidates"][0]["units"][0]
+    assert unit["verification_mode"] == "visual" and unit["dimensions"]["problem_type"]["status"] == "yes"
+    assert len(unit["frames"]) == 3
+    assert "localization" not in unit and "batches" not in unit["visual"]
+    frame = unit["frames"][0]
+    path = f"/api/markers/{marker}/bilibili/runs/{run_id}/frames/{frame['id']}"
+    calls = Network.calls
+    result = client.get(path)
+    assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
+    assert result.headers["content-type"].startswith("image/")
+    assert client.get(path.replace(f"/markers/{marker}/", f"/markers/{other}/")).status_code == 404
+    assert client.get(path.replace(run_id, "another-run")).status_code == 404
+    assert Network.calls == calls
+    assert frame["captured_ms"] >= 0 and "time_source" in frame
+    with store.connect() as connection:
+        connection.execute("DELETE FROM videos WHERE id=1")
+    assert client.get(path).status_code == 404
+
+
+def test_explicit_subtitle_only_mode_preserves_old_evidence_without_frames(client_data):
+    client, store, marker, _, _ = client_data
+    source = plan(client, marker)
+    response = client.post(f"/api/markers/{marker}/bilibili/search", json={
+        "run_id": source["id"], "queries": source["queries"], "consent": True, "visual_verification": False,
+    })
+    assert response.status_code == 202
+    assert wait(client, response.json()["job_id"])["status"] == "completed"
+    run = BilibiliStore(store).get_run(marker, response.json()["run_id"])
+    assert not run["visual_verification"]
+    assert run["candidates"][0]["units"][0]["verdict"] == "covers"
+    with store.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM bili_frames").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("stage", ["locating", "capturing", "visual_checking"])
+def test_new_visual_stages_are_interrupted_on_restart_without_network(client_data, stage):
+    client, store, marker, _, _ = client_data
+    run_id = completed_search(client, marker)
+    repo = BilibiliStore(store)
+    run = repo.get_run(marker, run_id)
+    run.update(status=stage, job_id="missing-visual-job")
+    repo.save_run(run)
+    calls = Network.calls
+    assert repo.runs(marker)[0]["status"] == "interrupted"
+    assert repo.get_run(marker, run_id)["status"] == "interrupted"
+    assert Network.calls == calls

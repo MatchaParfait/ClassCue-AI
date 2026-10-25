@@ -56,6 +56,14 @@ def legacy_database(tmp_path):
     video_id = store.create_video("legacy", "lesson.mp4", "lesson.mp4", "lesson.wav", 2000)
     store.mark_transcribed(video_id, [TranscriptSegment(1, 0, 1000, "old transcript")])
     with store.connect() as connection:
+        # A marker table still on the legacy schema predates every marker-scoped
+        # subtable: initialization migrates markers before creating any of them,
+        # so they never pointed at a legacy video_markers in real databases.
+        for table in (
+            "bili_marker_context", "bili_study_runs", "bili_frames",
+            "question_materials", "question_analyses", "question_captures",
+        ):
+            connection.execute(f"DROP TABLE {table}")
         connection.execute("DROP TABLE video_markers")
         connection.execute(LEGACY_MARKERS)
         connection.executemany(

@@ -15,6 +15,8 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity
 
+from classcue.processing_control import ProcessingCancelled
+
 
 SLIDE_EXTRACTION_VERSION = "slide-v4-overlay-aware-preferred"
 SAMPLE_INTERVAL_MS = 500
@@ -149,7 +151,6 @@ def _video_metadata(source: Path, roi: SlideRoi | None, ignore_regions: tuple[Sl
 
 def _check_stop(should_stop: Callable[[], bool] | None) -> None:
     if should_stop and should_stop():
-        from classcue.processing_control import ProcessingCancelled
         raise ProcessingCancelled("用户已请求停止 PPT 提取")
 
 
@@ -207,8 +208,12 @@ def extract_and_store_slides(
                 except OSError:
                     pass
         if progress:
-            progress(1.0, f"PPT 提取完成，保留 {len(rows)} 张代表截图", "completed")
-        return dict(status="completed", slides=stored, count=len(stored))
+            try:
+                progress(1.0, f"PPT 提取完成，保留 {len(rows)} 张代表截图", "completed")
+            except ProcessingCancelled:
+                # Publication has committed; cancellation can no longer undo it.
+                pass
+        return dict(status="completed", slides=stored, count=len(stored), committed=True)
     finally:
         if not published:
             shutil.rmtree(staging, ignore_errors=True)

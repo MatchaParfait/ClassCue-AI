@@ -15,7 +15,8 @@ from classcue.bilibili_store import BilibiliStore, StudyContext
 from classcue.core import TranscriptSegment
 from classcue.processing_control import ProcessingCancelled
 from classcue.question_analysis import (
-    MAX_IMAGE_BYTES, QuestionAnalysis, QuestionImage, QuestionMaterial, to_target, validate_analysis,
+    LIGHT_SYSTEM, LightSearchPlan, light_analysis,
+    MAX_IMAGE_BYTES, SYSTEM, VERSION, QuestionAnalysis, QuestionImage, QuestionMaterial, to_target, validate_analysis,
 )
 from classcue.question_service import QuestionModel, analyze_question, load_slide_images
 from classcue.question_store import QuestionStore
@@ -99,6 +100,36 @@ def test_question_target_preserves_example_depth_and_source(questions):
     assert snapshot["question"]["analysis"]["methods"][0]["basis"] == ["f1", "f2"]
 
 
+def test_similar_problem_target_keeps_instance_facts_out_of_generic_requirements(questions):
+    repo, marker, _ = questions
+    original = "U={V,W,X,Y}，F={V→W,W→X,X→Y}，求V的闭包。"
+    repo.save_material(marker, QuestionMaterial(text=original))
+    value = {
+        "kind": "exercise",
+        "facts": [
+            {"id": "f1", "kind": "condition", "text": original, "sources": ["question.text"]},
+            {"id": "f2", "kind": "task", "text": "求V的属性闭包", "sources": ["question.text"]},
+        ],
+        "knowledge_points": [{"id": "k1", "text": "属性闭包计算", "basis": ["f1", "f2"]}],
+        "methods": [{"id": "m1", "text": "迭代使用函数依赖扩充集合直至不变", "basis": ["f1"]}],
+        "criteria": [{"id": "r1", "text": "演示根据函数依赖计算属性闭包的完整例题",
+                      "depth": "example", "evidence_needed": "候选例题的条件、迭代步骤与停止判断",
+                      "basis": ["k1", "m1"]}],
+        "allowed_variations": ["属性名称、依赖实例和闭包结果可以不同，保留闭包计算题型"],
+        "keywords": ["属性闭包", "函数依赖", "闭包计算"],
+    }
+    run = completed(questions, value)
+    target = run["target"]
+    assert target["comparison"]["conditions"] == [original]
+    assert target["requirements"][0]["depth"] == "example"
+    assert original not in target["requirements"][0]["text"]
+    assert "VWXY" not in target["requirements"][0]["text"]
+    assert target["keywords"] == ["属性闭包", "函数依赖", "闭包计算"]
+    assert "不是寻找或复现原题" in SYSTEM
+    assert "不能将原题某个偶然结果误当作该题型的必要性质" in SYSTEM
+    assert "不填写完整题干、实例公式、逐轮结果或答案" in SYSTEM
+
+
 @pytest.mark.parametrize("change", ["source", "basis", "id", "condition", "empty_criteria"])
 def test_fabricated_structure_or_references_rejected(questions, change):
     repo, marker, _ = questions
@@ -138,6 +169,7 @@ def test_image_request_uses_real_bytes_and_never_local_paths(questions):
     repo, marker, _ = questions
     image = QuestionImage.from_bytes("slide:1", png())
     snapshot = repo.snapshot(marker)
+    snapshot["prompt_style"] = "structured"
     snapshot["question"]["images"] = [{"source": "slide:1", "image_hash": image.sha256}]
     calls = []
 
@@ -152,11 +184,83 @@ def test_image_request_uses_real_bytes_and_never_local_paths(questions):
                        "synthetic-key", client=client) as model:
         result = model.analyze(snapshot, [image])
     content = calls[0]["messages"][1]["content"]
+    system = calls[0]["messages"][0]["content"]
+    assert "不得要求候选视频复现" in system
+    assert "候选内部证据不能拼接不同例题" in system
+    assert "候选讲解应覆盖的通用知识点" in content[0]["text"]
     assert content[2]["image_url"]["url"].startswith("data:image/png;base64,")
     assert "slide:1" in content[1]["text"]
     assert "tools" not in calls[0]
     assert "synthetic-key" not in str(calls)
     validate_analysis(result, snapshot)
+
+
+def light_plan():
+    return {"kind": "exercise", "summary": "给定函数依赖求属性集闭包", "task": "求AB的闭包",
+            "knowledge_point": "属性闭包", "keywords": ["属性闭包", "函数依赖"],
+            "exact_queries": [{"text": "属性闭包 例题"}],
+            "course_queries": [{"text": "数据库 课程"}], "unknowns": []}
+
+
+def test_light_image_plan_only_sends_images_and_course_and_reuses_queries(questions):
+    repo, marker, _ = questions
+    image = QuestionImage.from_bytes("slide:1", png())
+    snapshot = repo.snapshot(marker)
+    snapshot["prompt_style"] = "light"
+    snapshot["classroom"]["marker"]["note"] = "SHOULD_NOT_BE_SENT"
+    snapshot["classroom"]["classroom_segments"][0]["text"] = "SHOULD_NOT_BE_SENT"
+    snapshot["question"]["images"] = [{"source": image.source, "image_hash": image.sha256}]
+    calls = []
+
+    def create(**request):
+        calls.append(request)
+        return SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=json.dumps(light_plan())))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with QuestionModel(ProviderProfile(model="fake-vision", base_url="https://model.example/v1"),
+                       "synthetic-key", client=client) as model:
+        result = model.analyze(snapshot, [image])
+    text = calls[0]["messages"][1]["content"][0]["text"]
+    assert "数据库" in text and "SHOULD_NOT_BE_SENT" not in str(calls)
+    assert calls[0]["messages"][0]["content"] == LIGHT_SYSTEM
+    assert "criteria" not in text and "evidence_needed" not in text
+    assert result.prompt_style == "light" and result.search_plan.exact_queries[0].text == "属性闭包 例题"
+    assert len(result.criteria) == 1
+    validate_analysis(result, snapshot)
+    run = repo.create_run(snapshot, {"model": "fake"})
+    analyze_question(repo, run, FakeModel(result.model_dump()), [image])
+    bili = BilibiliStore(repo.store)
+    # Use the exact analyzed snapshot, without mutating the marker or classroom fixture.
+    search_input = bili.snapshot(marker, include_question=False)
+    search_input["question"] = {
+        "status": "ready", "analysis": run["analysis"], "target": run["target"],
+    }
+    search = bili.create_run(search_input, {"model": "fake"})
+    HarnessService(bili, SimpleNamespace(), SimpleNamespace()).plan(search)
+    assert search["queries"] == [q.model_dump() for q in result.search_plan.exact_queries]
+    assert search["prompt_style"] == "light" and search["budget"]["llm"] == 0
+
+
+def test_light_unclear_input_does_not_create_search_target():
+    plan = LightSearchPlan(kind="unclear", summary="无法辨认", unknowns=["题干不清楚"])
+    value = light_analysis(plan, ["slide:1"])
+    assert value.kind == "unclear" and not value.criteria
+    with pytest.raises(ValueError):
+        LightSearchPlan(**{**light_plan(), "kind": "unclear"})
+
+
+def test_prompt_variants_preserve_history_and_switch_back_to_original(questions):
+    repo, marker, _ = questions
+    old = completed(questions)
+    saved = repo.material(marker)
+    repo.save_material(marker, QuestionMaterial(**{**saved, "prompt_style": "light"}))
+    assert repo.runs(marker)[0]["id"] == old["id"]
+    assert repo.runs(marker)[0]["stale"]
+    assert repo.snapshot(marker)["prompt_style"] == "light"
+    repo.save_material(marker, QuestionMaterial(**saved))
+    assert not repo.runs(marker)[0]["stale"]
+    assert "prompt_style" not in repo.snapshot(marker)
 
 
 def test_missing_image_rejected_before_model_request(questions):
@@ -222,6 +326,28 @@ def test_changed_inputs_invalidate_question_and_bilibili_history(questions, tmp_
     assert repo.runs(marker)[0]["stale"]
     assert bili.runs(marker)[0]["stale"]
     assert bili.snapshot(marker)["question"]["status"] == "needs_analysis"
+
+
+def test_old_over_specific_analysis_is_preserved_but_cannot_supply_new_search_target(questions):
+    repo, marker, _ = questions
+    current = completed(questions)
+    bili = BilibiliStore(repo.store)
+    search = bili.create_run(bili.snapshot(marker), {})
+    search.update(version="bilibili-harness-v2", status="ready")
+    bili.save_run(search)
+    current["version"] = "question-analysis-v1"
+    repo.save_run(current)
+    history = repo.runs(marker)[0]
+    assert VERSION != current["version"]
+    assert history["id"] == current["id"]
+    assert history["analysis"] == current["analysis"]
+    assert history["stale"]
+    assert bili.snapshot(marker)["question"]["status"] == "needs_analysis"
+    assert bili.runs(marker)[0]["stale"]
+    assert bili.runs(marker)[0]["legacy"]
+    updated = completed(questions)
+    assert not repo.runs(marker)[0]["stale"]
+    assert bili.snapshot(marker)["question"]["analysis_id"] == updated["id"]
 
 
 def test_question_history_survives_restart_and_deletes_with_marker(questions):

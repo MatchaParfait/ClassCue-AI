@@ -107,6 +107,107 @@ MarkerStatusFilter = Literal["active", "mastered", "excluded", "all"]
 LOGGER = get_logger(__name__)
 DIRECTORY_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_ASR_STORAGE_ROOT = MODEL_ROOT.parent.parent
+LOCAL_TRUSTED_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _parse_authority(value: str) -> tuple[str, int | None] | None:
+    """Strictly parse a Host value into a lowercase host and optional port."""
+    if not value or value != value.strip() or set(value) & set(" \t/@?\\#"):
+        return None
+    port_text: str | None
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0:
+            return None
+        host = value[1:closing]
+        remainder = value[closing + 1:]
+        if remainder:
+            if not remainder.startswith(":"):
+                return None
+            port_text = remainder[1:]
+        else:
+            port_text = None
+    else:
+        host, separator, port_text = value.rpartition(":")
+        if not separator:
+            host, port_text = value, None
+        if ":" in host:
+            # Unbracketed IPv6 literals are ambiguous inside a Host header.
+            return None
+    host = host.lower()
+    if not host:
+        return None
+    if port_text is None:
+        return host, None
+    # Valid ports fit in five digits; longer text is rejected before int()
+    # so Python's decimal string limit cannot turn it into a server error.
+    if not port_text.isdecimal() or len(port_text) > 5 or port_text != str(int(port_text)):
+        return None
+    port = int(port_text)
+    return (host, port) if 0 < port <= 65535 else None
+
+
+def _origin_matches_authority(origin: str, scheme: str, host: str, port: int) -> bool:
+    """Whether a serialized Origin is exactly this service's own origin."""
+    try:
+        parsed = urlsplit(origin)
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme != scheme:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return False
+    if (parsed.hostname or "").lower() != host:
+        return False
+    if origin_port is None:
+        origin_port = 443 if scheme == "https" else 80
+    return origin_port == port
+
+
+def _untrusted_request_reason(request: Request) -> str | None:
+    """Web requests are trusted only from this service's own loopback origin.
+
+    A browser page must carry a same-origin Origin header, or Fetch metadata
+    that proves the request is not an embedded cross-site/same-site load.
+    Native desktop clients and CLI tools send neither and stay allowed, as do
+    plain top-level navigations such as following a link to the local UI.
+    """
+    hosts = request.headers.getlist("host")
+    if len(hosts) != 1:
+        return "本机服务要求恰好一个 Host 头"
+    authority = _parse_authority(hosts[0])
+    if authority is None:
+        return "Host 头不是有效的本机地址"
+    host, host_port = authority
+    if host not in LOCAL_TRUSTED_HOSTS:
+        return "Host 不在本机可信名称内"
+    scheme = request.url.scheme
+    port = host_port if host_port is not None else (443 if scheme == "https" else 80)
+    origins = request.headers.getlist("origin")
+    if len(origins) > 1:
+        return "本机服务不接受重复的 Origin 头"
+    if origins:
+        if not _origin_matches_authority(origins[0], scheme, host, port):
+            return "本机服务不接受跨源网页请求"
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            return "本机服务不接受跨站网页请求"
+        return None
+    fetch_sites = request.headers.getlist("sec-fetch-site")
+    if len(fetch_sites) > 1:
+        return "本机服务不接受重复的 Sec-Fetch-Site 头"
+    if fetch_sites and fetch_sites[0] in {"cross-site", "same-site"}:
+        modes = request.headers.getlist("sec-fetch-mode")
+        destinations = request.headers.getlist("sec-fetch-dest")
+        top_level_navigation = (
+            len(modes) == 1 and modes[0] == "navigate"
+            and len(destinations) == 1 and destinations[0] == "document"
+        )
+        if not top_level_navigation:
+            return "本机服务不接受其他网页的嵌入请求"
+    return None
 
 
 class MarkerPatch(BaseModel):
@@ -900,6 +1001,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             lease.acquire(provider.database_path())
             configure_logging()
             provider.get().mark_jobs_interrupted()
+            from classcue.question_captures import QuestionCaptures
+            QuestionCaptures(provider.get()).collect()
+            from classcue.bilibili_frames import FrameStore
+            FrameStore(provider.get()).collect()
             before_recovery = asr_storage.storage_root(DIRECTORY_PROJECT_ROOT)
             storage_migration.recover_migration(DIRECTORY_PROJECT_ROOT, provider.get())
             if before_recovery != asr_storage.storage_root(DIRECTORY_PROJECT_ROOT):
@@ -959,6 +1064,13 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             return JSONResponse(status_code=409, content={"detail": "正在准备更新，请等待软件重启"})
         if storage_migrating.is_set() and request.method not in {"GET", "HEAD", "OPTIONS"}:
             return JSONResponse(status_code=409, content={"detail": "目录正在迁移，请等待迁移完成后操作"})
+        return await call_next(request)
+
+    @api.middleware("http")
+    async def reject_untrusted_request_sources(request: Request, call_next):
+        reason = _untrusted_request_reason(request)
+        if reason is not None:
+            return JSONResponse(status_code=403, content={"detail": reason})
         return await call_next(request)
 
     @api.exception_handler(Exception)
@@ -1889,10 +2001,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.post("/api/settings/ai/key")
     def put_ai_key(payload: AIKeyPayload) -> dict[str, object]:
-        profile, settings = profile_for_endpoint(payload.base_url, payload.connection_id)
         try:
-            save_api_key(interface_key_path(profile), payload.api_key)
-            interface_key_path(profile).with_suffix(".disabled").unlink(missing_ok=True)
+            with provider_settings_lock():
+                profile, settings = profile_for_endpoint(payload.base_url, payload.connection_id)
+                save_api_key(interface_key_path(profile), payload.api_key)
+                interface_key_path(profile).with_suffix(".disabled").unlink(missing_ok=True)
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"无法保存 API Key：{exc}") from exc
         result = ai_settings_payload()
@@ -1906,12 +2019,13 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     @api.delete("/api/settings/ai/key")
     def delete_ai_key(payload: AIEndpointPayload | None = None, base_url: str | None = None) -> dict[str, object]:
         requested_url = base_url or (payload.base_url if payload else None)
-        profile, _settings = profile_for_endpoint(requested_url, payload.connection_id if payload else None)
         try:
-            deleted = delete_api_key(interface_key_path(profile))
-            disabled = interface_key_path(profile).with_suffix(".disabled")
-            disabled.parent.mkdir(parents=True, exist_ok=True)
-            disabled.touch()
+            with provider_settings_lock():
+                profile, _settings = profile_for_endpoint(requested_url, payload.connection_id if payload else None)
+                deleted = delete_api_key(interface_key_path(profile))
+                disabled = interface_key_path(profile).with_suffix(".disabled")
+                disabled.parent.mkdir(parents=True, exist_ok=True)
+                disabled.touch()
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=f"无法删除 API Key：{exc}") from exc
         result = ai_settings_payload()
@@ -2081,39 +2195,45 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.delete("/api/folders/{folder_id}")
     def delete_folder(folder_id: int) -> dict[str, object]:
-        ensure_file_changes_allowed()
-        try:
-            result = provider.get().trash_folder(
-                folder_id,
-                asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
-                asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # The idle check and the move-to-trash must be one critical section with
+        # jobs.submit, or a task could start on a video that is being deleted.
+        with jobs._lock:
+            ensure_file_changes_allowed()
+            try:
+                result = provider.get().trash_folder(
+                    folder_id,
+                    asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                    asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": folder_id, "deleted": True, **result, "message": "已移入回收站，可使用 Ctrl+Z 撤销"}
 
     @api.delete("/api/videos/{video_id}")
     def delete_video(video_id: int) -> dict[str, object]:
-        ensure_file_changes_allowed()
-        try:
-            result = provider.get().trash_video(
-                video_id,
-                asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
-                asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with jobs._lock:
+            ensure_file_changes_allowed()
+            try:
+                result = provider.get().trash_video(
+                    video_id,
+                    asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                    asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": video_id, "deleted": True, **result, "message": "已移入回收站，可使用 Ctrl+Z 撤销"}
 
     @api.post("/api/recycle-bin/undo")
     def undo_recycle_bin() -> dict[str, object]:
-        ensure_file_changes_allowed()
-        try:
-            return provider.get().undo_latest_recycle(
-                asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        with jobs._lock:
+            ensure_file_changes_allowed()
+            try:
+                return provider.get().undo_latest_recycle(
+                    asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                    asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @api.get("/api/recycle-bin/latest")
     def latest_recycle_bin() -> dict[str, object] | None:
@@ -2372,7 +2492,20 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             if not retain_folder:
                 # A single-video workflow publishes its result at the root.
                 provider.get().set_video_folder(video_id, None)
-            return ("skipped" if all(value == "skipped" for value in outcomes) else "completed", counts)
+            outcome = "skipped" if all(value == "skipped" for value in outcomes) else "completed"
+            return {
+                "outcome": outcome,
+                "candidate_count": counts,
+                # A late cancellation stays completed only when every requested mode
+                # ended finally complete — published this run ("completed") or an
+                # identical completed result already persisted ("skipped") — and at
+                # least one mode really published; pure-reuse runs stay interruptible
+                # and failures never reach this return.
+                "committed": (
+                    all(value in {"completed", "skipped"} for value in outcomes)
+                    and any(value == "completed" for value in outcomes)
+                ),
+            }
         return operation
 
     def batch_operation(state: dict, options: VideoProcessPayload, job_id: str):
@@ -2493,20 +2626,21 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         The no-body response remains the old discovery contract for clients
         that only probe the endpoint; sending options starts the real batch.
         """
-        folder = folder_or_404(folder_id)
-        video_rows = provider.get().list_folder_videos(folder_id, recursive=True)
-        if payload is None:
-            return JSONResponse(
-                status_code=501,
-                content={
-                    "folder_id": folder_id,
-                    "video_ids": [int(row["id"]) for row in video_rows],
-                    "status": "not_implemented",
-                    "detail": "请提交处理选项以启动文件夹批处理",
-                },
-            )
-        items = [(int(row["id"]), Path(row["video_path"])) for row in video_rows]
-        job_id = submit_batch(items, payload)
+        with jobs._lock:
+            folder = folder_or_404(folder_id)
+            video_rows = provider.get().list_folder_videos(folder_id, recursive=True)
+            if payload is None:
+                return JSONResponse(
+                    status_code=501,
+                    content={
+                        "folder_id": folder_id,
+                        "video_ids": [int(row["id"]) for row in video_rows],
+                        "status": "not_implemented",
+                        "detail": "请提交处理选项以启动文件夹批处理",
+                    },
+                )
+            items = [(int(row["id"]), Path(row["video_path"])) for row in video_rows]
+            job_id = submit_batch(items, payload)
         return {
             "job_id": job_id,
             "status": "queued",
@@ -2518,26 +2652,29 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         }
 
     def start_video_process(video_id: int, options: VideoProcessPayload, *, restore=False) -> dict[str, object]:
-        options = freeze_processing_options(options, restore=restore)
-        video_store = provider.get()
-        video = _video_or_404(video_store, video_id)
-        if video["status"] == "processing":
-            raise HTTPException(status_code=409, detail="该视频正在处理中")
-        options = options.model_copy(update={"asr_model_id": options.asr_model_id or selected_model_id()})
-        if options.force_retranscribe or not video_store.get_segments(video_id):
+        # Validate the video and submit under the same lock as delete/undo so a
+        # video cannot disappear between the check and job creation.
+        with jobs._lock:
+            options = freeze_processing_options(options, restore=restore)
+            video_store = provider.get()
+            video = _video_or_404(video_store, video_id)
+            if video["status"] == "processing":
+                raise HTTPException(status_code=409, detail="该视频正在处理中")
+            options = options.model_copy(update={"asr_model_id": options.asr_model_id or selected_model_id()})
+            if options.force_retranscribe or not video_store.get_segments(video_id):
+                try:
+                    require_selectable_model(options.asr_model_id)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
             try:
-                require_selectable_model(options.asr_model_id)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            job_id = jobs.submit("video_process", video_id, process_operation(video_id, options), request={
-                "kind": "single", "video_id": video_id, "options": options.model_dump(),
-            })
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"job_id": job_id, "video_id": video_id, "status": "queued", "analysis_modes": options.analysis_modes,
-                "analysis_schemes": {key: {field: value[field] for field in ("id", "name", "base_mode", "revision")}
-                                     for key, value in options.analysis_schemes.items()}}
+                job_id = jobs.submit("video_process", video_id, process_operation(video_id, options), request={
+                    "kind": "single", "video_id": video_id, "options": options.model_dump(),
+                })
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"job_id": job_id, "video_id": video_id, "status": "queued", "analysis_modes": options.analysis_modes,
+                    "analysis_schemes": {key: {field: value[field] for field in ("id", "name", "base_mode", "revision")}
+                                         for key, value in options.analysis_schemes.items()}}
 
     @api.post("/api/videos/{video_id}/process", status_code=202)
     def process_video(video_id: int, payload: VideoProcessPayload | None = None) -> dict[str, object]:
@@ -2571,11 +2708,13 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 judge = create_processing_judge(profile, key, mode, options)
                 try:
                     store.set_analysis_run(video_id, mode, "processing")
-                    return process_saved_analysis_once(
+                    outcome, count = process_saved_analysis_once(
                         store, video_id, judge, mode,
                         progress=lambda value, message: update(value, message, "analyzing"),
                         filter_formula_noise=False, should_stop=should_cancel,
                     )
+                    return {"outcome": outcome, "candidate_count": count,
+                            "committed": outcome == "completed"}
                 finally:
                     judge.close()
 
@@ -2593,60 +2732,61 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         video_id: int,
         payload: TranscribePayload | None = None,
     ) -> dict[str, object]:
-        video_store = provider.get()
-        video = _video_or_404(video_store, video_id)
-        options = payload or TranscribePayload()
-        if video["status"] == "processing":
-            raise HTTPException(status_code=409, detail="该视频正在处理中")
-        options = options.model_copy(
-            update={"asr_model_id": options.asr_model_id or selected_model_id()}
-        )
-        try:
-            require_selectable_model(options.asr_model_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with jobs._lock:
+            video_store = provider.get()
+            video = _video_or_404(video_store, video_id)
+            options = payload or TranscribePayload()
+            if video["status"] == "processing":
+                raise HTTPException(status_code=409, detail="该视频正在处理中")
+            options = options.model_copy(
+                update={"asr_model_id": options.asr_model_id or selected_model_id()}
+            )
+            try:
+                require_selectable_model(options.asr_model_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        def operation(
-            update: Callable[[float, str, str | None], None],
-            should_cancel: Callable[[], bool],
-        ) -> object:
-            if options.force_retranscribe:
-                from classcue.video_pipeline import retranscribe_video
+            def operation(
+                update: Callable[[float, str, str | None], None],
+                should_cancel: Callable[[], bool],
+            ) -> object:
+                if options.force_retranscribe:
+                    from classcue.video_pipeline import retranscribe_video
 
-                count = retranscribe_video(
+                    count = retranscribe_video(
+                        video_store,
+                        video_id,
+                        options.asr_model_id,
+                        progress=lambda value, message: update(value, message, "transcribing"),
+                        should_stop=should_cancel,
+                        qwen_options=options.qwen_options.model_dump(),
+                    )
+                    return {"status": "transcribed", "segment_count": count}
+                result, count = prepare_video_for_analysis(
                     video_store,
                     video_id,
-                    options.asr_model_id,
                     progress=lambda value, message: update(value, message, "transcribing"),
+                    asr_model_id=options.asr_model_id,
                     should_stop=should_cancel,
                     qwen_options=options.qwen_options.model_dump(),
                 )
-                return {"status": "transcribed", "segment_count": count}
-            result, count = prepare_video_for_analysis(
-                video_store,
-                video_id,
-                progress=lambda value, message: update(value, message, "transcribing"),
-                asr_model_id=options.asr_model_id,
-                should_stop=should_cancel,
-                qwen_options=options.qwen_options.model_dump(),
-            )
-            video_store.set_status(video_id, "transcribed")
-            return {"status": result, "segment_count": count}
+                video_store.set_status(video_id, "transcribed")
+                return {"status": result, "segment_count": count}
 
-        try:
-            job_id = jobs.submit(
-                "video_transcribe",
-                video_id,
-                operation,
-                request={
-                    "kind": "transcribe",
-                    "video_id": video_id,
-                    "options": options.model_dump(),
-                },
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"job_id": job_id, "video_id": video_id, "status": "queued"}
+            try:
+                job_id = jobs.submit(
+                    "video_transcribe",
+                    video_id,
+                    operation,
+                    request={
+                        "kind": "transcribe",
+                        "video_id": video_id,
+                        "options": options.model_dump(),
+                    },
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"job_id": job_id, "video_id": video_id, "status": "queued"}
 
     @api.post("/api/videos/{video_id}/retry", status_code=202)
     def retry_video(video_id: int, payload: VideoProcessPayload | None = None) -> dict[str, object]:
@@ -2701,35 +2841,40 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.post("/api/jobs/{job_id}/resume", status_code=202)
     def resume_job(job_id: str, payload: ResumePayload | None = None) -> dict[str, object]:
-        row = provider.get().get_job(job_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        if row["status"] != "resource_paused":
-            raise HTTPException(status_code=409, detail="任务不是资源暂停状态")
-        request_data = json.loads(row["request_json"] or "{}")
-        options = VideoProcessPayload.model_validate(request_data.get("options", {}))
-        skip = bool(payload and payload.skip_current)
-        if request_data.get("kind") == "batch":
-            state = normalize_batch(request_data, provider.get())
-            if skip:
-                index = state.get("current_index")
-                if index is None:
-                    index = next((i for i, entry in enumerate(state["entries"])
-                                  if entry["status"] not in {"completed", "skipped", "failed"}), None)
-                if index is not None:
-                    state["entries"][index]["status"] = "skipped"
-            if any(entry["status"] not in {"completed", "skipped", "failed"} for entry in state["entries"]):
-                new_id = submit_batch_state(state, options.model_copy(update={"force_retranscribe": False}), restore=True)
-                result = {"job_id": new_id, "status": "queued"}
+        # The paused check, queue rebuild, submission and the old row's final
+        # status are one critical section with cancel/delete/undo, or a paused
+        # batch could be cancelled and deleted, then resumed from a stale
+        # snapshot of an already-deleted video.
+        with jobs._lock:
+            row = provider.get().get_job(job_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            if row["status"] != "resource_paused":
+                raise HTTPException(status_code=409, detail="任务不是资源暂停状态")
+            request_data = json.loads(row["request_json"] or "{}")
+            options = VideoProcessPayload.model_validate(request_data.get("options", {}))
+            skip = bool(payload and payload.skip_current)
+            if request_data.get("kind") == "batch":
+                state = normalize_batch(request_data, provider.get())
+                if skip:
+                    index = state.get("current_index")
+                    if index is None:
+                        index = next((i for i, entry in enumerate(state["entries"])
+                                      if entry["status"] not in {"completed", "skipped", "failed"}), None)
+                    if index is not None:
+                        state["entries"][index]["status"] = "skipped"
+                if any(entry["status"] not in {"completed", "skipped", "failed"} for entry in state["entries"]):
+                    new_id = submit_batch_state(state, options.model_copy(update={"force_retranscribe": False}), restore=True)
+                    result = {"job_id": new_id, "status": "queued"}
+                else:
+                    jobs.cancel(job_id)
+                    return job_payload_or_404(job_id)
+            elif request_data.get("kind") == "single" and not skip:
+                result = start_video_process(int(request_data["video_id"]), options, restore=True)
             else:
-                jobs.cancel(job_id)
-                return job_payload_or_404(job_id)
-        elif request_data.get("kind") == "single" and not skip:
-            result = start_video_process(int(request_data["video_id"]), options, restore=True)
-        else:
-            raise HTTPException(status_code=400, detail="该任务没有可恢复的队列")
-        provider.get().update_job(job_id, status="interrupted", stage="resumed", message="已创建续跑任务")
-        return result
+                raise HTTPException(status_code=400, detail="该任务没有可恢复的队列")
+            provider.get().update_job(job_id, status="interrupted", stage="resumed", message="已创建续跑任务")
+            return result
 
     @api.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
@@ -2892,43 +3037,44 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         video_id: int,
         payload: SlideExtractionPayload | None = None,
     ) -> dict[str, object]:
-        store = provider.get()
-        video = _video_or_404(store, video_id)
-        if video["status"] == "processing":
-            raise HTTPException(status_code=409, detail="该视频正在处理中")
-        options = payload or SlideExtractionPayload()
-        roi = options.roi.to_roi() if options.roi is not None else None
-        slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
+        with jobs._lock:
+            store = provider.get()
+            video = _video_or_404(store, video_id)
+            if video["status"] == "processing":
+                raise HTTPException(status_code=409, detail="该视频正在处理中")
+            options = payload or SlideExtractionPayload()
+            roi = options.roi.to_roi() if options.roi is not None else None
+            slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
 
-        def operation(
-            update: Callable[[float, str, str | None], None],
-            should_cancel: Callable[[], bool],
-        ) -> object:
-            return extract_and_store_slides(
-                store,
-                video_id,
-                slide_root,
-                roi=roi,
-                ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
-                force=options.force,
-                progress=update,
-                should_stop=should_cancel,
-            )
+            def operation(
+                update: Callable[[float, str, str | None], None],
+                should_cancel: Callable[[], bool],
+            ) -> object:
+                return extract_and_store_slides(
+                    store,
+                    video_id,
+                    slide_root,
+                    roi=roi,
+                    ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
+                    force=options.force,
+                    progress=update,
+                    should_stop=should_cancel,
+                )
 
-        try:
-            job_id = jobs.submit(
-                "slide_extract",
-                video_id,
-                operation,
-                request={
-                    "kind": "slide_extract",
-                    "video_id": video_id,
-                    "options": options.model_dump(),
-                },
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"job_id": job_id, "video_id": video_id, "status": "queued", "job_type": "slide_extract"}
+            try:
+                job_id = jobs.submit(
+                    "slide_extract",
+                    video_id,
+                    operation,
+                    request={
+                        "kind": "slide_extract",
+                        "video_id": video_id,
+                        "options": options.model_dump(),
+                    },
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"job_id": job_id, "video_id": video_id, "status": "queued", "job_type": "slide_extract"}
 
     @api.get("/api/videos/{video_id}/slides")
     def get_video_slides(
@@ -3144,55 +3290,58 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.post("/api/videos/{video_id}/experiments", status_code=202)
     def start_experiment(video_id: int, payload: ExperimentPayload) -> dict[str, object]:
-        video_store = provider.get()
-        snapshot = experiment_snapshot(video_id, payload)
-        try:
-            require_approval(snapshot, payload.approved_snapshot_hash)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        profile = ProviderProfile.model_validate(snapshot["profile"])
-        settings = load_provider_settings()
-        key = resolve_interface_key(profile, settings)
-        try:
-            profile.require_ready(key)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if jobs.is_running():
-            raise HTTPException(status_code=409, detail="已有任务正在运行，请等待当前任务完成。")
-        experiment_id = register_run(
-            video_store, payload.name, snapshot, payload.approved_snapshot_hash,
-        )
-
-        def operation(
-            update: Callable[[float, str, str | None], None],
-            should_cancel: Callable[[], bool],
-        ) -> object:
-            return execute_run(
-                video_store, experiment_id, snapshot, key, payload.approved_snapshot_hash,
-                progress=lambda value, message: update(value, message, "experiment"),
-                should_cancel=should_cancel,
+        # Snapshot, registration and submit share the delete/undo lock so the
+        # experiment row never references a video deleted mid-request.
+        with jobs._lock:
+            video_store = provider.get()
+            snapshot = experiment_snapshot(video_id, payload)
+            try:
+                require_approval(snapshot, payload.approved_snapshot_hash)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            profile = ProviderProfile.model_validate(snapshot["profile"])
+            settings = load_provider_settings()
+            key = resolve_interface_key(profile, settings)
+            try:
+                profile.require_ready(key)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if jobs.is_running():
+                raise HTTPException(status_code=409, detail="已有任务正在运行，请等待当前任务完成。")
+            experiment_id = register_run(
+                video_store, payload.name, snapshot, payload.approved_snapshot_hash,
             )
 
-        try:
-            job_id = jobs.submit(
-                "video_experiment",
-                video_id,
-                operation,
-                request={
-                    "kind": "experiment",
-                    "experiment_id": experiment_id,
-                    "video_id": video_id,
-                    "options": payload.model_dump(),
-                },
-            )
-        except Exception as exc:
-            video_store.update_experiment(
-                experiment_id,
-                status="failed",
-                error_message=str(exc),
-            )
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"experiment_id": experiment_id, "video_id": video_id, "job_id": job_id, "status": "queued"}
+            def operation(
+                update: Callable[[float, str, str | None], None],
+                should_cancel: Callable[[], bool],
+            ) -> object:
+                return execute_run(
+                    video_store, experiment_id, snapshot, key, payload.approved_snapshot_hash,
+                    progress=lambda value, message: update(value, message, "experiment"),
+                    should_cancel=should_cancel,
+                )
+
+            try:
+                job_id = jobs.submit(
+                    "video_experiment",
+                    video_id,
+                    operation,
+                    request={
+                        "kind": "experiment",
+                        "experiment_id": experiment_id,
+                        "video_id": video_id,
+                        "options": payload.model_dump(),
+                    },
+                )
+            except Exception as exc:
+                video_store.update_experiment(
+                    experiment_id,
+                    status="failed",
+                    error_message=str(exc),
+                )
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"experiment_id": experiment_id, "video_id": video_id, "job_id": job_id, "status": "queued"}
 
     @api.get("/api/experiments/{experiment_id}")
     def get_experiment(experiment_id: str) -> dict[str, object]:
