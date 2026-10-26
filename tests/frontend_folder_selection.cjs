@@ -58,7 +58,7 @@ async function main() {
       if (p === "/api/settings/ai") return json({ model: "模拟服务", has_api_key: true });
       if (p === "/api/jobs/paused") return json([]);
       if (p.startsWith("/api/jobs/")) return json({ id: p.split("/").at(-1), status: "interrupted", progress: 0 });
-      if (p === "/api/batch/latest" || p === "/api/recycle-bin/latest") return json(null);
+      if (p === "/api/batch/latest" || p === "/api/library/undo/latest") return json(null);
       if (p.endsWith("/thumbnail")) return route.fulfill({ status: 404, body: "" });
       return json({});
     });

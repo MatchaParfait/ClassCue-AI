@@ -275,11 +275,13 @@ export async function renameLibraryFolder(folderId: number, name: string): Promi
   }));
 }
 
-export async function moveLibraryFolder(folderId: number, parentId: number | null): Promise<LibraryFolder> {
+export type LibraryOrderItem = { type: "folder" | "video"; id: number };
+
+export async function moveLibraryFolder(folderId: number, parentId: number | null, previousOrder?: LibraryOrderItem[]): Promise<LibraryFolder> {
   return normalizeLibraryFolder(await request<LibraryFolder>(`/api/folders/${folderId}/parent`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ parent_id: parentId }),
+    body: JSON.stringify({ parent_id: parentId, previous_order: previousOrder }),
   }));
 }
 
@@ -307,19 +309,36 @@ export async function getLatestRecycleBin(): Promise<RecycleBinResult | null> {
   return request<RecycleBinResult | null>("/api/recycle-bin/latest");
 }
 
-export async function moveVideoToFolder(videoId: number, folderId: number | null): Promise<Video> {
+export interface LibraryUndoEntry {
+  operation_id: string;
+  kind: "video" | "folder" | "move_video" | "move_folder" | "reorder";
+  videos?: number;
+  folders?: number;
+  parent_id?: number | null;
+  ordered_items?: Array<{ type: "folder" | "video"; id: number }>;
+}
+
+export async function getLatestLibraryUndo(): Promise<LibraryUndoEntry | null> {
+  return request<LibraryUndoEntry | null>("/api/library/undo/latest");
+}
+
+export async function undoLibraryEdit(): Promise<LibraryUndoEntry> {
+  return request<LibraryUndoEntry>("/api/library/undo", { method: "POST" });
+}
+
+export async function moveVideoToFolder(videoId: number, folderId: number | null, previousOrder?: LibraryOrderItem[]): Promise<Video> {
   return normalizeVideo(await request<Video>(`/api/videos/${videoId}/folder`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ folder_id: folderId }),
+    body: JSON.stringify({ folder_id: folderId, previous_order: previousOrder }),
   }));
 }
 
-export async function reorderLibrary(parentId: number | null, orderedItems: Array<{ type: "folder" | "video"; id: number }>): Promise<LibraryResponse> {
+export async function reorderLibrary(parentId: number | null, orderedItems: LibraryOrderItem[], previousOrder?: LibraryOrderItem[]): Promise<LibraryResponse> {
   return getLibraryResponse(await request<LibraryResponse>("/api/library/reorder", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ parent_id: parentId, ordered_items: orderedItems }),
+    body: JSON.stringify({ parent_id: parentId, ordered_items: orderedItems, previous_order: previousOrder }),
   }));
 }
 

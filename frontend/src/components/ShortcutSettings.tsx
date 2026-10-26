@@ -114,6 +114,7 @@ export function ShortcutSettings() {
       </div>)}
       <div className="shortcut-standard"><strong>通用键盘操作（固定）</strong>
         <p>Tab / Shift+Tab 切换焦点；Enter 确认或提交；Esc 关闭菜单、取消弹窗或编辑；方向键选择搜索结果与菜单项。这些按键保持标准行为。</p>
+        <p>Ctrl+Z 撤销当前视频中的新增手动题目、移除条目、跳转时间、题目名称、重要程度和强调修改；在视频库中撤销移动、排序或删除。输入框内保留文字撤销。</p>
         <p>系统和浏览器占用的组合键无法由应用接管。</p>
       </div>
     </fieldset>

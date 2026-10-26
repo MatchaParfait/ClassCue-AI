@@ -1,4 +1,5 @@
 import { UnsavedChangesProvider } from "./components/UnsavedChanges";
+import { isShortcutInput, isUndoShortcut } from "./shortcuts";
 import { useDragTextHints } from "./libraryPreferences";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useStartupLibraryView } from "./hooks/useStartupLibraryView";
@@ -34,13 +35,14 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider, Link, Route, Routes, useLocation, useNavigate, useNavigationType, type Location } from "react-router-dom";
-import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestRecycleBin, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoRecycleBin } from "./api/client";
-import type { LibraryFolder } from "./api/client";
+import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestLibraryUndo, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoLibraryEdit } from "./api/client";
+import type { LibraryFolder, LibraryOrderItem } from "./api/client";
 import { GlobalSearchProvider, GlobalSearchButton } from "./components/GlobalSearch";
 import { FolderWindow } from "./components/FolderWindow";
 import { VideoThumbnail } from "./components/VideoThumbnail";
@@ -403,11 +405,14 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     { kind: "video"; video: Video } | { kind: "folder"; folder: VideoLibraryFolder } | null
   >(null);
   const [pptVideo, setPptVideo] = useState<Video | null>(null);
-  const [canUndoRemoval, setCanUndoRemoval] = useState(false);
-  const [undoingRemoval, setUndoingRemoval] = useState(false);
-  const recycleLatest = useQuery({
-    queryKey: ["recycle-bin-latest"], queryFn: getLatestRecycleBin, enabled: active,
+  const [canUndoLibrary, setCanUndoLibrary] = useState(false);
+  const [undoingLibrary, setUndoingLibrary] = useState(false);
+  const libraryChangingRef = useRef(false);
+  const [libraryChanging, setLibraryChanging] = useState(false);
+  const libraryUndoLatest = useQuery({
+    queryKey: ["library-undo-latest"], queryFn: getLatestLibraryUndo, enabled: active,
     staleTime: 15_000, refetchOnWindowFocus: true,
+    refetchInterval: active ? LIBRARY_SYNC_INTERVAL : false, refetchIntervalInBackground: false,
   });
   const movingIds = useRef(new Set<number>());
   const [moving, setMoving] = useState<ReadonlySet<number>>(new Set());
@@ -630,7 +635,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   };
 
   const updateOrder = (sourceKey: string, targetKey: string, placement: "before" | "after" | "swap" = "swap", parentId: string | null = null) => {
-    if (!sourceKey || sourceKey === targetKey) return;
+    if (!sourceKey || sourceKey === targetKey || libraryChangingRef.current) return;
     if (sourceKey.startsWith("video-") !== targetKey.startsWith("video-")) return;
     const current = parentId ? libraryState.folderOrders[parentId] ?? [] : libraryState.rootOrder;
     const keys = (parentId ? folderItems : rootItems).map((item) => item.key);
@@ -649,11 +654,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     }
     let index = 0;
     const next = allOrdered.map((key) => key.startsWith("video-") === sourceKey.startsWith("video-") ? reordered[index++] : key);
-    setLibraryState((state) => parentId
-      ? { ...state, folderOrders: { ...state.folderOrders, [parentId]: next } }
-      : { ...state, rootOrder: next });
-    if (parentId) setFolderSortMode("manual");
-    else setSortMode("manual");
+    if (next.every((key, position) => key === allOrdered[position])) return;
     const orderedItems: Array<{ type: "folder" | "video"; id: number }> = [];
     for (const key of next) {
       if (key.startsWith("video-")) {
@@ -664,13 +665,33 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       const id = parseFolderId(key);
       if (id !== null) orderedItems.push({ type: "folder", id });
     }
-    const saveOrder = () => {
+    const saveOrder = async () => {
+      if (libraryChangingRef.current) return;
+      libraryChangingRef.current = true;
+      setLibraryChanging(true);
       setOperationError(null);
-      void reorderLibrary(parseFolderId(parentId), orderedItems)
-        .then(() => void queryClient.invalidateQueries({ queryKey: ["library"] }))
-        .catch((error) => setOperationError({ text: `排序保存失败：${errorMessage(error)}`, retry: saveOrder }));
+      setLibraryState((state) => parentId
+        ? { ...state, folderOrders: { ...state.folderOrders, [parentId]: next } }
+        : { ...state, rootOrder: next });
+      if (parentId) setFolderSortMode("manual");
+      else setSortMode("manual");
+      try {
+        await reorderLibrary(parseFolderId(parentId), orderedItems, apiLibraryOrder(keys));
+        setCanUndoLibrary(true);
+        setNotice("已调整顺序，按 Ctrl+Z 撤销");
+        void queryClient.invalidateQueries({ queryKey: ["library"] });
+        void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
+      } catch (error) {
+        setLibraryState(state => parentId
+          ? { ...state, folderOrders: { ...state.folderOrders, [parentId]: allOrdered } }
+          : { ...state, rootOrder: allOrdered });
+        setOperationError({ text: `排序保存失败：${errorMessage(error)}`, retry: () => { void saveOrder(); } });
+      } finally {
+        libraryChangingRef.current = false;
+        setLibraryChanging(false);
+      }
     };
-    saveOrder();
+    void saveOrder();
   };
 
   const canMoveFolder = (sourceId: string, destination: string | null) => {
@@ -787,18 +808,23 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   };
 
   const moveVideo = async (videoId: number, destination: string) => {
-    if (movingIds.current.has(videoId)) return;
+    if (movingIds.current.has(videoId) || libraryChangingRef.current) return;
     const nextFolder = destination || null;
+    if ((libraryState.assignments[String(videoId)] ?? null) === nextFolder) return;
     const nextFolderApiId = parseFolderId(nextFolder);
     if (nextFolder && nextFolderApiId === null) {
       setOperationError({ text: "视频移动失败：文件夹不存在", retry: () => { void rootLibrary.refetch(); } });
       return;
     }
     movingIds.current.add(videoId);
+    libraryChangingRef.current = true;
+    setLibraryChanging(true);
     setMoving(new Set(movingIds.current));
     setOperationError(null);
     try {
-      const savedVideo = await moveVideoToFolder(videoId, nextFolderApiId);
+      const previousParent = libraryState.assignments[String(videoId)] ?? null;
+      const savedVideo = await moveVideoToFolder(videoId, nextFolderApiId,
+        apiLibraryOrder((previousParent === null ? rootItems : folderItems).map(item => item.key)));
       queryClient.setQueryData<Video[]>(["videos"], (current) => current?.map((video) => video.id === videoId ? savedVideo : video));
       const savedFolder = savedVideo.folder_id == null ? null : `folder-${savedVideo.folder_id}`;
       setLibraryState((state) => ({
@@ -807,30 +833,42 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       }));
       void queryClient.invalidateQueries({ queryKey: ["videos"] });
       void queryClient.invalidateQueries({ queryKey: ["library"] });
+      setCanUndoLibrary(true);
+      void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
       setNotice(savedFolder ? "视频已移入文件夹" : "视频已放回一级目录");
     } catch (error) {
       setOperationError({ text: `视频移动失败：${errorMessage(error)}`, retry: () => { void moveVideo(videoId, destination); } });
     } finally {
       movingIds.current.delete(videoId);
       setMoving(new Set(movingIds.current));
+      libraryChangingRef.current = false;
+      setLibraryChanging(false);
     }
   };
 
   const moveFolder = async (sourceId: string, destination: string | null) => {
     const apiId = parseFolderId(sourceId);
-    if (apiId === null || !canMoveFolder(sourceId, destination)) return;
+    if (apiId === null || !canMoveFolder(sourceId, destination) || libraryChangingRef.current) return;
     movingFolderIds.current.add(sourceId);
+    libraryChangingRef.current = true;
+    setLibraryChanging(true);
     setMovingFolders(new Set(movingFolderIds.current));
     setOperationError(null);
     try {
-      await moveLibraryFolder(apiId, parseFolderId(destination));
+      const previousParent = libraryState.folders.find(folder => folder.id === sourceId)?.parentId ?? null;
+      await moveLibraryFolder(apiId, parseFolderId(destination),
+        apiLibraryOrder((previousParent === null ? rootItems : folderItems).map(item => item.key)));
       await queryClient.invalidateQueries({ queryKey: ["library"] });
+      setCanUndoLibrary(true);
+      void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
       setNotice(destination ? "文件夹已移入目标文件夹" : "文件夹已放回一级目录");
     } catch (error) {
       setOperationError({ text: `文件夹移动失败：${errorMessage(error)}`, retry: () => { void moveFolder(sourceId, destination); } });
     } finally {
       movingFolderIds.current.delete(sourceId);
       setMovingFolders(new Set(movingFolderIds.current));
+      libraryChangingRef.current = false;
+      setLibraryChanging(false);
     }
   };
 
@@ -883,47 +921,70 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     }
   };
 
-  const undoRemoval = async () => {
-    if (!canUndoRemoval || undoingRemoval || recycleTarget) return;
-    setUndoingRemoval(true);
+  const undoLibraryAction = async () => {
+    if (!workspaceSettled || !canUndoLibrary || libraryChangingRef.current || recycleTarget || renamingFolder
+      || isCreatingFolder || renamingVideo || pptVideo || draggedKey) return;
+    libraryChangingRef.current = true;
+    setLibraryChanging(true);
+    setUndoingLibrary(true);
     setOperationError(null);
     try {
-      const restored = await undoRecycleBin();
-      setCanUndoRemoval(false);
-      setNotice(restored.videos > 1 ? `已恢复 ${restored.videos} 个视频` : "已恢复到视频库");
-      void queryClient.invalidateQueries({ queryKey: ["videos"] });
-      void queryClient.invalidateQueries({ queryKey: ["library"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-status"] });
-      void queryClient.invalidateQueries({ queryKey: ["recycle-bin-latest"] });
+      const restored = await undoLibraryEdit();
+      const layoutEdit = ["move_video", "move_folder", "reorder"].includes(restored.kind);
+      if (layoutEdit) {
+        setFolderId(restored.parent_id == null ? null : `folder-${restored.parent_id}`);
+        if (restored.parent_id == null) setSortMode("manual");
+        else setFolderSortMode("manual");
+      }
+      setNotice(layoutEdit ? restored.kind === "reorder" ? "已撤销排序" : "已撤销移动"
+        : (restored.videos ?? 0) > 1 ? `已恢复 ${restored.videos} 个视频` : "已恢复到视频库");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["videos"] }),
+        queryClient.invalidateQueries({ queryKey: ["library"] }),
+        queryClient.invalidateQueries({ queryKey: ["library-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] }),
+        queryClient.invalidateQueries({ queryKey: ["recycle-bin-latest"] }),
+      ]);
+      if (restored.ordered_items) {
+        const order = restored.ordered_items.map(item => `${item.type}-${item.id}`);
+        setLibraryState(state => restored.parent_id == null ? { ...state, rootOrder: order }
+          : { ...state, folderOrders: { ...state.folderOrders, [`folder-${restored.parent_id}`]: order } });
+      }
     } catch (error) {
-      setOperationError({ text: `撤销删除失败：${errorMessage(error)}`, retry: () => { void undoRemoval(); } });
+      setOperationError({ text: `撤销失败：${errorMessage(error)}`, retry: () => { void undoLibraryAction(); } });
     } finally {
-      setUndoingRemoval(false);
+      libraryChangingRef.current = false;
+      setLibraryChanging(false);
+      setUndoingLibrary(false);
     }
   };
 
   useEffect(() => {
     if (!active || suspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z"
-        || event.defaultPrevented || event.isComposing) return;
-      const target = event.target;
-      if (target instanceof HTMLElement
-        && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
-      if (!canUndoRemoval || undoingRemoval || recycleTarget) return;
+      if (!isUndoShortcut(event) || isShortcutInput(event.target)) return;
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"]')) return;
+      if (!workspaceSettled || !canUndoLibrary || libraryChangingRef.current || recycleTarget || renamingFolder
+        || isCreatingFolder || renamingVideo || pptVideo || draggedKey
+        || [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].some(element =>
+          !element.classList.contains("folder-window") && !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
       event.preventDefault();
-      void undoRemoval();
+      void undoLibraryAction();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [active, suspended, canUndoRemoval, undoingRemoval, recycleTarget]);
+  }, [active, suspended, canUndoLibrary, recycleTarget, renamingFolder, isCreatingFolder,
+    renamingVideo, pptVideo, draggedKey, folderId, workspaceSettled]);
 
   useEffect(() => {
-    if (recycleLatest.isSuccess) setCanUndoRemoval(Boolean(recycleLatest.data));
-  }, [recycleLatest.data, recycleLatest.isSuccess]);
+    if (libraryUndoLatest.isSuccess) setCanUndoLibrary(Boolean(libraryUndoLatest.data));
+  }, [libraryUndoLatest.data, libraryUndoLatest.isSuccess]);
 
   const confirmRemoval = async () => {
     if (!recycleTarget) return;
+    if (libraryChangingRef.current) throw new Error("正在保存，请稍后重试");
+    libraryChangingRef.current = true;
+    setLibraryChanging(true);
     const target = recycleTarget;
     setTrashBusyKey(target.kind === "folder" ? `folder-${target.folder.id}` : `video-${target.video.id}`);
     setOperationError(null);
@@ -931,7 +992,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       const result = target.kind === "folder"
         ? await deleteLibraryFolder(parseFolderId(target.folder.id)!)
         : await deleteVideo(target.video.id);
-      setCanUndoRemoval(true);
+      setCanUndoLibrary(true);
       setNotice(target.kind === "folder"
         ? result.videos ? `文件夹已移入回收站（${result.videos} 个视频），按 Ctrl+Z 撤销` : "文件夹已移入回收站，按 Ctrl+Z 撤销"
         : result.message || "视频已移入回收站，按 Ctrl+Z 撤销");
@@ -940,8 +1001,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       void queryClient.invalidateQueries({ queryKey: ["library"] });
       void queryClient.invalidateQueries({ queryKey: ["library-status"] });
       void queryClient.invalidateQueries({ queryKey: ["recycle-bin-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
     } finally {
       setTrashBusyKey(null);
+      libraryChangingRef.current = false;
+      setLibraryChanging(false);
     }
   };
 
@@ -996,11 +1060,12 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         <motion.article {...entryMotion}
           className={`library-card folder-card${selected ? " is-selected" : ""}${movingFolders.has(item.key) ? " is-busy" : ""}${dropIntent?.targetKey === item.key ? ` drop-${dropIntent.mode}${dropIntent.edge ? ` drop-${dropIntent.edge}` : ""}` : ""}`}
           key={item.key}
-          draggable={!movingFolders.has(item.key)}
+          draggable={!movingFolders.has(item.key) && !libraryChanging}
           aria-busy={movingFolders.has(item.key)}
           data-library-key={item.key}
           data-drag-source={draggedKey === item.key || undefined}
           onDragStartCapture={(event) => {
+            if (libraryChangingRef.current) { event.preventDefault(); return; }
             event.dataTransfer.effectAllowed = "move";
             suppressFolderClickUntil.current = Number.POSITIVE_INFINITY;
             dragSourceRef.current = { key: item.key, folderId: parentId };
@@ -1088,10 +1153,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       <motion.article {...entryMotion}
         className={`library-card video-card${selected ? " is-selected" : ""}${moving.has(video.id) ? " is-busy" : ""}${dropIntent?.targetKey === item.key ? ` drop-swap${dropIntent.edge ? ` drop-${dropIntent.edge}` : ""}` : ""}`}
         key={item.key}
-        draggable={!editingVideoName}
+        draggable={!editingVideoName && !libraryChanging}
         data-library-key={item.key}
         data-drag-source={draggedKey === item.key || undefined}
         onDragStartCapture={(event) => {
+          if (libraryChangingRef.current) { event.preventDefault(); return; }
           event.dataTransfer.effectAllowed = "move";
           suppressVideoClickUntil.current = Number.POSITIVE_INFINITY;
           dragSourceRef.current = { key: item.key, folderId: parentId };
@@ -1194,6 +1260,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   };
 
   const libraryReady = rootLibrary.data !== undefined;
+  const libraryUndoLabel = libraryUndoLatest.data?.kind === "reorder" ? "撤销排序"
+    : libraryUndoLatest.data?.kind === "move_video" ? "撤销移动视频"
+    : libraryUndoLatest.data?.kind === "move_folder" ? "撤销移动文件夹" : "撤销删除";
   const operationErrorView = operationError && <div className="library-operation-error" role="alert"><AlertCircle size={17} /><span>{operationError.text}</span>
     <button className="secondary-button compact" onClick={operationError.retry}><RotateCcw size={14} />重试</button>
     <button className="icon-button" aria-label="关闭错误提示" title="关闭错误提示" onClick={() => setOperationError(null)}><X size={15} /></button></div>;
@@ -1216,6 +1285,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <div className="library-breadcrumb"><span>本地视频库</span></div>
           <div className="library-toolbar-tools">
           <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
+          <button className="icon-button library-undo" type="button"
+            title={`${libraryUndoLabel}（Ctrl+Z）`} aria-label={libraryUndoLabel} aria-keyshortcuts="Control+Z Meta+Z"
+            disabled={!workspaceSettled || !canUndoLibrary || libraryChanging} onClick={() => void undoLibraryAction()}>
+            {undoingLibrary ? <LoaderCircle className="spin" size={16} /> : <Undo2 size={16} />}
+          </button>
           <label className="sort-control">
             <span>排序</span>
             <select value={sortMode} aria-label="视频库排序" onChange={(event) => setSortMode(event.target.value as "manual" | "name" | "time")}>
@@ -1348,7 +1422,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         kind={recycleTarget.kind}
         name={recycleTarget.kind === "folder" ? recycleTarget.folder.name : recycleTarget.video.display_name}
         backgroundRef={librarySurfaceRef} onConfirm={confirmRemoval} onClose={() => setRecycleTarget(null)} />}
-      <AnimatePresence>{notice && active && !suspended && <AnimatedPopup duration={.18} className="toast" role="status"><CheckCircle2 size={16} /><span>{notice}</span>{canUndoRemoval && <button className="toast-action" type="button" onClick={() => void undoRemoval()} disabled={undoingRemoval}>{undoingRemoval ? "正在撤销…" : "撤销"}</button>}<button type="button" onClick={() => setNotice(null)} aria-label="关闭提示"><X size={15} /></button></AnimatedPopup>}</AnimatePresence>
+      <AnimatePresence>{notice && active && !suspended && <AnimatedPopup duration={.18} className="toast" role="status"><CheckCircle2 size={16} /><span>{notice}</span>{canUndoLibrary && <button className="toast-action" type="button" onClick={() => void undoLibraryAction()} disabled={libraryChanging} title="撤销（Ctrl+Z）">{undoingLibrary ? "正在撤销…" : "撤销"}</button>}<button type="button" onClick={() => setNotice(null)} aria-label="关闭提示"><X size={15} /></button></AnimatedPopup>}</AnimatePresence>
     </main>
   );
 }
@@ -1474,6 +1548,12 @@ function folderKey(folder: VideoLibraryFolder) { return folder.id; }
 function parseFolderId(folderId: string | null): number | null {
   const match = folderId?.match(/^folder-(\d+)$/);
   return match ? Number(match[1]) : null;
+}
+function apiLibraryOrder(keys: string[]): LibraryOrderItem[] {
+  return keys.flatMap(key => {
+    const match = /^(folder|video)-(\d+)$/.exec(key);
+    return match ? [{ type: match[1] as LibraryOrderItem["type"], id: Number(match[2]) }] : [];
+  });
 }
 function countFolderVideos(folderId: string, videos: Video[], state: VideoLibraryState) {
   return state.folders.find((folder) => folder.id === folderId)?.videoCount

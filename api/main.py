@@ -324,15 +324,29 @@ class FolderRenamePayload(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
-class FolderParentPayload(BaseModel):
+class LibraryOrderItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["folder", "video"]
+    id: int = Field(gt=0, strict=True)
+
+
+class LibraryEditPayload(BaseModel):
+    previous_order: list[LibraryOrderItem] | None = None
+
+    def previous_items(self) -> list[tuple[str, int]] | None:
+        return [(item.type, item.id) for item in self.previous_order] if self.previous_order is not None else None
+
+
+class FolderParentPayload(LibraryEditPayload):
     parent_id: int | None = None
 
 
-class VideoFolderPayload(BaseModel):
+class VideoFolderPayload(LibraryEditPayload):
     folder_id: int | None = None
 
 
-class LibraryReorderPayload(BaseModel):
+class LibraryReorderPayload(LibraryEditPayload):
     parent_id: int | None = None
     # Items are intentionally tagged so folders and videos can be interleaved.
     ordered_items: list[dict[str, object]] = Field(default_factory=list)
@@ -2213,7 +2227,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         if payload.parent_id is not None:
             folder_or_404(payload.parent_id)
         try:
-            provider.get().set_folder_parent(folder_id, payload.parent_id)
+            with jobs._lock:
+                provider.get().set_folder_parent(folder_id, payload.parent_id, record_undo=True,
+                                                 previous_order=payload.previous_items())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return folder_payload(folder_or_404(folder_id))
@@ -2264,6 +2280,25 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def latest_recycle_bin() -> dict[str, object] | None:
         return provider.get().latest_recycle()
 
+    @api.get("/api/library/undo/latest")
+    def latest_library_undo() -> dict[str, object] | None:
+        return provider.get().latest_library_undo()
+
+    @api.post("/api/library/undo")
+    def undo_library_edit() -> dict[str, object]:
+        with jobs._lock:
+            store = provider.get()
+            latest = store.latest_library_undo()
+            if latest and latest["kind"] in {"video", "folder"}:
+                ensure_file_changes_allowed()
+            try:
+                return store.undo_latest_library_edit(
+                    asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                    asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @api.post("/api/library/reorder")
     def reorder_library(payload: LibraryReorderPayload, background: BackgroundTasks) -> dict[str, object]:
         folder_id = payload.parent_id
@@ -2275,7 +2310,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 kind = str(item.get("type") or item.get("kind") or "")
                 item_id = int(item.get("id") or item.get("folder_id") or item.get("video_id"))
                 ordered.append((kind, item_id))
-            provider.get().reorder_library(folder_id, ordered)
+            with jobs._lock:
+                provider.get().reorder_library(folder_id, ordered, record_undo=True,
+                                              previous_order=payload.previous_items())
         except (TypeError, ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return list_library(background, folder_id=folder_id, sort="manual", order="asc")
@@ -2385,7 +2422,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         if payload.folder_id is not None:
             folder_or_404(payload.folder_id)
         try:
-            provider.get().set_video_folder(video_id, payload.folder_id)
+            with jobs._lock:
+                provider.get().set_video_folder(video_id, payload.folder_id, record_undo=True,
+                                               previous_order=payload.previous_items())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return video_payload(_video_or_404(provider.get(), video_id))

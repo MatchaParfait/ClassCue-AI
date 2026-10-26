@@ -114,6 +114,21 @@ it("keeps the previous emphasis on save failure and allows retry", async () => {
   expect(container.querySelector(".question-emphasis-control [role=alert]")).toBeNull();
 });
 
+it("undoes a manual override back to the automatically emphasized state", async () => {
+  await act(async () => toggle().click());
+  await vi.waitFor(async () => {
+    await flush();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  });
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true })));
+  await vi.waitFor(async () => {
+    await flush();
+    expect(api.updateQuestionEmphasis).toHaveBeenLastCalledWith(1, null);
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  });
+  expect(container.querySelector(".undo-banner")).toBeNull();
+});
+
 it("removes an emphasized example and restores it through undo", async () => {
   await act(async () => container.querySelector<HTMLButtonElement>(".danger-action")!.click());
   await vi.waitFor(async () => {

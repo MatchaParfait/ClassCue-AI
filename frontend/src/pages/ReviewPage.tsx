@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, CheckCircle2, LoaderCircle, X } from "lucide-react";
-import { useShortcuts, matchesShortcut } from "../shortcuts";
+import { useShortcuts, matchesShortcut, isShortcutInput, isUndoShortcut } from "../shortcuts";
 import { getApiBaseUrl, getAnalysisRuns } from "../api/client";
 import { TopBar } from "../components/TopBar";
 import { useReviewTabs } from "../components/ReviewTabs";
@@ -13,9 +13,24 @@ import { VideoPanel } from "../components/VideoPanel";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { captureVideoFrame } from "../utils/captureVideoFrame";
 import { useCreateManualQuestionMutation, useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useQuestionEmphasisMutation, useRenameManualQuestionMutation, useStudyData } from "../hooks/useStudyData";
-import type { Marker, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
+import type { Marker, MarkerImportance, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, useMotionTransition, useReducedMotion } from "../components/Motion";
+
+type ReviewChange =
+  | { kind: "time"; previous: number | null; next: number | null }
+  | { kind: "title"; previous: string; next: string }
+  | { kind: "importance"; previous: MarkerImportance; next: MarkerImportance }
+  | { kind: "emphasis"; previous: boolean | null; next: boolean | null };
+type ReviewUndoAction = { sequence: number; marker: Marker } & (
+  | { kind: "create"; previous: ReviewStatus }
+  | { kind: "remove"; previous: ReviewStatus }
+  | ReviewChange
+);
+const undoLabels: Record<ReviewUndoAction["kind"], string> = {
+  create: "已新增手动题目", remove: "重点已移除", time: "已调整跳转时间",
+  title: "已修改题目名称", importance: "已修改重要程度", emphasis: "已修改题目强调",
+};
 
 export function ReviewPage({ demo = false }: { demo?: boolean }) {
   const params = useParams();
@@ -55,9 +70,16 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const lastChosenMarkerId = useRef<number | null>(null);
   const jumpTimeSavingRef = useRef(false);
   const creatingQuestionRef = useRef(false);
+  const changingStatusRef = useRef(false);
+  const undoingRef = useRef(false);
+  const nextUndoSequence = useRef(0);
+  const pendingEditsRef = useRef(0);
+  const [pendingEdits, setPendingEdits] = useState(0);
+  const undoHistoryRef = useRef<ReviewUndoAction[]>([]);
+  const [undoHistory, setUndoHistory] = useState<ReviewUndoAction[]>([]);
+  const [undoing, setUndoing] = useState(false);
   const [createdMarkerId, setCreatedMarkerId] = useState<number | null>(null);
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
-  const [lastRemoved, setLastRemoved] = useState<{ marker: Marker; previous: ReviewStatus } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [bilibiliMarkerId, setBilibiliMarkerId] = useState<number | null>(null);
   const reviewBackground = useRef<HTMLDivElement>(null);
@@ -98,23 +120,102 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     videoRef.current.play().catch(() => undefined);
   }, []);
 
-  const updateStatus = (marker: Marker, nextStatus: ReviewStatus) => {
-    if (nextStatus === "excluded") {
-      setLastRemoved({ marker, previous: marker.review_status });
-      setNotice(`已移除“${marker.title}”`);
-    } else {
-      setNotice("已恢复重点");
-    }
-    setSelectedMarkerId(marker.id);
-    markerMutation.mutate({ marker, status: nextStatus });
-  };
+  const replaceUndoHistory = useCallback((history: ReviewUndoAction[]) => {
+    undoHistoryRef.current = [...history].sort((a, b) => a.sequence - b.sequence).slice(-50);
+    setUndoHistory(undoHistoryRef.current);
+  }, []);
 
-  const undoRemove = () => {
-    if (!lastRemoved) return;
-    markerMutation.mutate({ marker: lastRemoved.marker, status: lastRemoved.previous });
-    setNotice("已撤销移除");
-    setLastRemoved(null);
-  };
+  const updateStatus = useCallback(async (marker: Marker, nextStatus: ReviewStatus) => {
+    if (changingStatusRef.current || creatingQuestionRef.current || undoingRef.current
+      || pendingEditsRef.current || marker.review_status === nextStatus) return;
+    const sequence = ++nextUndoSequence.current;
+    changingStatusRef.current = true;
+    setJumpTimeError(null);
+    try {
+      await markerMutation.mutateAsync({ marker, status: nextStatus });
+      if (nextStatus === "excluded") {
+        replaceUndoHistory([...undoHistoryRef.current, { sequence, kind: "remove", marker, previous: marker.review_status }]);
+        setNotice(`已移除“${marker.title}”`);
+      } else {
+        // Explicit restoration already reverses that marker's removal.
+        replaceUndoHistory(undoHistoryRef.current.filter(action => action.kind !== "remove" || action.marker.id !== marker.id));
+        setNotice("已恢复重点");
+      }
+      setSelectedMarkerId(marker.id);
+    } catch (failure) {
+      setJumpTimeError(`状态保存失败：${errorMessage(failure)}`);
+    } finally {
+      changingStatusRef.current = false;
+    }
+  }, [markerMutation.mutateAsync, replaceUndoHistory]);
+
+  const applyChange = useCallback(async (marker: Marker, change: ReviewChange, undo = false) => {
+    switch (change.kind) {
+      case "time":
+        await jumpTimeMutation.mutateAsync({ marker, userStartMs: undo ? change.previous : change.next });
+        break;
+      case "title":
+        await renameQuestionMutation.mutateAsync({ marker, title: undo ? change.previous : change.next });
+        break;
+      case "importance":
+        await importanceMutation.mutateAsync({ marker, importance: undo ? change.previous : change.next });
+        break;
+      case "emphasis":
+        await questionEmphasisMutation.mutateAsync({ marker, emphasized: undo ? change.previous : change.next });
+        break;
+    }
+  }, [jumpTimeMutation.mutateAsync, renameQuestionMutation.mutateAsync,
+    importanceMutation.mutateAsync, questionEmphasisMutation.mutateAsync]);
+
+  const saveChange = useCallback(async (marker: Marker, change: ReviewChange) => {
+    if (undoingRef.current || creatingQuestionRef.current || changingStatusRef.current) throw new Error("正在保存，请稍后重试");
+    if (change.previous === change.next) return;
+    const sequence = ++nextUndoSequence.current;
+    pendingEditsRef.current += 1;
+    setPendingEdits(pendingEditsRef.current);
+    setJumpTimeError(null);
+    try {
+      await applyChange(marker, change);
+      replaceUndoHistory([...undoHistoryRef.current, { sequence, marker, ...change }]);
+    } finally {
+      pendingEditsRef.current -= 1;
+      setPendingEdits(pendingEditsRef.current);
+    }
+  }, [applyChange, replaceUndoHistory]);
+
+  const undoReviewAction = useCallback(async () => {
+    const action = undoHistoryRef.current.at(-1);
+    if (!action || undoingRef.current || changingStatusRef.current || creatingQuestionRef.current
+      || pendingEditsRef.current || jumpTimeSavingRef.current) return;
+    undoingRef.current = true;
+    setUndoing(true);
+    setJumpTimeError(null);
+    const marker = allMarkers.find(item => item.id === action.marker.id) ?? action.marker;
+    try {
+      if (action.kind === "create" || action.kind === "remove") {
+        await markerMutation.mutateAsync({ marker, status: action.kind === "create" ? "excluded" : action.previous });
+      } else {
+        await applyChange(marker, action, true);
+      }
+      replaceUndoHistory(undoHistoryRef.current.slice(0, -1));
+      if (action.kind === "create") {
+        setCreatedMarkerId(current => current === marker.id ? null : current);
+        setSelectedMarkerId(current => current === marker.id ? null : current);
+        if (lastChosenMarkerId.current === marker.id) lastChosenMarkerId.current = null;
+        setNotice("已撤销新增手动题目");
+      } else {
+        setMode(marker.analysis_mode);
+        setStatus("all");
+        setSelectedMarkerId(marker.id);
+        setNotice(action.kind === "remove" ? "已撤销移除" : `已撤销${undoLabels[action.kind].slice(1)}`);
+      }
+    } catch (failure) {
+      setJumpTimeError(`撤销失败：${errorMessage(failure)}，可再次撤销重试`);
+    } finally {
+      undoingRef.current = false;
+      setUndoing(false);
+    }
+  }, [allMarkers, markerMutation.mutateAsync, applyChange, replaceUndoHistory]);
 
   const moveToMarker = useCallback((direction: -1 | 1) => {
     const index = visibleMarkers.findIndex((marker) => marker.id === selectedMarkerId);
@@ -130,12 +231,12 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     jumpTimeSavingRef.current = true;
     setJumpTimeError(null);
     try {
-      await jumpTimeMutation.mutateAsync({ marker, userStartMs });
+      await saveChange(marker, { kind: "time", previous: marker.user_start_ms ?? null, next: userStartMs });
       setNotice(userStartMs === null ? "已恢复原始跳转时间" : `跳转时间已保存为 ${formatTime(userStartMs)}`);
     } finally {
       jumpTimeSavingRef.current = false;
     }
-  }, [jumpTimeMutation.mutateAsync]);
+  }, [saveChange]);
 
   useEffect(() => {
     if (createdMarkerId === null) return;
@@ -144,7 +245,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   }, [createdMarkerId]);
 
   const createQuestion = useCallback(async () => {
-    if (creatingQuestionRef.current) return;
+    if (creatingQuestionRef.current || changingStatusRef.current || undoingRef.current || pendingEditsRef.current) return;
+    const sequence = ++nextUndoSequence.current;
     const time = videoRef.current?.currentTime;
     if (time === undefined || !Number.isFinite(time) || time < 0) {
       setJumpTimeError("无法读取当前播放位置，请稍后重试");
@@ -156,6 +258,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     setJumpTimeError(null);
     try {
       const created = await createQuestionMutation.mutateAsync(timeMs);
+      replaceUndoHistory([...undoHistoryRef.current, { sequence, kind: "create", marker: created, previous: "excluded" }]);
       initializedModeVideo.current = videoId;
       setMode("question_extraction");
       setStatus("all");
@@ -168,20 +271,29 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     } finally {
       creatingQuestionRef.current = false;
     }
-  }, [createQuestionMutation.mutateAsync, duration, video?.duration_ms, videoId]);
+  }, [createQuestionMutation.mutateAsync, duration, video?.duration_ms, videoId, replaceUndoHistory]);
 
   useEffect(() => {
     if (isLoading || !video || (!mockMode && !canOpenReview(video.status, subtitles.length > 0))) return;
     const onMarkerShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing
         || settingsOpen || editingMarkerId !== null || jumpTimeMutation.isPending || jumpTimeSavingRef.current) return;
-      const action = (["previousMarker", "nextMarker", "captureTime", "createQuestion"] as const).find(id => matchesShortcut(event, shortcuts, id));
+      const action = isUndoShortcut(event) ? "undoReview"
+        : (["previousMarker", "nextMarker", "captureTime", "createQuestion"] as const).find(id => matchesShortcut(event, shortcuts, id));
       if (!action) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input[type="range"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) return;
       if (target?.closest('input:not([type="range"]), [data-shortcut-recorder], .video-caption, .review-tabs, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')
         || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, [role="dialog"][aria-modal="true"]')]
           .some((element) => !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
+      if (action === "undoReview") {
+        if (isShortcutInput(event.target) || !undoHistoryRef.current.length || undoingRef.current
+          || pendingEditsRef.current || changingStatusRef.current || creatingQuestionRef.current || renameQuestionMutation.isPending
+          || importanceMutation.isPending || questionEmphasisMutation.isPending) return;
+        event.preventDefault();
+        void undoReviewAction();
+        return;
+      }
       if (action === "createQuestion") {
         event.preventDefault();
         void createQuestion();
@@ -208,7 +320,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     document.addEventListener("keydown", onMarkerShortcut);
     return () => document.removeEventListener("keydown", onMarkerShortcut);
   }, [isLoading, video, mockMode, subtitles.length, settingsOpen, editingMarkerId, jumpTimeMutation.isPending,
-    moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, shortcuts]);
+    renameQuestionMutation.isPending, importanceMutation.isPending, questionEmphasisMutation.isPending,
+    moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, undoReviewAction, shortcuts]);
 
   if (isLoading) {
     return <div className="app-shell"><TopBar /><div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在准备复习工作台…</span></div></div>;
@@ -295,25 +408,27 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               excludedMarkers={excludedMarkers}
               selectedMarkerId={selectedMarkerId}
               createdMarkerId={createdMarkerId}
-              creatingQuestion={Boolean(createQuestionMutation.isPending)}
+              creatingQuestion={Boolean(createQuestionMutation.isPending || markerMutation.isPending || undoing || pendingEdits)}
               onCreateQuestion={() => void createQuestion()}
-              onRenameQuestion={async (marker, title) => { await renameQuestionMutation.mutateAsync({ marker, title }); }}
+              onRenameQuestion={(marker, title) => saveChange(marker, { kind: "title", previous: marker.title, next: title })}
               viewedMarkerIds={viewedMarkerIds}
               onSelectMarker={(marker) => seekTo(markerJumpTime(marker) / 1000, marker.id)}
               editingMarkerId={editingMarkerId}
-              timeSaving={jumpTimeMutation.isPending}
+              timeSaving={Boolean(jumpTimeMutation.isPending || markerMutation.isPending || createQuestionMutation.isPending || undoing)}
               onEditMarker={setEditingMarkerId}
               durationMs={(duration > 0 ? duration : video.duration_ms / 1000) * 1000}
               currentTimeMs={currentTime * 1000}
               getCurrentTimeMs={() => (videoRef.current?.currentTime ?? currentTime) * 1000}
               onSaveTime={saveJumpTime}
-              onChangeImportance={async (marker, importance) => { await importanceMutation.mutateAsync({ marker, importance }); }}
-              onChangeQuestionEmphasis={async (marker, emphasized) => { await questionEmphasisMutation.mutateAsync({ marker, emphasized }); }}
+              onChangeImportance={(marker, importance) => saveChange(marker, { kind: "importance", previous: marker.importance ?? "standard", next: importance })}
+              onChangeQuestionEmphasis={(marker, emphasized) => saveChange(marker, { kind: "emphasis", previous: marker.question_emphasis_override ?? null, next: emphasized })}
               onSearchBilibili={mockMode ? undefined : marker => setBilibiliMarkerId(marker.id)}
-              onChangeStatus={updateStatus}
-              onUndo={undoRemove}
-              canUndo={Boolean(lastRemoved)}
-              onRestoreExcluded={(marker) => updateStatus(marker, "active")}
+              onChangeStatus={(marker, nextStatus) => void updateStatus(marker, nextStatus)}
+              onUndo={() => void undoReviewAction()}
+              canUndo={undoHistory.length > 0}
+              undoLabel={undoLabels[undoHistory.at(-1)?.kind ?? "remove"]}
+              undoing={Boolean(undoing || pendingEdits || markerMutation.isPending || createQuestionMutation.isPending)}
+              onRestoreExcluded={(marker) => void updateStatus(marker, "active")}
               onPrevious={() => moveToMarker(-1)}
               onNext={() => moveToMarker(1)}
             />

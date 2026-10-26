@@ -36,7 +36,7 @@ async function main() {
           latest = { operation_id: "test", kind: "video", videos: 1, folders: 0 };
           return json(latest);
         }
-        if (request.method() === "POST" && p === "/api/recycle-bin/undo") {
+        if (request.method() === "POST" && p === "/api/library/undo") {
           deleted = false;
           const restored = latest; latest = null;
           return json(restored);
@@ -53,7 +53,7 @@ async function main() {
             ...videos.filter(video => (!deleted || video.id !== 1) && video.folder_id === (inFolder ? 7 : null))
               .map(video => ({ type: "video", video }))] });
       }
-      if (p === "/api/recycle-bin/latest") return json(latest);
+      if (p === "/api/library/undo/latest") return json(latest);
       if (p === "/api/batch/latest") return json(null);
       if (p === "/api/jobs/paused") return json([]);
       if (p.endsWith("/thumbnail")) return route.fulfill({ status: 404, body: "" });
@@ -108,7 +108,7 @@ async function main() {
     await page.locator("h1").click();
     await page.keyboard.press("Control+z");
     await trigger.waitFor();
-    assert.deepEqual(writes, ["DELETE /api/videos/1", "DELETE /api/videos/1", "POST /api/recycle-bin/undo"]);
+    assert.deepEqual(writes, ["DELETE /api/videos/1", "DELETE /api/videos/1", "POST /api/library/undo"]);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await trigger.click();
     await dialog.waitFor();

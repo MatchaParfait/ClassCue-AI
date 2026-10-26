@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { SHORTCUTS_KEY, defaultShortcuts, matchesShortcut, readShortcuts, saveShortcuts, validateShortcuts } from "./shortcuts";
+import { SHORTCUTS_KEY, defaultShortcuts, isUndoShortcut, matchesShortcut, readShortcuts, saveShortcuts, validateShortcuts } from "./shortcuts";
 beforeEach(() => {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
@@ -84,4 +84,28 @@ it("rejects reserved keys, duplicates and damaged preferences", () => {
 it("does not claim to save when storage refuses the write", () => {
   vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("storage denied"); });
   expect(() => saveShortcuts(defaultShortcuts())).toThrow("storage denied");
+});
+
+it("recognizes only plain Ctrl/Cmd+Z as the application undo command", () => {
+  expect(isUndoShortcut(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }))).toBe(true);
+  expect(isUndoShortcut(new KeyboardEvent("keydown", { key: "Z", metaKey: true }))).toBe(true);
+  for (const options of [
+    { ctrlKey: true, shiftKey: true }, { ctrlKey: true, altKey: true },
+    { ctrlKey: true, repeat: true }, { ctrlKey: true, isComposing: true }, {},
+  ]) expect(isUndoShortcut(new KeyboardEvent("keydown", { key: "z", ...options }))).toBe(false);
+  const handled = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, cancelable: true });
+  handled.preventDefault();
+  expect(isUndoShortcut(handled)).toBe(false);
+});
+
+it("reserves undo keys and preserves unrelated preferences while removing old conflicting bindings", () => {
+  const map = defaultShortcuts();
+  map.nextMarker = ["Ctrl+Z"];
+  expect(validateShortcuts(map)).toContain("撤销");
+  window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify({
+    nextMarker: ["Ctrl+Z", "J"], previousMarker: ["H"], search: ["Ctrl+Shift+Z"],
+  }));
+  expect(readShortcuts().nextMarker).toEqual(["J"]);
+  expect(readShortcuts().previousMarker).toEqual(["H"]);
+  expect(readShortcuts().search).toEqual([]);
 });

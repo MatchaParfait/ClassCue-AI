@@ -241,3 +241,276 @@ it("supports emphasis, removal, undo and timestamp jumps for a newly created poi
   expect(container.querySelector("video")!.currentTime).toBe(150.425);
   expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
 });
+
+it("Ctrl+Z undoes a new manual point without seeking, and the point remains recoverable", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  expect(container.querySelector(".undo-banner")?.textContent).toContain("已新增手动题目");
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(true);
+  await until(() => expect(row(4)).toBeNull());
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(4, "excluded");
+  expect(container.querySelector(".excluded-section")?.textContent).toContain("手动题目");
+  expect(container.querySelector("video")!.currentTime).toBe(150.425);
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  await act(async () => container.querySelector<HTMLButtonElement>(".excluded-row button")!.click());
+  await until(() => expect(row(4)).not.toBeNull());
+});
+
+it("undoes removals and multiple creations in reverse operation order", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  container.querySelector("video")!.currentTime = 155;
+  key("w");
+  await until(() => expect(row(5)).not.toBeNull());
+  await act(async () => row(1).querySelector<HTMLButtonElement>(".danger-action")!.click());
+  await until(() => expect(row(1)).toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(1)).not.toBeNull());
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(1, "active");
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(5)).toBeNull());
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(5, "excluded");
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(4, "excluded");
+  expect(row(2)).not.toBeNull();
+  expect(container.querySelector(".undo-banner")).toBeNull();
+});
+
+it("preserves undo history after a failed undo and retries the same action", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  vi.mocked(api.updateMarkerStatus).mockRejectedValueOnce(new Error("Undo unavailable"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("撤销失败"));
+  expect(row(4)).not.toBeNull();
+  expect(container.querySelector<HTMLButtonElement>(".undo-banner button")!.disabled).toBe(false);
+  await act(async () => container.querySelector<HTMLButtonElement>(".undo-banner button")!.click());
+  await until(() => expect(row(4)).toBeNull());
+  expect(vi.mocked(api.updateMarkerStatus).mock.calls).toEqual([[4, "excluded"], [4, "excluded"]]);
+});
+
+it("does not replace the last successful action with a failed creation or removal", async () => {
+  vi.mocked(api.createManualQuestion).mockRejectedValueOnce(new Error("Create unavailable"));
+  key("w");
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("Create unavailable"));
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(api.updateMarkerStatus).not.toHaveBeenCalled();
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  vi.mocked(api.updateMarkerStatus).mockRejectedValueOnce(new Error("Remove unavailable"));
+  await act(async () => row(1).querySelector<HTMLButtonElement>(".danger-action")!.click());
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("Remove unavailable"));
+  expect(row(1)).not.toBeNull();
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(4, "excluded");
+});
+
+it("does not double-submit undo or allow a new creation while undo is pending", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  key("w");
+  await until(() => expect(row(5)).not.toBeNull());
+  let finish!: (marker: Marker) => void;
+  vi.mocked(api.updateMarkerStatus).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  key("z", { ctrlKey: true });
+  key("z", { ctrlKey: true });
+  key("z", { ctrlKey: true, repeat: true });
+  key("w");
+  await until(() => expect(api.updateMarkerStatus).toHaveBeenCalledTimes(1));
+  expect(api.createManualQuestion).toHaveBeenCalledTimes(2);
+  expect(container.querySelector<HTMLButtonElement>(".undo-banner button")!.disabled).toBe(true);
+  await act(async () => finish({ ...markers.find(marker => marker.id === 5)!, review_status: "excluded" }));
+  await until(() => expect(row(5)).toBeNull());
+  expect(row(4)).not.toBeNull();
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+});
+
+it("does not undo an older action while a new manual point is still saving", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  let finish!: (marker: Marker) => void;
+  const create = vi.mocked(api.createManualQuestion).getMockImplementation()!;
+  vi.mocked(api.createManualQuestion).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  key("w");
+  await until(() => expect(api.createManualQuestion).toHaveBeenCalledTimes(2));
+  key("z", { ctrlKey: true });
+  expect(api.updateMarkerStatus).not.toHaveBeenCalled();
+  await act(async () => finish(await create(1, 150_425)));
+  await until(() => expect(row(5)).not.toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(5)).toBeNull());
+  expect(row(4)).not.toBeNull();
+});
+
+it("preserves native text undo and ignores redo, extra modifiers, held keys, and modals", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  for (const options of [
+    { ctrlKey: true, shiftKey: true }, { ctrlKey: true, altKey: true },
+    { ctrlKey: true, repeat: true }, { ctrlKey: true, isComposing: true },
+  ]) expect(key("z", options).defaultPrevented).toBe(false);
+  act(() => row(4).querySelector<HTMLButtonElement>(".marker-main")!.click());
+  const input = row(4).querySelector<HTMLInputElement>("input")!;
+  expect(key("z", { ctrlKey: true }, input).defaultPrevented).toBe(false);
+  key("Escape", {}, input);
+  await until(() => expect(row(4).querySelector("input")).toBeNull());
+  const editable = document.createElement("div");
+  editable.setAttribute("contenteditable", "true");
+  editable.innerHTML = "<span>Editable text</span>";
+  container.append(editable);
+  expect(key("z", { ctrlKey: true }, editable.firstChild!).defaultPrevented).toBe(false);
+  editable.remove();
+  const dialog = document.createElement("div");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  container.append(dialog);
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  dialog.remove();
+  expect(api.updateMarkerStatus).not.toHaveBeenCalled();
+  expect(key("z", { metaKey: true }).defaultPrevented).toBe(true);
+  await until(() => expect(row(4)).toBeNull());
+});
+
+it("does not carry the current video's undo history to another review session", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  act(() => {
+    window.history.pushState({}, "", "/review/2");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await until(() => expect(api.getVideo).toHaveBeenCalledWith(2));
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(api.updateMarkerStatus).not.toHaveBeenCalled();
+});
+
+async function rename(id: number, title: string) {
+  act(() => row(id).querySelector<HTMLButtonElement>(".marker-main")!.click());
+  const input = row(id).querySelector<HTMLInputElement>('input[aria-label="题目名称"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, title);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => row(id).querySelector<HTMLButtonElement>('button[type=submit]')!.click());
+  await until(() => expect(row(id).querySelector("input")).toBeNull());
+}
+
+it("undoes time, importance, emphasis, title and creation together in reverse order", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  await rename(4, "Named question");
+  await act(async () => row(4).querySelector<HTMLButtonElement>(".question-emphasis-toggle")!.click());
+  await until(() => expect(row(4).classList.contains("is-question-emphasized")).toBe(true));
+  await act(async () => row(4).querySelector<HTMLButtonElement>(".importance-critical.marker-importance-swatch")!.click());
+  await until(() => expect(row(4).querySelector(".marker-importance-label")?.textContent).toBe("很重要"));
+  container.querySelector("video")!.currentTime = 180;
+  key("s");
+  await until(() => expect(row(4).querySelector(".marker-time-jump")?.textContent).toBe("3:00"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(api.updateMarkerJumpTime).toHaveBeenLastCalledWith(4, null));
+  await until(() => expect(row(4).querySelector(".marker-time-adjusted")).toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-importance-label")?.textContent).toBe("标准"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(api.updateQuestionEmphasis).toHaveBeenLastCalledWith(4, null));
+  await until(() => expect(row(4).classList.contains("is-question-emphasized")).toBe(false));
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-main strong")?.textContent).toBe("手动题目 · 02:30"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(container.querySelector("video")!.currentTime).toBe(180);
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+});
+
+it("restores a previous adjusted time when undoing a reset to the original position", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  container.querySelector("video")!.currentTime = 180;
+  key("s");
+  await until(() => expect(row(4).querySelector(".marker-time-adjusted")).not.toBeNull());
+  act(() => row(4).querySelector<HTMLButtonElement>(".marker-edit-time")!.click());
+  await act(async () => row(4).querySelector<HTMLButtonElement>(".marker-reset-time")!.click());
+  await until(() => expect(row(4).querySelector(".marker-time-editor")).toBeNull());
+  expect(row(4).querySelector(".marker-time-adjusted")).toBeNull();
+  key("z", { ctrlKey: true });
+  await until(() => expect(api.updateMarkerJumpTime).toHaveBeenLastCalledWith(4, 180_000));
+  await until(() => expect(row(4).querySelector(".marker-time-jump")?.textContent).toBe("3:00"));
+});
+
+it("preserves manual false emphasis rather than reverting to automatic judgment", async () => {
+  await act(async () => root.render(null));
+  markers[0].question_emphasis_override = false;
+  await act(async () => root.render(<App />));
+  await until(() => expect(container.querySelector(".mode-switcher")).not.toBeNull());
+  switchQuestions();
+  await until(() => expect(row(1)).not.toBeNull());
+  await act(async () => row(1).querySelector<HTMLButtonElement>(".question-emphasis-toggle")!.click());
+  await until(() => expect(row(1).classList.contains("is-question-emphasized")).toBe(true));
+  key("z", { ctrlKey: true });
+  await until(() => expect(api.updateQuestionEmphasis).toHaveBeenLastCalledWith(1, false));
+  await until(() => expect(container.querySelector(".undo-banner")).toBeNull());
+});
+
+it("orders concurrent field edits by the user's action order and waits for all saves", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  let finish!: (marker: Marker) => void;
+  vi.mocked(api.updateMarkerImportance).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => row(4).querySelector<HTMLButtonElement>(".importance-critical.marker-importance-swatch")!.click());
+  await until(() => expect(api.updateMarkerImportance).toHaveBeenCalledTimes(1));
+  container.querySelector("video")!.currentTime = 180;
+  key("s");
+  await until(() => expect(row(4).querySelector(".marker-time-jump")?.textContent).toBe("3:00"));
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(container.querySelector<HTMLButtonElement>(".undo-banner button")!.disabled).toBe(true);
+  await act(async () => finish({ ...markers.find(marker => marker.id === 4)!, importance: "critical" }));
+  await until(() => expect(container.querySelector<HTMLButtonElement>(".undo-banner button")!.disabled).toBe(false));
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-time-adjusted")).toBeNull());
+  expect(row(4).querySelector(".marker-importance-label")?.textContent).toBe("很重要");
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-importance-label")?.textContent).toBe("标准"));
+});
+
+it("keeps edit history retryable and serializes repeated undo for a title change", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  await rename(4, "New name");
+  vi.mocked(api.renameManualQuestion).mockRejectedValueOnce(new Error("Rename undo unavailable"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("撤销失败"));
+  expect(row(4).querySelector(".marker-main strong")?.textContent).toBe("New name");
+  let finish!: (marker: Marker) => void;
+  vi.mocked(api.renameManualQuestion).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  key("z", { ctrlKey: true });
+  key("z", { ctrlKey: true });
+  key("w");
+  await until(() => expect(api.renameManualQuestion).toHaveBeenCalledTimes(3));
+  expect(api.createManualQuestion).toHaveBeenCalledTimes(1);
+  expect(api.updateMarkerStatus).not.toHaveBeenCalled();
+  await act(async () => finish({ ...markers.find(marker => marker.id === 4)!, title: "手动题目 · 02:30" }));
+  await until(() => expect(row(4).querySelector(".marker-main strong")?.textContent).toBe("手动题目 · 02:30"));
+  expect(container.querySelector(".undo-banner")?.textContent).toContain("已新增手动题目");
+});
+
+it("does not add unchanged or failed field saves to undo history", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  container.querySelector("video")!.currentTime = 180;
+  key("s");
+  await until(() => expect(row(4).querySelector(".marker-time-jump")?.textContent).toBe("3:00"));
+  key("s");
+  await flush();
+  expect(api.updateMarkerJumpTime).toHaveBeenCalledTimes(1);
+  vi.mocked(api.updateMarkerImportance).mockRejectedValueOnce(new Error("Importance unavailable"));
+  await act(async () => row(4).querySelector<HTMLButtonElement>(".importance-critical.marker-importance-swatch")!.click());
+  await until(() => expect(row(4).querySelector("[role=alert]")?.textContent).toContain("保存失败"));
+  key("z", { ctrlKey: true });
+  await until(() => expect(api.updateMarkerJumpTime).toHaveBeenLastCalledWith(4, null));
+  expect(container.querySelector(".undo-banner")?.textContent).toContain("已新增手动题目");
+});

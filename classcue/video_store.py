@@ -217,10 +217,21 @@ class VideoStore:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     undone_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS library_undo_history (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operation_id TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    undone_at TEXT
+                );
                 """
             )
             # Keep existing-schema upgrades in one transaction after table bootstrap.
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT OR IGNORE INTO library_undo_history(operation_id, kind, undone_at) "
+                "SELECT operation_id, kind, undone_at FROM recycle_bin ORDER BY created_at, rowid"
+            )
             self._migrate_video_metadata(connection)
             slide_columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_slides)")}
             for column, definition in (
@@ -797,7 +808,10 @@ class VideoStore:
             if updated.rowcount == 0:
                 raise ValueError("文件夹不存在")
 
-    def set_folder_parent(self, folder_id: int, parent_id: int | None) -> None:
+    def set_folder_parent(
+        self, folder_id: int, parent_id: int | None, *, record_undo: bool = False,
+        previous_order: list[tuple[str, int]] | None = None,
+    ) -> None:
         with self.connect() as connection:
             # Serialize ancestry validation with the move to prevent concurrent cycles.
             connection.execute("BEGIN IMMEDIATE")
@@ -820,6 +834,8 @@ class VideoStore:
                 ancestor = row["parent_id"]
             if folder["parent_id"] == parent_id:
                 return
+            before = self._library_positions(connection, [("folder", folder_id)]) if record_undo else []
+            visible_order = self._library_visible_order(connection, folder["parent_id"], previous_order) if record_undo else []
             next_order = connection.execute(
                 "SELECT COALESCE(MAX(library_order), -1) + 1 FROM ("
                 "SELECT library_order FROM video_folders WHERE parent_id IS ? "
@@ -831,6 +847,8 @@ class VideoStore:
                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (parent_id, next_order, folder_id),
             )
+            if record_undo:
+                self._record_library_layout(connection, "move_folder", before, visible_order)
 
     def delete_folder(self, folder_id: int) -> None:
         with self.connect() as connection:
@@ -1080,6 +1098,10 @@ class VideoStore:
                     "INSERT INTO recycle_bin(operation_id, kind, payload_json) VALUES (?, ?, ?)",
                     (operation_id, kind, json.dumps(payload, ensure_ascii=False)),
                 )
+                connection.execute(
+                    "INSERT INTO library_undo_history(operation_id, kind) VALUES (?, ?)",
+                    (operation_id, kind),
+                )
                 if video_ids:
                     connection.execute(
                         f"DELETE FROM videos WHERE id IN ({','.join('?' for _ in video_ids)})",
@@ -1180,6 +1202,7 @@ class VideoStore:
 
     def undo_latest_recycle(
         self, trash_root: str | Path, slide_root: str | Path | None = None,
+        *, expected_operation_id: str | None = None,
     ) -> dict[str, object]:
         moved_back: list[dict[str, object]] = []
         with self.connect() as connection:
@@ -1188,6 +1211,8 @@ class VideoStore:
             ).fetchone()
             if row is None:
                 raise ValueError("没有可撤销的删除操作")
+            if expected_operation_id is not None and row["operation_id"] != expected_operation_id:
+                raise ValueError("撤销记录已更新，请刷新后重试")
             payload = json.loads(row["payload_json"])
             files = payload.get("files", [])
             # Legacy payloads predate per-file byte identities; their trash
@@ -1288,6 +1313,10 @@ class VideoStore:
                     "UPDATE recycle_bin SET undone_at = CURRENT_TIMESTAMP WHERE operation_id = ?",
                     (row["operation_id"],),
                 )
+                connection.execute(
+                    "UPDATE library_undo_history SET undone_at = CURRENT_TIMESTAMP WHERE operation_id = ?",
+                    (row["operation_id"],),
+                )
                 # Commit failures must use the same file rollback as failed inserts.
                 connection.commit()
             except Exception as error:
@@ -1335,8 +1364,146 @@ class VideoStore:
             "created_at": row["created_at"],
         }
 
-    def set_video_folder(self, video_id: int, folder_id: int | None) -> None:
+    @staticmethod
+    def _library_positions(
+        connection: sqlite3.Connection, keys: list[tuple[str, int]],
+    ) -> list[dict[str, object]]:
+        positions = []
+        for kind, item_id in keys:
+            table, parent = ("video_folders", "parent_id") if kind == "folder" else ("videos", "library_folder_id")
+            row = connection.execute(
+                f"SELECT id, {parent} AS parent_id, library_order FROM {table} WHERE id = ?", (item_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("要撤销的项目已不存在，请先恢复被删除的项目")
+            positions.append({"type": kind, **dict(row)})
+        return positions
+
+    def _record_library_layout(
+        self, connection: sqlite3.Connection, kind: str, before: list[dict[str, object]],
+        visible_order: list[dict[str, object]],
+    ) -> None:
+        after = self._library_positions(connection, [(item["type"], item["id"]) for item in before])
+        if before == after and (not before or visible_order == self._library_directory_order(connection, before[0]["parent_id"])):
+            return
+        connection.execute(
+            "INSERT INTO library_undo_history(operation_id, kind, payload_json) VALUES (?, ?, ?)",
+            (uuid.uuid4().hex, kind, json.dumps({"before": before, "after": after, "visible_order": visible_order})),
+        )
+
+    @staticmethod
+    def _library_directory_order(connection: sqlite3.Connection, parent_id: int | None) -> list[dict[str, object]]:
+        return [{"type": row["kind"], "id": row["id"]} for row in connection.execute(
+            "SELECT 'folder' AS kind, id, library_order FROM video_folders WHERE parent_id IS ? "
+            "UNION ALL SELECT 'video' AS kind, id, library_order FROM videos WHERE library_folder_id IS ? "
+            "ORDER BY library_order, id",
+            (parent_id, parent_id),
+        )]
+
+    def _library_visible_order(
+        self, connection: sqlite3.Connection, parent_id: int | None, previous: list[tuple[str, int]] | None,
+    ) -> list[dict[str, object]]:
+        current = self._library_directory_order(connection, parent_id)
+        if previous is None:
+            return current
+        known = {(item["type"], item["id"]) for item in current}
+        provided = set(previous)
+        if len(provided) != len(previous) or provided - known:
+            raise ValueError("原排序包含重复或不属于当前目录的项目，请刷新后重试")
+        return [{"type": kind, "id": item_id} for kind, item_id in previous] + [
+            item for item in current if (item["type"], item["id"]) not in provided
+        ]
+
+    def latest_library_undo(self) -> dict[str, object] | None:
         with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM library_undo_history WHERE undone_at IS NULL ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            result = {"operation_id": row["operation_id"], "kind": row["kind"]}
+            if row["kind"] in {"video", "folder"}:
+                recycled = connection.execute(
+                    "SELECT payload_json FROM recycle_bin WHERE operation_id = ?", (row["operation_id"],),
+                ).fetchone()
+                payload = json.loads(recycled["payload_json"])
+                result.update(videos=len(payload.get("videos", [])), folders=len(payload.get("folders", [])))
+            return result
+
+    def undo_latest_library_edit(
+        self, trash_root: str | Path, slide_root: str | Path | None = None,
+    ) -> dict[str, object]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM library_undo_history WHERE undone_at IS NULL ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                raise ValueError("没有可撤销的视频库操作")
+            if row["kind"] not in {"video", "folder"}:
+                payload = json.loads(row["payload_json"])
+                before, after = payload["before"], payload["after"]
+                keys = [(item["type"], item["id"]) for item in before]
+                if self._library_positions(connection, keys) != after:
+                    raise ValueError("项目位置已被其他操作修改，无法撤销；原记录已保留")
+                parents = {item["id"]: item["parent_id"] for item in before if item["type"] == "folder"}
+                for item in before:
+                    ancestor = item["parent_id"]
+                    visited = {item["id"]} if item["type"] == "folder" else set()
+                    while ancestor is not None:
+                        if ancestor in visited:
+                            raise ValueError("撤销会形成文件夹循环，原记录已保留")
+                        visited.add(ancestor)
+                        folder = connection.execute(
+                            "SELECT parent_id FROM video_folders WHERE id = ?", (ancestor,),
+                        ).fetchone()
+                        if folder is None:
+                            raise ValueError("原文件夹已不存在，请先恢复文件夹后重试")
+                        ancestor = parents.get(ancestor, folder["parent_id"])
+                for item in before:
+                    table, parent = ("video_folders", "parent_id") if item["type"] == "folder" else ("videos", "library_folder_id")
+                    connection.execute(
+                        f"UPDATE {table} SET {parent} = ?, library_order = ? WHERE id = ?",
+                        (item["parent_id"], item["library_order"], item["id"]),
+                    )
+                connection.execute(
+                    "UPDATE library_undo_history SET undone_at = CURRENT_TIMESTAMP WHERE operation_id = ?",
+                    (row["operation_id"],),
+                )
+                parent_id = before[0]["parent_id"]
+                current_order = self._library_directory_order(connection, parent_id)
+                known = {(item["type"], item["id"]) for item in current_order}
+                visible = [item for item in payload.get("visible_order", current_order)
+                           if (item["type"], item["id"]) in known]
+                visible_keys = {(item["type"], item["id"]) for item in visible}
+                visible.extend(item for item in current_order if (item["type"], item["id"]) not in visible_keys)
+                return {"operation_id": row["operation_id"], "kind": row["kind"], "parent_id": parent_id,
+                        "ordered_items": visible}
+            recycled = connection.execute(
+                "SELECT payload_json FROM recycle_bin WHERE operation_id = ?", (row["operation_id"],),
+            ).fetchone()
+            payload = json.loads(recycled["payload_json"])
+            folders = payload.get("folders", [])
+            folder_ids = {item["id"] for item in folders}
+            parent_id = next((item["parent_id"] for item in folders if item["parent_id"] not in folder_ids), None)
+            if not folders:
+                parent_id = payload["videos"][0]["library_folder_id"]
+        # File restoration retains the recycle bin's compensation and retry handling.
+        result = self.undo_latest_recycle(trash_root, slide_root, expected_operation_id=row["operation_id"])
+        with self.connect() as connection:
+            return {**result, "parent_id": parent_id,
+                    "ordered_items": self._library_directory_order(connection, parent_id)}
+
+    def set_video_folder(
+        self, video_id: int, folder_id: int | None, *, record_undo: bool = False,
+        previous_order: list[tuple[str, int]] | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            before = self._library_positions(connection, [("video", video_id)]) if record_undo else []
+            if record_undo and before[0]["parent_id"] == folder_id:
+                return
+            visible_order = self._library_visible_order(connection, before[0]["parent_id"], previous_order) if record_undo else []
             if folder_id is not None:
                 exists = connection.execute(
                     "SELECT id FROM video_folders WHERE id = ?", (int(folder_id),)
@@ -1359,6 +1526,8 @@ class VideoStore:
             )
             if updated.rowcount == 0:
                 raise ValueError("视频不存在")
+            if record_undo:
+                self._record_library_layout(connection, "move_video", before, visible_order)
 
     def list_folder_videos(self, folder_id: int | None, *, recursive: bool = False) -> list[sqlite3.Row]:
         with self.connect() as connection:
@@ -1430,9 +1599,12 @@ class VideoStore:
         self,
         parent_id: int | None,
         ordered_items: list[tuple[str, int]],
+        *, record_undo: bool = False,
+        previous_order: list[tuple[str, int]] | None = None,
     ) -> None:
         """Persist a mixed folder/video order from a drag-and-drop payload."""
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             expected_folders = {
                 int(row["id"])
                 for row in connection.execute(
@@ -1475,6 +1647,8 @@ class VideoStore:
             ]
             provided = {(("folder" if kind in {"folder", "folders"} else "video"), int(item_id)) for kind, item_id in ordered_items}
             sequence = list(ordered_items) + [item for item in existing if item not in provided]
+            before = self._library_positions(connection, existing) if record_undo else []
+            visible_order = self._library_visible_order(connection, parent_id, previous_order) if record_undo else []
             for position, (kind, item_id) in enumerate(sequence):
                 if kind in {"folder", "folders"}:
                     connection.execute(
@@ -1486,6 +1660,8 @@ class VideoStore:
                         "UPDATE videos SET library_order = ? WHERE id = ?",
                         (position, int(item_id)),
                     )
+            if record_undo:
+                self._record_library_layout(connection, "reorder", before, visible_order)
 
     def set_status(self, video_id: int, status: str) -> None:
         with self.connect() as connection:

@@ -4,8 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestRecycleBin, undoRecycleBin, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getLibraryStatus, type LibraryResponse } from "./api/client";
+import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestLibraryUndo, undoLibraryEdit, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getLibraryStatus, type LibraryResponse } from "./api/client";
 import type { Job, Video } from "./types";
+import type { LibraryUndoEntry } from "./api/client";
 import { saveDragTextHints } from "./libraryPreferences";
 
 vi.mock("./api/client", async (importOriginal) => ({
@@ -30,8 +31,8 @@ vi.mock("./api/client", async (importOriginal) => ({
   getPausedJobs: vi.fn(async () => []),
   deleteLibraryFolder: vi.fn(),
   deleteVideo: vi.fn(),
-  getLatestRecycleBin: vi.fn(async () => null),
-  undoRecycleBin: vi.fn(),
+  getLatestLibraryUndo: vi.fn(async () => null),
+  undoLibraryEdit: vi.fn(),
 }));
 
 vi.mock("./components/VideoPanel", () => ({ VideoPanel: () => <div /> }));
@@ -82,8 +83,8 @@ beforeEach(async () => {
   vi.mocked(moveLibraryFolder).mockReset();
   vi.mocked(deleteVideo).mockReset().mockResolvedValue({ operation_id: "trash-video", kind: "video", videos: 1, folders: 0 });
   vi.mocked(deleteLibraryFolder).mockReset().mockResolvedValue({ operation_id: "trash-folder", kind: "folder", videos: 0, folders: 1 });
-  vi.mocked(getLatestRecycleBin).mockReset().mockResolvedValue(null);
-  vi.mocked(undoRecycleBin).mockReset().mockResolvedValue({ operation_id: "undo", kind: "video", videos: 1, folders: 0 });
+  vi.mocked(getLatestLibraryUndo).mockReset().mockResolvedValue(null);
+  vi.mocked(undoLibraryEdit).mockReset().mockResolvedValue({ operation_id: "undo", kind: "video", videos: 1, folders: 0 });
   vi.mocked(renameVideoFile).mockReset().mockImplementation(async (id, filename) => {
     videos = videos.map((video) => video.id === id
       ? { ...video, filename, display_name: filename.replace(/\.[^.]+$/, ""), video_path: `library/${filename}` } : video);
@@ -165,6 +166,195 @@ function submitVideoFilename() {
   act(() => container.querySelector(".library-video-rename")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
 }
+
+describe("library layout undo", () => {
+  function installHistory() {
+    let order = ["folder-7", "video-1", "video-2"];
+    const history: Array<{ entry: LibraryUndoEntry; videos: Video[]; order: string[] }> = [];
+    const record = (kind: LibraryUndoEntry["kind"], parentId: number | null = null) => {
+      history.push({ entry: { operation_id: `operation-${history.length + 1}`, kind, parent_id: parentId },
+        videos: videos.map(video => ({ ...video })), order: [...order] });
+    };
+    const items = (parentId: number | null) => libraryResponse(parentId).items
+      .sort((a, b) => order.indexOf(`${a.type}-${a.folder?.id ?? a.video?.id}`)
+        - order.indexOf(`${b.type}-${b.folder?.id ?? b.video?.id}`));
+    vi.mocked(getLatestLibraryUndo).mockImplementation(async () => history.at(-1)?.entry ?? null);
+    vi.mocked(getLibrary).mockImplementation(async id => ({ ...libraryResponse(id ?? null), items: items(id ?? null) }));
+    vi.mocked(moveVideoToFolder).mockImplementation(async (id, folderId) => {
+      record("move_video", videos.find(video => video.id === id)!.folder_id ?? null);
+      videos = videos.map(video => video.id === id ? { ...video, folder_id: folderId } : video);
+      return { ...videos.find(video => video.id === id)! };
+    });
+    vi.mocked(reorderLibrary).mockImplementation(async (parentId, ordered) => {
+      record("reorder", parentId);
+      order = ordered.map(item => `${item.type}-${item.id}`);
+      return { ...libraryResponse(parentId), items: items(parentId) };
+    });
+    vi.mocked(deleteVideo).mockImplementation(async id => {
+      record("video", videos.find(video => video.id === id)!.folder_id ?? null);
+      videos = videos.filter(video => video.id !== id);
+      return { operation_id: history.at(-1)!.entry.operation_id, kind: "video", videos: 1, folders: 0 };
+    });
+    vi.mocked(undoLibraryEdit).mockImplementation(async () => {
+      const action = history.pop()!;
+      videos = action.videos;
+      order = action.order;
+      return { ...action.entry, videos: 1, folders: 0, ordered_items: items(action.entry.parent_id ?? null)
+        .map(item => ({ type: item.type, id: (item.folder?.id ?? item.video?.id)! })) };
+    });
+    return history;
+  }
+
+  function undoKey(target: EventTarget = document) {
+    const event = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => target.dispatchEvent(event));
+    return event;
+  }
+
+  async function until(check: () => void) {
+    await vi.waitFor(async () => { await flushUpdates(); check(); });
+  }
+
+  function rootVideoOrder() {
+    return [...container.querySelectorAll<HTMLElement>(".library-inner .video-card")].map(item => item.dataset.libraryKey);
+  }
+
+  async function moveFirstVideo() {
+    beginVideoDrag();
+    await act(async () => dragEvent("drop", card("folder-7")));
+    await until(() => expect(container.querySelector('.library-inner [data-library-key="video-1"]')).toBeNull());
+  }
+
+  it("undoes deletion, movement and sorting in the order they happened", async () => {
+    const history = installHistory();
+    beginVideoDrag();
+    await act(async () => dragEvent("drop", card("video-2"), 390));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2", "video-1"]));
+    await moveFirstVideo();
+    act(() => card("video-2").querySelector<HTMLButtonElement>(".library-card-delete")!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".recycle-confirm-dialog button")]
+      .find(button => button.textContent === "移入回收站")!.click());
+    await until(() => expect(rootVideoOrder()).toEqual([]));
+    expect(undoKey().defaultPrevented).toBe(true);
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2", "video-1"]));
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+    await until(() => expect(history).toHaveLength(0));
+    await until(() => expect(container.querySelector(".toast-action")).toBeNull());
+    expect(undoKey().defaultPrevented).toBe(false);
+    expect(undoLibraryEdit).toHaveBeenCalledTimes(3);
+  });
+
+  it("loads persisted undo availability after the app is reopened", async () => {
+    installHistory();
+    await moveFirstVideo();
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App />));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    await flushUpdates();
+    expect(undoKey().defaultPrevented).toBe(true);
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+
+  it("disables the persistent undo button until history is loaded after reopening", async () => {
+    const history = installHistory();
+    await moveFirstVideo();
+    let finish!: (entry: LibraryUndoEntry) => void;
+    vi.mocked(getLatestLibraryUndo).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App />));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    expect(container.querySelector<HTMLButtonElement>(".library-undo")!.disabled).toBe(true);
+    expect(undoKey().defaultPrevented).toBe(false);
+    expect(undoLibraryEdit).not.toHaveBeenCalled();
+    await act(async () => finish(history.at(-1)!.entry));
+    await until(() => expect(container.querySelector<HTMLButtonElement>(".library-undo")!.disabled).toBe(false));
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+
+  it("keeps a failed undo available and retries it through the error action", async () => {
+    const history = installHistory();
+    await moveFirstVideo();
+    vi.mocked(undoLibraryEdit).mockRejectedValueOnce(new Error("Folder unavailable"));
+    undoKey();
+    await until(() => expect(container.querySelector(".library-operation-error")?.textContent).toContain("Folder unavailable"));
+    expect(history).toHaveLength(1);
+    await act(async () => container.querySelector<HTMLButtonElement>(".library-operation-error button")!.click());
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+    expect(undoLibraryEdit).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the restored position while directory and video refreshes finish at different times", async () => {
+    installHistory();
+    await moveFirstVideo();
+    const readVideos = vi.mocked(getVideos).getMockImplementation()!;
+    let finish!: (value: Video[]) => void;
+    vi.mocked(getVideos).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    undoKey();
+    await until(() => expect(undoLibraryEdit).toHaveBeenCalledTimes(1));
+    await until(() => expect(card("video-2").draggable).toBe(false));
+    await act(async () => finish(await readVideos()));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+    await until(() => expect(container.querySelector(".toast-action")).toBeNull());
+    await flushUpdates();
+    expect(rootVideoOrder()).toEqual(["video-1", "video-2"]);
+  });
+
+  it("prevents repeated undo and new drags while restoration is pending", async () => {
+    installHistory();
+    await moveFirstVideo();
+    const restore = vi.mocked(undoLibraryEdit).getMockImplementation()!;
+    let finish!: (result: LibraryUndoEntry) => void;
+    vi.mocked(undoLibraryEdit).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    undoKey();
+    undoKey();
+    expect(dragEvent("dragstart", card("video-2")).defaultPrevented).toBe(true);
+    expect(undoLibraryEdit).toHaveBeenCalledTimes(1);
+    expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
+    await act(async () => finish(await restore()));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+
+  it("leaves native text undo and modal controls alone", async () => {
+    installHistory();
+    await moveFirstVideo();
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    editable.innerHTML = "<span>Draft</span>";
+    container.append(editable);
+    expect(undoKey(editable.firstChild!).defaultPrevented).toBe(false);
+    editable.remove();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    container.append(dialog);
+    expect(undoKey().defaultPrevented).toBe(false);
+    dialog.remove();
+    expect(undoLibraryEdit).not.toHaveBeenCalled();
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+
+  it("rolls back a failed sort without adding an undo record", async () => {
+    const history = installHistory();
+    beginVideoDrag();
+    await act(async () => dragEvent("drop", card("video-2"), 390));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2", "video-1"]));
+    vi.mocked(reorderLibrary).mockRejectedValueOnce(new Error("Order unavailable"));
+    dragEvent("dragstart", card("video-2"));
+    await act(async () => dragEvent("drop", card("video-1"), 390));
+    await until(() => expect(container.querySelector(".library-operation-error")?.textContent).toContain("Order unavailable"));
+    expect(rootVideoOrder()).toEqual(["video-2", "video-1"]);
+    expect(history).toHaveLength(1);
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+});
 
 describe("discoverable header entries", () => {
   it("keeps both entry names visible even without a task and opens the task dialog", async () => {
@@ -280,8 +470,14 @@ describe("in-app recycle confirmation", () => {
     await act(async () => finish());
     expect(dialog()).toBeNull();
     expect(container.querySelector(".toast")?.textContent).toContain("撤销");
+    for (const options of [{ shiftKey: true }, { altKey: true }, { repeat: true }]) {
+      const event = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true, ...options });
+      act(() => document.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(undoLibraryEdit).not.toHaveBeenCalled();
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true })));
-    expect(undoRecycleBin).toHaveBeenCalledTimes(1);
+    expect(undoLibraryEdit).toHaveBeenCalledTimes(1);
   });
 
   it("keeps API errors beside the confirmation and retries without a second prompt", async () => {
@@ -698,7 +894,7 @@ describe("library drag and drop", () => {
     });
     beginVideoDrag();
     await act(async () => { dragEvent("drop", card("folder-7"), 16); });
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7, expect.any(Array));
     expect(container.querySelector(".toast")?.textContent).toContain("视频已移入文件夹");
   });
 
@@ -715,7 +911,7 @@ describe("library drag and drop", () => {
       expect(container.querySelector('[data-library-key="video-1"]')).toBeNull();
     });
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7, expect.any(Array));
     expect(reorderLibrary).not.toHaveBeenCalled();
     expect(container.querySelector(".toast")?.textContent).toContain("视频已移入文件夹");
     expect(JSON.parse(window.localStorage.getItem("classroom-video-library")!).assignments["1"]).toBe("folder-7");
@@ -735,7 +931,7 @@ describe("library drag and drop", () => {
     beginVideoDrag();
     dragEvent("drop", card("folder-7"));
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7, expect.any(Array));
     expect(container.querySelector(".toast")).toBeNull();
     expect(container.querySelector('[data-library-key="video-1"]')).not.toBeNull();
     videos[0] = { ...videos[0], folder_id: 7 };
@@ -770,7 +966,7 @@ describe("library drag and drop", () => {
     expect(moveVideoToFolder).not.toHaveBeenCalled();
     expect(reorderLibrary).toHaveBeenCalledWith(null, [
       { type: "folder", id: 7 }, { type: "video", id: 2 }, { type: "video", id: 1 },
-    ]);
+    ], [{ type: "folder", id: 7 }, { type: "video", id: 1 }, { type: "video", id: 2 }]);
   });
 
   it("distinguishes video swapping from edge insertion in the visible feedback", () => {
@@ -795,7 +991,7 @@ describe("library drag and drop", () => {
     await act(async () => { dragEvent("drop", card("video-2"), 390); });
     expect(reorderLibrary).toHaveBeenCalledWith(null, [
       { type: "folder", id: 7 }, { type: "video", id: 2 }, { type: "video", id: 1 },
-    ]);
+    ], expect.any(Array));
     act(() => root.unmount());
     root = createRoot(container);
     await act(async () => root.render(<App />));
@@ -1308,7 +1504,7 @@ describe("folder window", () => {
     dragEvent("dragstart", first);
     dragEvent("dragover", second, 390);
     await act(async () => { dragEvent("drop", second, 390); });
-    expect(reorderLibrary).toHaveBeenCalledWith(7, [{ type: "video", id: 2 }, { type: "video", id: 1 }]);
+    expect(reorderLibrary).toHaveBeenCalledWith(7, [{ type: "video", id: 2 }, { type: "video", id: 1 }], expect.any(Array));
     expect(moveVideoToFolder).not.toHaveBeenCalled();
     expect(container.querySelector<HTMLSelectElement>('.folder-window select[aria-label="文件夹内排序"]')!.value).toBe("manual");
     expect(container.querySelector<HTMLSelectElement>(".library-toolbar select")!.value).toBe("manual");
@@ -1322,7 +1518,7 @@ describe("folder window", () => {
       expect(container.querySelector('.folder-window [data-library-key="video-1"]')).toBeNull();
       expect(container.querySelector('.library-inner [data-library-key="video-1"]')).not.toBeNull();
     });
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null, expect.any(Array));
     expect(container.querySelector(".folder-window")).not.toBeNull();
     expect(container.querySelector(".folder-window-heading")?.textContent).toContain("1 个视频");
     expect(container.querySelector(".folder-card-link")?.textContent).toContain("1 个视频");
@@ -1350,7 +1546,7 @@ describe("folder window", () => {
       expect(container.querySelector('.library-inner [data-library-key="video-1"]')).not.toBeNull();
     });
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null, expect.any(Array));
     expect(reorderLibrary).not.toHaveBeenCalled();
     expect(container.querySelector(".folder-window-heading")?.textContent).toContain("1 个视频");
     expect(container.querySelector(".folder-card-link")?.textContent).toContain("1 个视频");
@@ -1391,7 +1587,7 @@ describe("folder window", () => {
       dragEvent("drop", backdrop);
     });
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, null, expect.any(Array));
     expect(container.querySelectorAll(".folder-window .video-card")).toHaveLength(2);
     expect(container.querySelector(".toast")).toBeNull();
     videos[0] = { ...videos[0], folder_id: null };
@@ -1603,7 +1799,7 @@ describe("nested library folders", () => {
       expect(container.querySelector('.folder-window [data-library-key="video-2"]')).toBeNull();
     });
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(2, 9);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(2, 9, expect.any(Array));
     expect(videos[1].folder_id).toBe(9);
     expect(window.location.pathname).toBe("/");
   });
@@ -1752,7 +1948,7 @@ describe("nested library folders", () => {
     await act(async () => { dragEvent("drop", second, 390); });
     expect(reorderLibrary).toHaveBeenCalledWith(7, [
       { type: "folder", id: 10 }, { type: "folder", id: 8 }, { type: "video", id: 2 },
-    ]);
+    ], expect.any(Array));
     expect(moveLibraryFolder).not.toHaveBeenCalled();
   });
 
@@ -1790,7 +1986,7 @@ describe("nested library folders", () => {
       await flushUpdates();
       expect(container.querySelector('.library-inner [data-library-key="folder-8"]')).not.toBeNull();
     });
-    expect(moveLibraryFolder).toHaveBeenCalledWith(8, null);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(8, null, expect.any(Array));
   });
 
   it("offers an in-window parent target without shifting the folder list or navigating", async () => {
@@ -1813,7 +2009,7 @@ describe("nested library folders", () => {
       expect(container.querySelector('.folder-window [data-library-key="folder-9"]')).toBeNull();
     });
     expect(moveLibraryFolder).toHaveBeenCalledTimes(1);
-    expect(moveLibraryFolder).toHaveBeenCalledWith(9, 7);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(9, 7, expect.any(Array));
     expect(container.querySelector("#folder-window-title")?.textContent).toBe("Chapter");
     expect(container.querySelector(".folder-drop-destinations")).toBeNull();
     expect(window.location.pathname).toBe("/");
@@ -1832,7 +2028,7 @@ describe("nested library folders", () => {
       await flushUpdates();
       expect(container.querySelector('.library-inner [data-library-key="folder-9"]')).not.toBeNull();
     });
-    expect(moveLibraryFolder).toHaveBeenCalledWith(9, null);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(9, null, expect.any(Array));
     expect(container.querySelector("#folder-window-title")?.textContent).toBe("Chapter");
     expect(videos[0].folder_id).toBe(9);
     expect(reorderLibrary).not.toHaveBeenCalled();
@@ -1853,7 +2049,7 @@ describe("nested library folders", () => {
       expect(container.querySelector(".folder-window .video-card")).toBeNull();
     });
     expect(moveVideoToFolder).toHaveBeenCalledTimes(1);
-    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7);
+    expect(moveVideoToFolder).toHaveBeenCalledWith(1, 7, expect.any(Array));
     expect(container.querySelector("#folder-window-title")?.textContent).toBe("Section");
     expect(window.location.pathname).toBe("/");
   });
@@ -1870,7 +2066,7 @@ describe("nested library folders", () => {
       expect(container.querySelector(`.folder-window [data-library-key="folder-${source}"]`)).toBeNull();
     });
     expect(moveLibraryFolder).toHaveBeenCalledTimes(1);
-    expect(moveLibraryFolder).toHaveBeenCalledWith(source, target);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(source, target, expect.any(Array));
     expect(reorderLibrary).not.toHaveBeenCalled();
     expect(videos.map((video) => video.folder_id)).toEqual([9, 7]);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)); });
@@ -1898,7 +2094,7 @@ describe("nested library folders", () => {
       expect(container.querySelector('.folder-window [data-library-key="folder-8"]')).toBeNull();
       expect(container.querySelector('.library-inner [data-library-key="folder-8"]')).not.toBeNull();
     });
-    expect(moveLibraryFolder).toHaveBeenCalledWith(8, null);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(8, null, expect.any(Array));
     expect(container.querySelector("#folder-window-title")?.textContent).toBe("Algebra");
     keyDown("Escape");
     await waitForExit(container, ".folder-window");
@@ -1909,7 +2105,7 @@ describe("nested library folders", () => {
       await flushUpdates();
       expect(container.querySelector('.library-inner [data-library-key="folder-8"]')).toBeNull();
     });
-    expect(moveLibraryFolder).toHaveBeenCalledWith(8, 7);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(8, 7, expect.any(Array));
     expect(reorderLibrary).not.toHaveBeenCalled();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 260)); });
     await openFolder(7);
@@ -1932,7 +2128,7 @@ describe("nested library folders", () => {
       expect(container.querySelector('.folder-window [data-library-key="folder-9"]')).toBeNull();
     });
     expect(moveLibraryFolder).toHaveBeenCalledTimes(1);
-    expect(moveLibraryFolder).toHaveBeenCalledWith(9, 7);
+    expect(moveLibraryFolder).toHaveBeenCalledWith(9, 7, expect.any(Array));
     click(container.querySelector('[aria-label="返回上一级"]'));
     await vi.waitFor(async () => {
       await flushUpdates();
@@ -1960,7 +2156,34 @@ describe("nested library folders", () => {
       expect(container.querySelector('.folder-window [data-library-key="folder-8"]')).toBeNull();
     });
     expect(moveLibraryFolder).toHaveBeenCalledTimes(2);
-    expect(moveLibraryFolder).toHaveBeenLastCalledWith(8, 10);
+    expect(moveLibraryFolder).toHaveBeenLastCalledWith(8, 10, expect.any(Array));
+  });
+
+  it("undoes a folder move from inside a nested window and reveals its original parent", async () => {
+    const folders = await mountTree();
+    await openFolder(7);
+    vi.mocked(getLatestLibraryUndo).mockResolvedValue({ operation_id: "folder-move", kind: "move_folder" });
+    dragEvent("dragstart", card("folder-8"));
+    await act(async () => dragEvent("drop", card("folder-10")));
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(container.querySelector('.folder-window [data-library-key="folder-8"]')).toBeNull();
+    });
+    vi.mocked(undoLibraryEdit).mockImplementationOnce(async () => {
+      folders.find(item => item.id === 8)!.parent_id = 7;
+      vi.mocked(getLatestLibraryUndo).mockResolvedValue(null);
+      return { operation_id: "folder-move", kind: "move_folder", parent_id: 7,
+        ordered_items: [{ type: "folder", id: 8 }, { type: "folder", id: 10 }, { type: "video", id: 2 }] };
+    });
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true })));
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(container.querySelector('.folder-window [data-library-key="folder-8"]')).not.toBeNull();
+      expect(container.querySelector("#folder-window-title")?.textContent).toBe("Algebra");
+    });
+    expect(undoLibraryEdit).toHaveBeenCalledTimes(1);
+    expect(folders.find(item => item.id === 9)!.parent_id).toBe(8);
+    expect(videos[0].folder_id).toBe(9);
   });
 
   it("waits for confirmation and prevents duplicate folder moves", async () => {
@@ -2010,7 +2233,7 @@ describe("nested library folders", () => {
     await act(async () => { dragEvent("drop", backdrop); });
     await vi.waitFor(async () => {
       await flushUpdates();
-      expect(moveVideoToFolder).toHaveBeenCalledWith(1, 8);
+      expect(moveVideoToFolder).toHaveBeenCalledWith(1, 8, expect.any(Array));
       expect(container.querySelector(".folder-window .video-card")).toBeNull();
     });
     click(container.querySelector('[aria-label="返回上一级"]'));

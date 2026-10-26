@@ -71,7 +71,7 @@ async function main() {
       if (p === "/api/settings/ai") return json({ model: "mock-model", provider: "deepseek", has_api_key: true, output_tokens: 2048 });
       if (p === "/api/jobs/paused") return json([]);
       if (p.startsWith("/api/jobs/")) return json(job ?? { id: "idle", status: "interrupted" });
-      if (p === "/api/batch/latest" || p === "/api/recycle-bin/latest") return json(null);
+      if (p === "/api/batch/latest" || p === "/api/library/undo/latest") return json(null);
       if (p.endsWith("/thumbnail") || p.endsWith("/stream") || p.endsWith("/media")) return route.fulfill({ status: 404, body: "" });
       return json({});
     });

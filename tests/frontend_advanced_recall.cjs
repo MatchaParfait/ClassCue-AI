@@ -69,7 +69,7 @@ async function main() {
       if (p === "/api/library/status") return json({ library_id: "advanced-fixture", data_root: "mock", video_count: 0 });
       if (p === "/api/library") return json({ folder: null, parent_id: null, sort: "manual", order: "asc", items: [] });
       if (p === "/api/videos" || p === "/api/jobs/paused") return json([]);
-      if (p === "/api/batch/latest" || p === "/api/recycle-bin/latest") return json(null);
+      if (p === "/api/batch/latest" || p === "/api/library/undo/latest") return json(null);
       return json({});
     });
     await page.goto(`${origin}/settings?section=recall`);

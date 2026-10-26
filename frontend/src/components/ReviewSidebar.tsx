@@ -30,6 +30,8 @@ interface ReviewSidebarProps {
   onChangeStatus: (marker: Marker, status: ReviewStatus) => void;
   onUndo: () => void;
   canUndo: boolean;
+  undoLabel?: string;
+  undoing?: boolean;
   onRestoreExcluded: (marker: Marker) => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -65,6 +67,8 @@ export function ReviewSidebar({
   onChangeStatus,
   onUndo,
   canUndo,
+  undoLabel = "重点已移除",
+  undoing = false,
   onRestoreExcluded,
   onPrevious,
   onNext,
@@ -179,8 +183,9 @@ export function ReviewSidebar({
 
       {canUndo && (
         <div className="undo-banner">
-          <span>重点已移除</span>
-          <button type="button" onClick={onUndo}><Undo2 size={14} /> 撤销</button>
+          <span>{undoLabel}</span>
+          <button type="button" onClick={onUndo} disabled={undoing} title="撤销（Ctrl+Z）"
+            aria-keyshortcuts="Control+Z Meta+Z"><Undo2 size={14} />{undoing ? "正在撤销…" : "撤销"}</button>
         </div>
       )}
 
