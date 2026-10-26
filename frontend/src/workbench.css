@@ -75,6 +75,7 @@
 .folder-card .library-card-body > span { color: var(--ui-muted); font-size: 12px; }
 .folder-rename-button { border-color: transparent; background: transparent; }
 .folder-card > .folder-rename-button, .folder-card > .folder-delete-button, .folder-card > .drag-handle { position: relative; z-index: 2; }
+.folder-card > .device-folder-send { position: absolute; top: 6px; right: 14px; z-index: 3; width: 28px; min-height: 28px; height: 28px; padding: 4px; }
 .folder-section-empty { color: var(--ui-muted); font-size: 12px; padding: 8px 0; }
 .library-grid-list { border: 0; background: transparent; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding: 0; }
 .library-card { display: flex; align-items: center; gap: 11px; min-height: 82px; padding: 13px;

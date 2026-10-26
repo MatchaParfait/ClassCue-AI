@@ -15,6 +15,7 @@ import {
   ArrowRightToLine,
   ArrowDownAZ,
   CheckCircle2,
+  Cable,
   ChevronRight,
   Clock3,
   Database,
@@ -57,6 +58,8 @@ import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { ToolbarMenu } from "./components/ToolbarMenu";
 import { VideoMoveMenu } from "./components/VideoMoveMenu";
 import { StudyShareExportMenuItem, StudyShareImportButton } from "./components/StudyShareControls";
+import { DeviceTransferButton, DeviceTransferSendMenuItem } from "./components/DeviceTransferControls";
+import { openDeviceTransfer } from "./api/deviceTransfers";
 import { useTaskStatus, isTaskTerminal, taskLabel, videoFileChangeBlockReason } from "./hooks/useTaskStatus";
 import type { Job, Video, VideoLibraryFolder, VideoLibraryState } from "./types";
 import { canOpenReview, formatTime } from "./utils";
@@ -1128,6 +1131,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
             }}>
             {trashBusyKey === `folder-${item.folder.id}` ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}
           </button>
+          <button className="icon-button device-folder-send" type="button" title="发送到平板" aria-label={`发送文件夹“${item.folder.name}”到平板`}
+            disabled={id === null || count === 0 || !libraryId} onPointerDown={event => event.stopPropagation()}
+            onClick={event => { event.stopPropagation(); if (id !== null) openDeviceTransfer({ title: item.folder.name, folderId: id }); }}>
+            <Cable size={16} />
+          </button>
           <span className="drag-handle" title={movingFolders.has(item.key) ? "正在移动文件夹" : "拖到文件夹中央移入，拖到边缘排序"}>
             {movingFolders.has(item.key) ? <LoaderCircle className="spin" size={17} /> : <GripVertical size={17} />}
           </span>
@@ -1250,6 +1258,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <span className="drag-handle" title={moving.has(video.id) ? "正在移动" : "拖动调整位置"}>{moving.has(video.id) ? <LoaderCircle className="spin" size={17} /> : <GripVertical size={17} />}</span>
           <ToolbarMenu label={`管理视频“${video.display_name}”`} icon={<MoreHorizontal size={18} />} disabled={moving.has(video.id) || editingVideoName}>
             <StudyShareExportMenuItem video={video} blockReason={renameBlockReason} />
+            <DeviceTransferSendMenuItem selection={{ title: video.display_name || video.filename, videoIds: [video.id] }} disabled={Boolean(renameBlockReason) || !libraryId} />
             <VideoMoveMenu currentFolder={parseFolderId(libraryState.assignments[String(video.id)] ?? null)}
               onMove={(id) => void moveVideo(video.id, id === null ? "" : `folder-${id}`)} />
           </ToolbarMenu>
@@ -1285,6 +1294,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <div className="library-breadcrumb"><span>本地视频库</span></div>
           <div className="library-toolbar-tools">
           <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
+          <DeviceTransferButton key={`device-${scope}`} libraryId={libraryId} active={active && !suspended} selectedVideoIds={selections.root ?? []} />
           <button className="icon-button library-undo" type="button"
             title={`${libraryUndoLabel}（Ctrl+Z）`} aria-label={libraryUndoLabel} aria-keyshortcuts="Control+Z Meta+Z"
             disabled={!workspaceSettled || !canUndoLibrary || libraryChanging} onClick={() => void undoLibraryAction()}>

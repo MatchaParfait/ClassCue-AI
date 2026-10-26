@@ -1060,6 +1060,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 update_center.start_background()
             yield
         finally:
+            if getattr(_api.state, "device_transfers", None) is not None:
+                await asyncio.to_thread(_api.state.device_transfers.close)
             update_center.close()
             if reaper is not None:
                 reaper.cancel()
@@ -3002,6 +3004,24 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         if video_id in locked:
             return "该视频被处理任务或暂停队列占用，请完成或停止任务后再分享资料"
         return None
+
+    def device_transfer_manager():
+        # Lazy initialization keeps ordinary startup and isolated tests free of COM.
+        if getattr(api.state, "device_transfers", None) is None:
+            from classcue.device_transfers import TransferManager
+            with jobs._lock:
+                if getattr(api.state, "device_transfers", None) is None:
+                    api.state.device_transfers = TransferManager(
+                        provider.get, provider.data_root() / "device-transfers",
+                        lambda: asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                        lambda: asr_storage.audio_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()),
+                        block_reason=share_block_reason, operation_lock=jobs._lock,
+                    )
+                    api.state.device_transfers.start()
+        return api.state.device_transfers
+
+    from api.device_transfers import device_transfer_router
+    api.include_router(device_transfer_router(device_transfer_manager, provider.library_id))
 
     async def read_share_package(request: Request) -> study_share.StudyPackage:
         content = bytearray()
