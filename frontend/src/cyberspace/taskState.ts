@@ -19,7 +19,8 @@ export const phaseLabels: Record<SpacePhase, string> = {
 };
 
 export const modeLabels: Record<MarkerMode, string> = {
-  high_recall: "高召回", medium_recall: "中召回", low_recall: "低召回", strict_exam_intent: "明确考试意图",
+  high_recall: "高召回", medium_recall: "中召回", low_recall: "低召回",
+  question_extraction: "题目提取", strict_exam_intent: "明确考试意图",
 };
 
 export function canReadSavedText(phase: SpacePhase) {

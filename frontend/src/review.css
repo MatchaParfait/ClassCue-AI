@@ -77,7 +77,25 @@
 .review-sidebar .marker-item:hover { border-color: var(--ui-accent-strong); background: color-mix(in srgb, var(--ui-accent-soft) 65%, var(--ui-surface)); box-shadow: 0 3px 10px color-mix(in srgb, var(--ui-accent-strong) 9%, transparent); }
 .review-sidebar .marker-item:has(.marker-main:focus-visible, .marker-time-jump:focus-visible) { border-color: var(--ui-accent-strong); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent-strong) 18%, transparent); }
 .review-sidebar .marker-item:active { background: var(--ui-accent-soft); box-shadow: inset 0 1px 4px color-mix(in srgb, var(--ui-accent-strong) 14%, transparent); }
+.review-sidebar .marker-item.is-question-emphasized { background: var(--ui-warning-soft); border-color: color-mix(in srgb, var(--ui-amber) 45%, var(--ui-border)); }
+.review-sidebar .marker-item.is-question-emphasized:hover { background: color-mix(in srgb, var(--ui-amber) 8%, var(--ui-warning-soft)); }
+.review-sidebar .marker-item.is-question-emphasized.is-selected { background: var(--ui-warning-soft); border-color: var(--ui-accent-strong); }
+.question-emphasis-control { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; min-width: 28px; }
+.question-emphasis-toggle.icon-button { width: 28px; min-height: 28px; padding: 5px; color: var(--ui-muted); border-color: transparent; background: transparent; }
+.question-emphasis-toggle[aria-pressed="true"] { color: var(--ui-amber); }
+.question-emphasis-toggle:hover:not(:disabled) { background: var(--ui-warning-soft); border-color: var(--ui-amber); }
+.question-emphasis-toggle:focus-visible { outline: 2px solid var(--ui-amber); outline-offset: 2px; }
+.question-emphasis-toggle:disabled { cursor: wait; opacity: .6; }
+.question-emphasis-control .field-error { font-size: 11px; overflow-wrap: anywhere; }
 .marker-time-row { display: flex; align-items: center; padding: 0 2px 8px; gap: 8px; flex-wrap: wrap; }
+.sidebar-heading-actions { display: flex; align-items: center; gap: 8px; }
+.add-manual-question.icon-button { width: 30px; min-height: 30px; padding: 5px; }
+.review-sidebar .marker-item.is-new-question { outline: 2px solid var(--ui-accent-strong); outline-offset: 2px; }
+.manual-question-title-editor { display: grid; grid-template-columns: minmax(0, 1fr) 30px 30px; align-items: center; gap: 6px; padding: 4px 2px; cursor: auto; }
+.manual-question-title-editor input { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--ui-border); border-radius: 4px; background: var(--ui-surface); color: var(--ui-text); font: inherit; font-size: 14px; }
+.manual-question-title-editor .icon-button { width: 30px; min-height: 30px; padding: 5px; }
+.manual-question-title-editor .field-error { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.manual-question-title-editor :focus-visible, .add-manual-question:focus-visible { outline: 2px solid var(--ui-accent-strong); outline-offset: 2px; }
 .marker-time, .marker-time-jump { color: var(--ui-muted); font-size: 12px; font-weight: 500; }
 .marker-time-jump { min-height: 28px; padding: 3px 7px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; background: transparent; }
 .marker-time-jump:hover { color: var(--ui-accent-strong); border-color: color-mix(in srgb, var(--ui-accent-strong) 35%, transparent); background: var(--ui-accent-soft); }

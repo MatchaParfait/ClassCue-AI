@@ -287,7 +287,7 @@ def create_judge(
     profile: ProviderProfile, api_key: str, provider: str | None = None,
     mode: str = "strict_exam_intent", *, client=None, scheme_snapshot=None,
 ):
-    if mode in {"high_recall", "medium_recall", "low_recall"} or mode.startswith("custom_"):
+    if mode in {"high_recall", "medium_recall", "low_recall", "question_extraction"} or mode.startswith("custom_"):
         from classcue.exam_point_judge import ExamPointJudge
 
         profile.require_ready(api_key)

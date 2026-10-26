@@ -5,6 +5,7 @@ from __future__ import annotations
 from classcue.paths import PROJECT_ROOT
 
 from dataclasses import asdict
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
@@ -30,11 +31,13 @@ from classcue.video_store import VideoStore
 
 
 PROMPT_DIRECTORY = PROJECT_ROOT / "prompts" / "exam_lab"
+QUESTION_PROMPT_DIRECTORY = PROJECT_ROOT / "prompts" / "question_extraction"
 PIPELINE_VERSION = "exam-lab-v1"
 
 
 class LabConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    response_schema: Literal["lab", "question_intervals"] = "lab"
     scheme: Literal["rules", "few_shot", "context_review"] = "rules"
     chunk_seconds: int = Field(default=300, ge=30, le=3600)
     overlap_seconds: int = Field(default=30, ge=0)
@@ -80,6 +83,19 @@ class LabCandidate(BaseModel):
 class LabResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     candidates: list[LabCandidate]
+
+
+class QuestionCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    start_sentence_id: int
+    end_sentence_id: int
+    evidence_sentence_ids: list[int] = Field(min_length=1, max_length=3)
+    title: str = Field(min_length=1)
+
+
+class QuestionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    candidates: list[QuestionCandidate]
 
 
 def digest(payload: object) -> str:
@@ -480,7 +496,7 @@ class LoggedClient:
             raise error
 
 
-def _check_format(raw: str) -> tuple[list | None, list[dict]]:
+def _check_format(raw: str, *, response_schema: str = "lab") -> tuple[list | None, list[dict]]:
     try:
         document = json.loads(raw)
     except ValueError as error:
@@ -490,7 +506,8 @@ def _check_format(raw: str) -> tuple[list | None, list[dict]]:
     items = document.get("candidates") if isinstance(document, dict) else None
     items = items if isinstance(items, list) else None
     try:
-        LabResponse.model_validate(document)
+        schema = QuestionResponse if response_schema == "question_intervals" else LabResponse
+        schema.model_validate(document)
     except ValidationError as error:
         return items, _serialize(error.errors(include_url=False, include_input=False))
     return items, []
@@ -524,6 +541,28 @@ def validate_candidates(items: list, provided: list[TranscriptSegment], full: li
         except ValueError as error:
             rejected.append({"candidate": item, "reason": str(error)})
     return accepted, rejected
+
+
+def expand_question_candidates(items: list, provided: list[TranscriptSegment], full: list[TranscriptSegment]) -> tuple[list, list]:
+    """Copy evidence from saved subtitles, retaining the existing publication contract."""
+    available = {segment.id: segment for segment in provided}
+    accepted, errors = [], []
+    for index, item in enumerate(items):
+        expanded = {
+            **item, "level": "confirmed", "signal_type": "emphasis", "reason": "",
+            "evidence_quote": "".join(
+                available[i].text for i in item["evidence_sentence_ids"] if i in available
+            ),
+        }
+        selected, rejected = validate_candidates([expanded], provided, full)
+        if rejected:
+            errors.append({
+                "loc": ["candidates", index], "type": "sentence_reference_invalid",
+                "msg": rejected[0]["reason"],
+            })
+        else:
+            accepted.extend(selected)
+    return accepted, errors
 
 
 def evidence_feedback(candidate: dict, reason: str, provided: list[TranscriptSegment]) -> dict:
@@ -850,6 +889,10 @@ def _run_report(
         "evidence_repair_count": sum(step["evidence_repair_count"] for step in evidence_steps),
         "evidence_limit_reached_count": sum(step["evidence_limit_reached"] for step in evidence_steps),
     }
+    response_errors = Counter(
+        error["type"] for step in steps for attempt in step.get("format_attempts", [])
+        for error in attempt.get("errors", [])
+    )
     return {
         "snapshot_hash": snapshot["snapshot_hash"], "transcript_hash": snapshot["transcript_hash"],
         "input_view_hash": snapshot["input_view_hash"], "input_stats": snapshot["input_stats"],
@@ -857,6 +900,7 @@ def _run_report(
         "results": results, "pre_merge_candidates": collected,
         "technical_failures": technical_failures, "format_metrics": metrics,
         "format_repair_count": metrics["repair_count"],
+        "response_error_counts": dict(response_errors),
         "citation_metrics": citation_metrics,
         "format_repair_api_call_count": sum(call["stage"] == "json_repair" for call in calls),
         "transport_retry_count": sum(call.get("retry_reason") == "transient_error" for call in calls),
@@ -962,7 +1006,9 @@ def execute_run(
                             body, step_id, stage if repair_round == 0 else "json_repair",
                             parent, repair_round=repair_round,
                         )
-                    items, errors = _check_format(raw)
+                    items, errors = _check_format(raw, response_schema=config.response_schema)
+                    if not errors and config.response_schema == "question_intervals":
+                        _, errors = expand_question_candidates(items, supplied, full)
                     valid = not errors
                     step["call_id"] = call_id
                     step["final_format_valid"] = valid
@@ -977,7 +1023,13 @@ def execute_run(
                         original_count = step["raw_candidate_count"]
                         for item in items or []:
                             try:
-                                LabCandidate.model_validate(item)
+                                if config.response_schema == "question_intervals":
+                                    QuestionCandidate.model_validate(item)
+                                    _, item_errors = expand_question_candidates([item], supplied, full)
+                                    if item_errors:
+                                        continue
+                                else:
+                                    LabCandidate.model_validate(item)
                                 protected_candidates.append(item)
                             except ValueError:
                                 pass
@@ -993,7 +1045,13 @@ def execute_run(
                             )
                         ):
                             raise ValueError("Format repair changed or removed candidates; manual review required")
-                        accepted, rejected = validate_candidates(items, supplied, full)
+                        if config.response_schema == "question_intervals":
+                            accepted, reference_errors = expand_question_candidates(items, supplied, full)
+                            if reference_errors:
+                                raise ValueError("Question references changed after validation")
+                            rejected = []
+                        else:
+                            accepted, rejected = validate_candidates(items, supplied, full)
                         step["first_rejected"] = rejected
                         if config.match_evidence_quotes:
                             recovered, rejected, matches = rematch_rejections(rejected, supplied, full)

@@ -1,4 +1,4 @@
-import { RECALL_MODES } from "../processOptions";
+import { PROCESS_MODES, RECALL_MODES } from "../processOptions";
 import type { RecallMode } from "../types";
 import { useId } from "react";
 import { useRecallSchemes } from "../hooks/useRecallSchemes";
@@ -14,14 +14,14 @@ export function RecallModeControl({ value = ["medium_recall"], onChange, disable
   const hintId = useId();
   const schemes = useRecallSchemes(active);
   const custom = (schemes.data ?? []).filter(item => !item.archived);
-  const choices: { value: RecallMode; label: string; base?: string }[] = [...RECALL_MODES, ...custom.map(item => ({
+  const choices: { value: RecallMode; label: string; base?: string }[] = [...PROCESS_MODES, ...custom.map(item => ({
     value: item.id, label: item.name,
     base: RECALL_MODES.find(base => base.value === item.base_mode)?.label,
   }))];
   const missing = value.filter(id => id.startsWith("custom_") && !custom.some(item => item.id === id));
   return (
     <fieldset className="recall-mode-control" disabled={disabled} aria-describedby={hintId}>
-      <legend>考点召回</legend>
+      <legend>考点召回与题目提取</legend>
       <div className="recall-mode-options">
         {choices.map((mode) => {
           const checked = value.includes(mode.value);

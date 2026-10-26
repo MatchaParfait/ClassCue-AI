@@ -32,6 +32,11 @@ describe("processing request options", () => {
       expect(payload).not.toHaveProperty("extension_focus");
     }
   });
+  it("sends the question extraction mode", () => {
+    const payload = buildProcessPayload({ ...form, recallModes: ["question_extraction"] });
+    expect(payload.analysis_mode).toBe("question_extraction");
+    expect(payload.analysis_modes).toEqual(["question_extraction"]);
+  });
   it("sends several recall modes without duplicates", () => {
     expect(buildProcessPayload({ ...form, recallModes: ["medium_recall", "high_recall", "medium_recall", "low_recall"] }).analysis_modes)
       .toEqual(["medium_recall", "high_recall", "low_recall"]);

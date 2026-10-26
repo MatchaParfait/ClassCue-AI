@@ -1,5 +1,6 @@
 export type BuiltinRecallMode = "high_recall" | "medium_recall" | "low_recall";
-export type RecallMode = BuiltinRecallMode | `custom_${string}`;
+export type ExtractionMode = BuiltinRecallMode | "question_extraction";
+export type RecallMode = ExtractionMode | `custom_${string}`;
 export type MarkerMode = RecallMode | "strict_exam_intent";
 export interface TeacherRule {
   phrase: string;
@@ -156,6 +157,8 @@ export interface Marker {
   analysis_mode: MarkerMode;
   review_status: ReviewStatus;
   importance?: MarkerImportance;
+  question_emphasized?: boolean;
+  question_emphasis_override?: boolean | null;
   preview?: boolean;
 }
 

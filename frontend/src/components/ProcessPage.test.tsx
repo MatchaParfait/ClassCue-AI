@@ -511,7 +511,7 @@ describe("desktop processing workflow", () => {
   it("selects several recall modes without legacy focus flags", async () => {
     await mount();
     const choices = container.querySelectorAll<HTMLInputElement>(".recall-mode-control input");
-    expect([...choices].map(item => item.value)).toEqual(["high_recall", "medium_recall", "low_recall"]);
+    expect([...choices].map(item => item.value)).toEqual(["high_recall", "medium_recall", "low_recall", "question_extraction"]);
     expect([...choices].filter(item => item.checked).map(item => item.value)).toEqual(["medium_recall"]);
     act(() => choices[2].click());
     start();

@@ -11,6 +11,10 @@ from classcue.processing_control import ProcessingCancelled
 from classcue.video_pipeline import process_saved_analysis_once, process_video_once
 from classcue.video_store import VideoStore
 from classcue.api_failure import ApiUnavailable
+from classcue.llm_experiments import (
+    QuestionCandidate, QuestionResponse, QUESTION_PROMPT_DIRECTORY,
+    expand_question_candidates, load_prompt_bundle,
+)
 
 
 class FakeClient:
@@ -119,6 +123,107 @@ def test_modes_use_selected_frozen_bundle_and_logged_b_pipeline(saved, mode):
     assert snapshot["authorization"]["kind"] == "production_processing_request"
     assert len(store.list_experiment_calls(row["experiment_id"])) == 1
     assert len(store.get_segments(video_id)) == 2
+
+
+def test_question_extraction_mode_uses_question_prompt_bundle(saved):
+    store, video_id, profile = saved
+    item = {key: value for key, value in candidate().items() if key in QuestionCandidate.model_fields}
+    adapter, client = judge(profile, [{"candidates": [item]}], "question_extraction")
+
+    assert isinstance(adapter, ExamPointJudge)
+    assert "题目讲解区间提取器" in adapter.bundle["system"]
+    assert "具体题目、例题、练习" in adapter.bundle["rules"]
+    assert run(saved, adapter) == ("completed", 1)
+    marker = store.list_markers(video_id, "question_extraction")[0]
+    assert marker["title"] == "排序"
+    assert marker["source_quote"] == "排序和查找 会考，必须掌握。"
+    assert (marker["start_ms"], marker["end_ms"]) == (10000, 15000)
+    assert len(client.requests) == 1
+    report = store.get_experiment_results(store.get_analysis_run(video_id, adapter.mode)["experiment_id"])
+    assert report["response_error_counts"] == {}
+    assert report["citation_metrics"]["additional_api_calls"] == 0
+    assert client.requests[0]["messages"][0]["content"] == adapter.bundle["system"]
+
+
+@pytest.mark.parametrize("invalid,error_type", [
+    ("broken JSON", "json_invalid"),
+    ({"start_sentence_id": 99, "end_sentence_id": 99,
+      "evidence_sentence_ids": [99], "title": "排序"}, "sentence_reference_invalid"),
+    ({"start_sentence_id": "1", "end_sentence_id": 1,
+      "evidence_sentence_ids": [1], "title": "排序"}, "int_type"),
+    ({"start_sentence_id": 1, "end_sentence_id": 1,
+      "evidence_sentence_ids": [1], "title": "排序", "reason": "extra"}, "extra_forbidden"),
+])
+def test_question_repairs_are_logged_and_publish_only_valid_references(saved, invalid, error_type):
+    store, video_id, profile = saved
+    valid = {"start_sentence_id": 1, "end_sentence_id": 1,
+             "evidence_sentence_ids": [1], "title": "排序"}
+    first = invalid if isinstance(invalid, str) else {"candidates": [invalid]}
+    adapter, client = judge(profile, [first, {"candidates": [valid]}], "question_extraction")
+    assert run(saved, adapter) == ("completed", 1)
+    run_id = store.get_analysis_run(video_id, adapter.mode)["experiment_id"]
+    report = store.get_experiment_results(run_id)
+    assert report["response_error_counts"][error_type] == 1
+    assert report["format_repair_count"] == 1
+    assert [call["stage"] for call in store.list_experiment_calls(run_id)] == ["extract", "json_repair"]
+    assert len(client.requests) == 2
+
+
+@pytest.mark.parametrize("changes,provided_ids", [
+    ({"end_sentence_id": 99}, [1, 2, 3]),
+    ({"start_sentence_id": 3, "end_sentence_id": 1}, [1, 2, 3]),
+    ({"evidence_sentence_ids": [99]}, [1, 2, 3]),
+    ({"evidence_sentence_ids": [1, 1]}, [1, 2, 3]),
+    ({"evidence_sentence_ids": [3, 1]}, [1, 2, 3]),
+    ({"start_sentence_id": 2, "evidence_sentence_ids": [1]}, [1, 2, 3]),
+    ({}, [1, 3]),
+])
+def test_question_reference_validation_rejects_invalid_ranges(changes, provided_ids):
+    full = [TranscriptSegment(i, i * 1000, i * 1000 + 900, f"synthetic line {i}") for i in [1, 2, 3]]
+    supplied = [line for line in full if line.id in provided_ids]
+    item = {"start_sentence_id": 1, "end_sentence_id": 3,
+            "evidence_sentence_ids": [1], "title": "synthetic", **changes}
+    accepted, errors = expand_question_candidates([item], supplied, full)
+    assert not accepted
+    assert errors[0]["type"] == "sentence_reference_invalid"
+
+
+def test_question_examples_use_four_fields_and_reconstruct_evidence():
+    bundle = load_prompt_bundle(QUESTION_PROMPT_DIRECTORY)
+    for example in bundle["examples"]:
+        QuestionResponse.model_validate(example["expected"])
+        segments = [TranscriptSegment(line["id"], i * 1000, i * 1000 + 900, line["text"])
+                    for i, line in enumerate(example["transcript"])]
+        accepted, errors = expand_question_candidates(example["expected"]["candidates"], segments, segments)
+        assert not errors
+        assert len(accepted) == len(example["expected"]["candidates"])
+
+
+def test_question_failure_keeps_previously_published_markers(saved):
+    store, video_id, profile = saved
+    item = {"start_sentence_id": 1, "end_sentence_id": 1,
+            "evidence_sentence_ids": [1], "title": "排序"}
+    adapter, _ = judge(profile, [{"candidates": [item]}], "question_extraction")
+    run(saved, adapter)
+    before = dict(store.list_markers(video_id, adapter.mode)[0])
+    invalid = {**item, "evidence_sentence_ids": [99]}
+    adapter, _ = judge(profile, [{"candidates": [invalid]}] * 2, "question_extraction")
+    with pytest.raises(ValueError, match="Format validation failed"):
+        run(saved, adapter, force=True)
+    assert dict(store.list_markers(video_id, adapter.mode)[0]) == before
+
+
+def test_question_reference_repair_cannot_remove_a_valid_candidate(saved):
+    item = {"start_sentence_id": 1, "end_sentence_id": 1,
+            "evidence_sentence_ids": [1], "title": "排序"}
+    invalid = {**item, "title": "查找", "evidence_sentence_ids": [99]}
+    adapter, _ = judge(saved[2], [
+        {"candidates": [item, invalid]},
+        {"candidates": [{**item, "title": "改写"}, {**item, "title": "查找"}]},
+    ], "question_extraction")
+    with pytest.raises(ValueError, match="Format repair changed or removed candidates"):
+        run(saved, adapter)
+    assert not saved[0].list_markers(saved[1], adapter.mode)
 
 
 def test_backend_matches_spacing_and_preserves_two_objects_at_same_time(saved):
@@ -255,7 +360,8 @@ def test_api_jobs_publish_selected_mode_and_reuse_saved_asr(saved, monkeypatch):
     from classcue.ai_provider import ProviderSettings
 
     store, video_id, profile = saved
-    client = FakeClient([{"candidates": [candidate()]}] * 3)
+    question = {key: value for key, value in candidate().items() if key in QuestionCandidate.model_fields}
+    client = FakeClient([{"candidates": [candidate()]}] * 3 + [{"candidates": [question]}])
     monkeypatch.setattr(api_main, "load_provider_settings", lambda: ProviderSettings(profile=profile))
     monkeypatch.setattr(api_main, "resolve_interface_key", lambda *a: "secret")
     monkeypatch.setattr(api_main, "create_judge", lambda p, key, provider, mode: create_judge(
@@ -263,7 +369,7 @@ def test_api_jobs_publish_selected_mode_and_reuse_saved_asr(saved, monkeypatch):
     ))
     monkeypatch.setattr("classcue.video_pipeline._transcribe_video_with_fallback", lambda *a, **k: pytest.fail("ASR rerun"))
     with TestClient(api_main.create_app(store)) as api:
-        for mode in ("high_recall", "medium_recall", "low_recall", "medium_recall"):
+        for mode in ("high_recall", "medium_recall", "low_recall", "question_extraction", "medium_recall"):
             submitted = api.post(f"/api/videos/{video_id}/process", json={
                 "analysis_mode": mode, "filter_formula_noise": False,
             })
@@ -280,7 +386,7 @@ def test_api_jobs_publish_selected_mode_and_reuse_saved_asr(saved, monkeypatch):
             assert len(markers) == 1
             assert markers[0]["analysis_mode"] == mode
         runs = api.get(f"/api/videos/{video_id}/analysis-runs").json()
-        assert len(runs) == 3
+        assert len(runs) == 4
         assert all(row["experiment_id"] and row["analysis_signature"] for row in runs)
-    assert len(client.requests) == 3
-    assert len(store.list_experiments(video_id)) == 3
+    assert len(client.requests) == 4
+    assert len(store.list_experiments(video_id)) == 4

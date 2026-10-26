@@ -12,10 +12,13 @@ const { mutateStatus, mutateTime } = vi.hoisted(() => ({ mutateStatus: vi.fn(), 
 vi.mock("./hooks/useStudyData", () => ({
   useStudyData: vi.fn(),
   useMarkerStatusMutation: () => ({
-    mutate: mutateStatus, isPending: false, isError: false,
+    mutate: mutateStatus, mutateAsync: mutateStatus, isPending: false, isError: false,
   }),
   useMarkerJumpTimeMutation: () => ({ mutateAsync: mutateTime, isPending: false }),
   useMarkerImportanceMutation: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined) }),
+  useQuestionEmphasisMutation: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined) }),
+  useCreateManualQuestionMutation: () => ({ mutateAsync: vi.fn() }),
+  useRenameManualQuestionMutation: () => ({ mutateAsync: vi.fn() }),
 }));
 
 vi.mock("./components/VideoPanel", () => ({
@@ -38,7 +41,7 @@ beforeEach(async () => {
   const values = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  mutateStatus.mockClear();
+  mutateStatus.mockReset().mockImplementation(async ({ marker, status }) => ({ ...marker, review_status: status }));
   mutateTime.mockReset().mockResolvedValue(undefined);
   vi.mocked(useStudyData).mockImplementation((videoId) => ({
     video: {
@@ -531,16 +534,16 @@ describe("review visit state", () => {
     expect(container.querySelectorAll(".marker-item.is-viewed")).toHaveLength(0);
   });
 
-  it("keeps removal and restoring excluded points on the existing saved-status path", () => {
-    click(container.querySelector(".danger-action"));
+  it("keeps removal and restoring excluded points on the existing saved-status path", async () => {
+    await act(async () => click(container.querySelector(".danger-action")));
     expect(mutateStatus).toHaveBeenLastCalledWith({
       marker: expect.objectContaining({ id: 1 }), status: "excluded",
     });
-    click(container.querySelector(".undo-banner button"));
+    await act(async () => click(container.querySelector(".undo-banner button")));
     expect(mutateStatus).toHaveBeenLastCalledWith({
       marker: expect.objectContaining({ id: 1 }), status: "active",
     });
-    click(container.querySelector(".excluded-row button"));
+    await act(async () => click(container.querySelector(".excluded-row button")));
     expect(mutateStatus).toHaveBeenLastCalledWith({
       marker: expect.objectContaining({ id: 4 }), status: "active",
     });

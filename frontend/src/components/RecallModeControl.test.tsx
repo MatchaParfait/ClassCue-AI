@@ -22,6 +22,7 @@ it("defaults to medium and allows selecting and clearing every mode", () => {
     const selected = () => inputs.filter(input => input.checked).map(input => input.value);
     expect(selected()).toEqual(["medium_recall"]);
     expect(inputs[1].disabled).toBe(false);
+    expect(container.querySelector('input[value="question_extraction"]')).not.toBeNull();
     expect(container.textContent).toContain("更多 token");
     expect(container.textContent).not.toContain("记住上次选择");
     expect(container.textContent).not.toContain("首次默认中召回");

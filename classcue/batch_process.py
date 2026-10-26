@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--token-parameter", choices=["max_tokens", "max_completion_tokens"])
     parser.add_argument("--api-timeout", type=float, help="API 请求超时秒数")
     parser.add_argument("--no-json-mode", action="store_false", dest="json_mode", default=None)
-    parser.add_argument("--mode", choices=("high_recall", "medium_recall", "low_recall", "strict_exam_intent"), default="medium_recall")
+    parser.add_argument("--mode", choices=("high_recall", "medium_recall", "low_recall", "question_extraction", "strict_exam_intent"), default="medium_recall")
     parser.add_argument("--reasoning-effort", choices=("low", "medium", "high"))
     parser.add_argument("--keyword-prefilter", action="store_true", help="只把关键词命中附近的字幕交给 AI")
     parser.add_argument(

@@ -28,6 +28,12 @@ def test_legacy_mode_without_ui_flags_is_preserved():
     assert VideoProcessPayload(analysis_mode="strict_exam_intent").analysis_mode == "strict_exam_intent"
 
 
+def test_question_extraction_mode_is_preserved():
+    options = VideoProcessPayload(analysis_mode="question_extraction")
+    assert options.analysis_mode == "question_extraction"
+    assert options.analysis_modes == ["question_extraction"]
+
+
 def test_keywords_are_normalized_and_enable_prefiltering():
     options = VideoProcessPayload(keywords=[" KKT ", "KKT", "  ", "最优解"])
     assert options.keywords == ["KKT", "最优解"]

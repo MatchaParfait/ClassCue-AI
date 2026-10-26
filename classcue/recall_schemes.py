@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 BUILTIN_MODES = ("high_recall", "medium_recall", "low_recall")
 BASE_VARIANTS = {"high_recall": "high_recall", "medium_recall": "precision", "low_recall": "low_recall"}
-ModeId = Annotated[str, Field(pattern=r"^(high_recall|medium_recall|low_recall|strict_exam_intent|custom_[a-f0-9]{32})$")]
+ModeId = Annotated[str, Field(pattern=r"^(high_recall|medium_recall|low_recall|question_extraction|strict_exam_intent|custom_[a-f0-9]{32})$")]
 
 
 class TeacherRule(BaseModel):

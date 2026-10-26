@@ -18,6 +18,10 @@ export function markerJumpTime(marker: Marker): number {
   return marker.user_start_ms ?? marker.start_ms;
 }
 
+export function isManualQuestion(marker: Marker): boolean {
+  return marker.analysis_mode === "question_extraction" && Boolean(marker.trigger_phrase?.startsWith("MANUAL-question:"));
+}
+
 export function captureJumpTime(milliseconds: number, durationMs: number): number {
   const clamped = Math.max(0, durationMs > 0 ? Math.min(durationMs, milliseconds) : milliseconds);
   return Math.floor(clamped / 1000) * 1000;

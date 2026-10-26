@@ -6,7 +6,8 @@ from typing import Callable
 
 from classcue.ai_provider import ProviderProfile
 from classcue.llm_experiments import (
-    LabConfig, execute_run, load_prompt_bundle, prepare_snapshot, register_run,
+    QUESTION_PROMPT_DIRECTORY, LabConfig, execute_run, load_prompt_bundle,
+    prepare_snapshot, register_run,
 )
 from classcue.processing_control import ProcessingCancelled
 from classcue.video_store import VideoStore
@@ -19,11 +20,12 @@ RECALL_VARIANTS = {
     "medium_recall": "precision",
     "low_recall": "low_recall",
 }
+QUESTION_EXTRACTION_MODE = "question_extraction"
 
 
 class ExamPointJudge:
     def __init__(self, profile: ProviderProfile, api_key: str, *, mode: str, client=None, scheme_snapshot=None):
-        if mode not in RECALL_VARIANTS and not mode.startswith("custom_"):
+        if mode not in RECALL_VARIANTS and mode != QUESTION_EXTRACTION_MODE and not mode.startswith("custom_"):
             raise ValueError("Unknown recall mode")
         self.profile = profile
         self.mode = mode
@@ -33,6 +35,8 @@ class ExamPointJudge:
         if mode.startswith("custom_"):
             from classcue.recall_schemes import custom_prompt_bundle
             self.bundle = custom_prompt_bundle(mode, scheme_snapshot)
+        elif mode == QUESTION_EXTRACTION_MODE:
+            self.bundle = load_prompt_bundle(directory=QUESTION_PROMPT_DIRECTORY)
         else:
             self.bundle = load_prompt_bundle(variant=RECALL_VARIANTS[mode])
         self._early_extraction = None
@@ -77,6 +81,7 @@ class ExamPointJudge:
             for words in group.values() for word in words
         ] if use_keyword_prefilter else []
         return LabConfig(
+            response_schema="question_intervals" if self.mode == QUESTION_EXTRACTION_MODE else "lab",
             scheme="few_shot", chunk_seconds=600, overlap_seconds=30,
             max_tokens=self.profile.max_tokens, reasoning_effort=self.profile.reasoning_effort,
             request_retries=self.profile.max_retries,

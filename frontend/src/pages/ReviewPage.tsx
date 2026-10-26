@@ -12,7 +12,7 @@ import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
 import { VideoPanel } from "../components/VideoPanel";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { captureVideoFrame } from "../utils/captureVideoFrame";
-import { useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useStudyData } from "../hooks/useStudyData";
+import { useCreateManualQuestionMutation, useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useQuestionEmphasisMutation, useRenameManualQuestionMutation, useStudyData } from "../hooks/useStudyData";
 import type { Marker, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, useMotionTransition, useReducedMotion } from "../components/Motion";
@@ -41,6 +41,9 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const markerMutation = useMarkerStatusMutation(videoId || 0, mockMode);
   const jumpTimeMutation = useMarkerJumpTimeMutation(videoId || 0, mockMode);
   const importanceMutation = useMarkerImportanceMutation(videoId || 0, mockMode);
+  const questionEmphasisMutation = useQuestionEmphasisMutation(videoId || 0, mockMode);
+  const createQuestionMutation = useCreateManualQuestionMutation(videoId || 0, mockMode);
+  const renameQuestionMutation = useRenameManualQuestionMutation(videoId || 0, mockMode);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [mode, setMode] = useState<MarkerMode>("medium_recall");
   const initializedModeVideo = useRef<number | null>(null);
@@ -51,6 +54,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const [selectedMarkerId, setSelectedMarkerId] = useState<number | null>(null);
   const lastChosenMarkerId = useRef<number | null>(null);
   const jumpTimeSavingRef = useRef(false);
+  const creatingQuestionRef = useRef(false);
+  const [createdMarkerId, setCreatedMarkerId] = useState<number | null>(null);
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
   const [lastRemoved, setLastRemoved] = useState<{ marker: Marker; previous: ReviewStatus } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -70,7 +75,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   );
   useEffect(() => {
     if (isLoading || (!mockMode && runs.isPending) || initializedModeVideo.current === videoId) return;
-    const initial = (["medium_recall", "low_recall", "high_recall", "strict_exam_intent"] as const)
+    const initial = (["medium_recall", "low_recall", "high_recall", "question_extraction", "strict_exam_intent"] as const)
       .find((candidate) => allMarkers.some((marker) => marker.analysis_mode === candidate));
     setMode(initial ?? allMarkers.find(marker => marker.analysis_mode.startsWith("custom_"))?.analysis_mode
       ?? runs.data?.find(run => run.analysis_mode.startsWith("custom_"))?.analysis_mode ?? "medium_recall");
@@ -133,17 +138,55 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   }, [jumpTimeMutation.mutateAsync]);
 
   useEffect(() => {
+    if (createdMarkerId === null) return;
+    const timer = window.setTimeout(() => setCreatedMarkerId(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [createdMarkerId]);
+
+  const createQuestion = useCallback(async () => {
+    if (creatingQuestionRef.current) return;
+    const time = videoRef.current?.currentTime;
+    if (time === undefined || !Number.isFinite(time) || time < 0) {
+      setJumpTimeError("无法读取当前播放位置，请稍后重试");
+      return;
+    }
+    const durationMs = Math.floor((duration > 0 ? duration : (video?.duration_ms ?? 0) / 1000) * 1000);
+    const timeMs = Math.max(0, Math.min(Math.round(time * 1000), durationMs > 0 ? durationMs - 1 : Infinity));
+    creatingQuestionRef.current = true;
+    setJumpTimeError(null);
+    try {
+      const created = await createQuestionMutation.mutateAsync(timeMs);
+      initializedModeVideo.current = videoId;
+      setMode("question_extraction");
+      setStatus("all");
+      setSelectedMarkerId(created.id);
+      lastChosenMarkerId.current = created.id;
+      setCreatedMarkerId(created.id);
+      setNotice(`已新增手动题目 · ${formatTime(created.start_ms)}`);
+    } catch (failure) {
+      setJumpTimeError(failure instanceof Error ? failure.message : "新增失败，请重试");
+    } finally {
+      creatingQuestionRef.current = false;
+    }
+  }, [createQuestionMutation.mutateAsync, duration, video?.duration_ms, videoId]);
+
+  useEffect(() => {
     if (isLoading || !video || (!mockMode && !canOpenReview(video.status, subtitles.length > 0))) return;
     const onMarkerShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing
         || settingsOpen || editingMarkerId !== null || jumpTimeMutation.isPending || jumpTimeSavingRef.current) return;
-      const action = (["previousMarker", "nextMarker", "captureTime"] as const).find(id => matchesShortcut(event, shortcuts, id));
+      const action = (["previousMarker", "nextMarker", "captureTime", "createQuestion"] as const).find(id => matchesShortcut(event, shortcuts, id));
       if (!action) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input[type="range"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) return;
       if (target?.closest('input:not([type="range"]), [data-shortcut-recorder], .video-caption, .review-tabs, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')
         || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, [role="dialog"][aria-modal="true"]')]
           .some((element) => !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
+      if (action === "createQuestion") {
+        event.preventDefault();
+        void createQuestion();
+        return;
+      }
       if (action === "captureTime") {
         const marker = allMarkers.find((item) => item.id === lastChosenMarkerId.current && item.review_status !== "excluded");
         if (!marker) return;
@@ -164,7 +207,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     };
     document.addEventListener("keydown", onMarkerShortcut);
     return () => document.removeEventListener("keydown", onMarkerShortcut);
-  }, [isLoading, video, mockMode, subtitles.length, settingsOpen, editingMarkerId, jumpTimeMutation.isPending, moveToMarker, allMarkers, duration, saveJumpTime, shortcuts]);
+  }, [isLoading, video, mockMode, subtitles.length, settingsOpen, editingMarkerId, jumpTimeMutation.isPending,
+    moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, shortcuts]);
 
   if (isLoading) {
     return <div className="app-shell"><TopBar /><div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在准备复习工作台…</span></div></div>;
@@ -250,6 +294,10 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               allMarkers={allMarkers}
               excludedMarkers={excludedMarkers}
               selectedMarkerId={selectedMarkerId}
+              createdMarkerId={createdMarkerId}
+              creatingQuestion={Boolean(createQuestionMutation.isPending)}
+              onCreateQuestion={() => void createQuestion()}
+              onRenameQuestion={async (marker, title) => { await renameQuestionMutation.mutateAsync({ marker, title }); }}
               viewedMarkerIds={viewedMarkerIds}
               onSelectMarker={(marker) => seekTo(markerJumpTime(marker) / 1000, marker.id)}
               editingMarkerId={editingMarkerId}
@@ -260,6 +308,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               getCurrentTimeMs={() => (videoRef.current?.currentTime ?? currentTime) * 1000}
               onSaveTime={saveJumpTime}
               onChangeImportance={async (marker, importance) => { await importanceMutation.mutateAsync({ marker, importance }); }}
+              onChangeQuestionEmphasis={async (marker, emphasized) => { await questionEmphasisMutation.mutateAsync({ marker, emphasized }); }}
               onSearchBilibili={mockMode ? undefined : marker => setBilibiliMarkerId(marker.id)}
               onChangeStatus={updateStatus}
               onUndo={undoRemove}

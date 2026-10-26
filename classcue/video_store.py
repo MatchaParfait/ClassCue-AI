@@ -10,7 +10,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from classcue.core import TranscriptSegment, TriggerMatch
+from classcue.core import TranscriptSegment, TriggerMatch, format_time
 from classcue.sqlite_connection import ClosingConnection
 from classcue.subtitle_search import initialize_subtitle_search, search_subtitles
 from classcue.bilibili_store import initialize_bilibili
@@ -292,6 +292,7 @@ class VideoStore:
             self._migrate_marker_review_status(connection)
             self._migrate_marker_jump_time(connection)
             self._migrate_marker_importance(connection)
+            self._migrate_question_emphasis(connection)
             run_columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_analysis_runs)")}
             for column in ("analysis_signature", "experiment_id"):
                 if column not in run_columns:
@@ -442,6 +443,7 @@ class VideoStore:
             VideoStore._migrate_marker_review_status(connection)
             VideoStore._migrate_marker_jump_time(connection)
             VideoStore._migrate_marker_importance(connection)
+            VideoStore._migrate_question_emphasis(connection)
             legacy_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(video_markers_legacy)")
             }
@@ -449,12 +451,13 @@ class VideoStore:
                 "id", "video_id", "start_ms", "end_ms", "title", "note",
                 "source_quote", "trigger_phrase", "confidence",
                 "analysis_mode", "review_status", "created_at", "user_start_ms", "user_start_updated_at", "importance",
+                "question_emphasis_override",
             )
             source = {field: f"legacy.{field}" for field in fields}
             for field, default in (("analysis_mode", "'high_recall'"), ("review_status", "'active'"), ("importance", "'standard'")):
                 if field not in legacy_columns:
                     source[field] = default
-            for field in ("user_start_ms", "user_start_updated_at"):
+            for field in ("user_start_ms", "user_start_updated_at", "question_emphasis_override"):
                 if field not in legacy_columns:
                     source[field] = "NULL"
             # Skip only identical copied rows. Any conflicting ID or key aborts
@@ -511,6 +514,15 @@ class VideoStore:
             connection.execute(
                 "ALTER TABLE video_markers ADD COLUMN importance TEXT NOT NULL DEFAULT 'standard' "
                 "CHECK(importance IN ('standard', 'important', 'critical'))"
+            )
+
+    @staticmethod
+    def _migrate_question_emphasis(connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_markers)")}
+        if "question_emphasis_override" not in columns:
+            connection.execute(
+                "ALTER TABLE video_markers ADD COLUMN question_emphasis_override INTEGER "
+                "CHECK(question_emphasis_override IN (0, 1))"
             )
 
     @staticmethod
@@ -1694,6 +1706,45 @@ class VideoStore:
         )
         return int(cursor.lastrowid)
 
+    def create_manual_question(self, video_id: int, time_ms: int) -> sqlite3.Row:
+        if type(time_ms) is not int or time_ms < 0:
+            raise ValueError("定位时间必须是非负整数")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            video = connection.execute("SELECT duration_ms FROM videos WHERE id = ?", (video_id,)).fetchone()
+            if video is None:
+                raise KeyError(video_id)
+            duration = int(video["duration_ms"])
+            if duration > 0:
+                if time_ms > duration:
+                    raise ValueError("定位时间不能超过视频时长")
+                time_ms = min(time_ms, duration - 1)
+            subtitle = connection.execute(
+                "SELECT text FROM video_transcript_segments "
+                "WHERE video_id = ? AND start_ms <= ? AND end_ms > ? ORDER BY start_ms, segment_id LIMIT 1",
+                (video_id, time_ms, time_ms),
+            ).fetchone()
+            marker_id = self._add_marker(
+                connection, video_id, time_ms, time_ms + 1,
+                f"手动题目 · {format_time(time_ms)}", "", subtitle["text"] if subtitle else "",
+                f"MANUAL-question:{uuid.uuid4().hex}", 1.0, "question_extraction",
+            )
+            return connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
+
+    def rename_manual_question(self, marker_id: int, title: str) -> sqlite3.Row:
+        title = title.strip()
+        if not title or len(title) > 200:
+            raise ValueError("题目名称需要 1 至 200 个字符")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            marker = connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
+            if marker is None:
+                raise KeyError(marker_id)
+            if marker["analysis_mode"] != "question_extraction" or not marker["trigger_phrase"].startswith("MANUAL-question:"):
+                raise ValueError("仅手动题目支持修改名称")
+            connection.execute("UPDATE video_markers SET title = ? WHERE id = ?", (title, marker_id))
+            return connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
+
     def publish_semantic_markers(
         self, video_id: int, analysis_mode: str, markers: list[dict], *,
         replace_existing: bool = False, complete_analysis: bool = False, should_stop=None,
@@ -1710,7 +1761,8 @@ class VideoStore:
             if replace_existing:
                 connection.execute(
                     "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
-                    "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard'",
+                    "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
+                    "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%'",
                     (video_id, analysis_mode),
                 )
             for marker in markers:
@@ -1808,11 +1860,46 @@ class VideoStore:
                 raise KeyError(marker_id)
             return connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
 
+    def question_emphasis_states(self, video_id: int) -> dict[int, bool]:
+        """Highlight question intervals within 60 seconds of any saved exam point."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT q.id, COALESCE(q.question_emphasis_override, EXISTS(
+                    SELECT 1 FROM video_markers m
+                    WHERE m.video_id = q.video_id AND m.analysis_mode != 'question_extraction'
+                    AND m.review_status != 'excluded'
+                    AND m.start_ms <= q.end_ms + 60000 AND m.end_ms >= q.start_ms - 60000
+                )) AS emphasized
+                FROM video_markers q
+                WHERE q.video_id = ? AND q.analysis_mode = 'question_extraction'
+                """,
+                (video_id,),
+            ).fetchall()
+        return {int(row["id"]): bool(row["emphasized"]) for row in rows}
+
+    def set_question_emphasis(self, marker_id: int, emphasized: bool | None) -> sqlite3.Row:
+        if emphasized is not None and type(emphasized) is not bool:
+            raise ValueError("强调状态必须是布尔值或空值")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            marker = connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
+            if marker is None:
+                raise KeyError(marker_id)
+            if marker["analysis_mode"] != "question_extraction":
+                raise ValueError("仅题目支持强调状态")
+            connection.execute(
+                "UPDATE video_markers SET question_emphasis_override = ? WHERE id = ?",
+                (None if emphasized is None else int(emphasized), marker_id),
+            )
+            return connection.execute("SELECT * FROM video_markers WHERE id = ?", (marker_id,)).fetchone()
+
     def delete_markers_for_mode(self, video_id: int, analysis_mode: str) -> None:
         with self.connect() as connection:
             connection.execute(
                 "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
-                "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard'",
+                "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
+                "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%'",
                 (video_id, analysis_mode),
             )
 
@@ -2079,7 +2166,8 @@ class VideoStore:
                 "SELECT * FROM video_markers WHERE video_id = ? AND analysis_mode = ?",
                 (video_id, mode),
             ).fetchall()
-            by_key = {(row["start_ms"], row["end_ms"], row["title"]): row for row in old}
+            by_key = {(row["start_ms"], row["end_ms"], row["title"]): row for row in old
+                      if not row["trigger_phrase"].startswith("MANUAL-question:")}
             retained = set()
             for item in results:
                 start, end, title = item["start_ms"], item["end_ms"], item["title"].strip()
@@ -2111,11 +2199,13 @@ class VideoStore:
                     row["id"] not in retained and row["review_status"] != "excluded"
                     and row["user_start_ms"] is None
                     and row["importance"] == "standard"
+                    and row["question_emphasis_override"] is None
                     and row["trigger_phrase"].startswith("AI-")
                 ):
                     # Recheck user edits made after the analysis snapshot.
                     connection.execute(
-                        "DELETE FROM video_markers WHERE id = ? AND user_start_ms IS NULL AND importance = 'standard'",
+                        "DELETE FROM video_markers WHERE id = ? AND user_start_ms IS NULL AND importance = 'standard' "
+                        "AND question_emphasis_override IS NULL",
                         (row["id"],),
                     )
             connection.execute(

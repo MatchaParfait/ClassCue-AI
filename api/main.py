@@ -263,6 +263,31 @@ class MarkerImportancePatch(BaseModel):
     importance: Literal["standard", "important", "critical"]
 
 
+class QuestionEmphasisPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    emphasized: bool | None = Field(..., strict=True)
+
+
+class ManualQuestionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    time_ms: int = Field(ge=0, strict=True)
+
+
+class ManualQuestionTitlePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200, strict=True)
+
+    @field_validator("title")
+    @classmethod
+    def normalized_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("题目名称不能为空")
+        return value.strip()
+
+
 class ASRSelectionPayload(BaseModel):
     model_id: str
     firered_device: Literal["gpu", "cpu"] | None = None
@@ -2434,7 +2459,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 "model": ai["model"],
                 "configured": ai["configured"],
             },
-            "analysis_modes": ["high_recall", "medium_recall", "low_recall",
+            "analysis_modes": ["high_recall", "medium_recall", "low_recall", "question_extraction",
                                *[item["id"] for item in provider.get().list_recall_schemes() if not item["archived"]]],
             "llm_chunk_seconds": 600,
             "llm_request_concurrency": ai["request_concurrency"],
@@ -3241,10 +3266,27 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     ) -> list[dict[str, object]]:
         video_store = provider.get()
         _video_or_404(video_store, video_id)
+        rows = _marker_rows(video_store, video_id, mode, review_status)
+        emphasis = video_store.question_emphasis_states(video_id) if any(
+            row["analysis_mode"] == "question_extraction" for row in rows
+        ) else {}
         return [
-            _row_to_dict(row)
-            for row in _marker_rows(video_store, video_id, mode, review_status)
+            {**_row_to_dict(row), **({"question_emphasized": emphasis.get(int(row["id"]), False)}
+                                   if row["analysis_mode"] == "question_extraction" else {})}
+            for row in rows
         ]
+
+    @api.post("/api/videos/{video_id}/manual-questions", status_code=201)
+    def create_manual_question(video_id: int, payload: ManualQuestionPayload) -> dict[str, object]:
+        video_store = provider.get()
+        try:
+            row = video_store.create_manual_question(video_id, payload.time_ms)
+            return {**_row_to_dict(row),
+                    "question_emphasized": video_store.question_emphasis_states(video_id)[int(row["id"])]}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="视频不存在")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @api.get("/api/videos/{video_id}/analysis-runs")
     def get_analysis_runs(video_id: int) -> list[dict[str, object]]:
@@ -3486,6 +3528,27 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             return _row_to_dict(provider.get().set_marker_importance(marker_id, payload.importance))
         except KeyError:
             raise HTTPException(status_code=404, detail="重点不存在")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @api.patch("/api/markers/{marker_id}/title")
+    def patch_manual_question_title(marker_id: int, payload: ManualQuestionTitlePatch) -> dict[str, object]:
+        try:
+            return _row_to_dict(provider.get().rename_manual_question(marker_id, payload.title))
+        except KeyError:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @api.patch("/api/markers/{marker_id}/question-emphasis")
+    def patch_question_emphasis(marker_id: int, payload: QuestionEmphasisPatch) -> dict[str, object]:
+        video_store = provider.get()
+        try:
+            row = video_store.set_question_emphasis(marker_id, payload.emphasized)
+            return {**_row_to_dict(row),
+                    "question_emphasized": video_store.question_emphasis_states(int(row["video_id"]))[marker_id]}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="题目不存在")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

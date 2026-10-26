@@ -1,11 +1,16 @@
-import type { RecallMode } from "./types";
+import type { BuiltinRecallMode, ExtractionMode, RecallMode } from "./types";
 
 export const RECALL_SELECTION_REQUIRED = "请至少选择一种考点召回类型后再开始处理";
 
-export const RECALL_MODES: { value: RecallMode; label: string }[] = [
+export const RECALL_MODES: { value: BuiltinRecallMode; label: string }[] = [
   { value: "high_recall", label: "高召回" },
   { value: "medium_recall", label: "中召回" },
   { value: "low_recall", label: "低召回" },
+];
+
+export const PROCESS_MODES: { value: ExtractionMode; label: string }[] = [
+  ...RECALL_MODES,
+  { value: "question_extraction", label: "题目提取" },
 ];
 
 export type ProcessForm = {

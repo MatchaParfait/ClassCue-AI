@@ -650,9 +650,9 @@ def test_processing_payload_accepts_three_modes_and_keeps_legacy_requests():
         VideoProcessPayload(analysis_mode="unknown")
 
 
-def test_processing_options_publish_three_modes_and_serial_chunk_configuration(ai_key_client):
+def test_processing_options_publish_extraction_modes_and_serial_chunk_configuration(ai_key_client):
     options = ai_key_client.get("/api/videos/1/processing-options").json()
-    assert options["analysis_modes"] == ["high_recall", "medium_recall", "low_recall"]
+    assert options["analysis_modes"] == ["high_recall", "medium_recall", "low_recall", "question_extraction"]
     assert options["llm_chunk_seconds"] == 600
     assert options["llm_request_concurrency"] == 1
     assert "reasoning_effort" in options

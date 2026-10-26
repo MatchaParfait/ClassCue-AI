@@ -151,6 +151,8 @@ function normalizeMarkers(raw: unknown): Marker[] {
     analysis_mode: item.analysis_mode as MarkerMode,
     review_status: item.review_status ?? "active",
     importance: item.importance ?? "standard",
+    question_emphasized: Boolean(item.question_emphasized),
+    question_emphasis_override: item.question_emphasis_override == null ? null : Boolean(item.question_emphasis_override),
   }));
 }
 
@@ -190,6 +192,30 @@ export async function updateMarkerImportance(markerId: number, importance: Marke
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ importance }),
+  });
+}
+
+export async function updateQuestionEmphasis(markerId: number, emphasized: boolean | null): Promise<Marker> {
+  return request<Marker>(`/api/markers/${markerId}/question-emphasis`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ emphasized }),
+  });
+}
+
+export async function createManualQuestion(videoId: number, timeMs: number): Promise<Marker> {
+  return request<Marker>(`/api/videos/${videoId}/manual-questions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ time_ms: timeMs }),
+  });
+}
+
+export async function renameManualQuestion(markerId: number, title: string): Promise<Marker> {
+  return request<Marker>(`/api/markers/${markerId}/title`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
   });
 }
 

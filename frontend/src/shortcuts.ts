@@ -8,6 +8,7 @@ export const shortcutDefinitions = [
   { id: "previousMarker", label: "上一个考点", group: "复习", defaults: ["A"], hint: "跳转到当前列表中的上一个考点。" },
   { id: "nextMarker", label: "下一个考点", group: "复习", defaults: ["D"], hint: "跳转到当前列表中的下一个考点。" },
   { id: "captureTime", label: "保存考点跳转时间", group: "复习", defaults: ["S"], hint: "用当前播放位置更新最近选中的考点跳转时间。" },
+  { id: "createQuestion", label: "新增手动题目定位", group: "复习", defaults: ["W"], hint: "在当前播放位置新增独立的手动题目定位。" },
   { id: "playPause", label: "播放 / 暂停", group: "播放器", defaults: ["Space", "K"], hint: "播放器获得焦点时生效。" },
   { id: "seekBack", label: "后退 5 秒", group: "播放器", defaults: ["ArrowLeft"], hint: "播放器获得焦点时生效。" },
   { id: "seekForward", label: "前进 5 秒", group: "播放器", defaults: ["ArrowRight"], hint: "播放器获得焦点时生效。" },
@@ -84,6 +85,11 @@ export function readShortcuts(): ShortcutMap {
   try {
     const saved = JSON.parse(raw ?? "{}");
     for (const { id } of shortcutDefinitions) if (Object.hasOwn(saved, id)) map[id] = saved[id];
+    // Keep old custom bindings when the new default key is already in use.
+    if (!Object.hasOwn(saved, "createQuestion")
+      && Object.entries(map).some(([id, bindings]) => id !== "createQuestion" && Array.isArray(bindings) && bindings.includes("W"))) {
+      map.createQuestion = [];
+    }
     // Old full-map saves included the default search keys even when never customized.
     if (legacy && Array.isArray(map.search) && map.search.length === 2
       && map.search.includes("Ctrl+K") && map.search.includes("Meta+K")) map.search = [];

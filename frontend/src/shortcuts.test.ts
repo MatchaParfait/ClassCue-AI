@@ -10,6 +10,19 @@ it("has no default search shortcut on either platform", () => {
   expect(matchesShortcut(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }), readShortcuts(), "search")).toBe(false);
   expect(matchesShortcut(new KeyboardEvent("keydown", { key: "k", metaKey: true }), readShortcuts(), "search")).toBe(false);
 });
+it("adds W for manual questions without changing the existing S command", () => {
+  window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify({ nextMarker: ["J"], captureTime: ["Ctrl+U"] }));
+  expect(readShortcuts().createQuestion).toEqual(["W"]);
+  expect(readShortcuts().captureTime).toEqual(["Ctrl+U"]);
+  expect(readShortcuts().nextMarker).toEqual(["J"]);
+  expect(defaultShortcuts().captureTime).toEqual(["S"]);
+});
+it("preserves older custom W bindings and leaves the new action unassigned on conflict", () => {
+  window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify({ nextMarker: ["W"], previousMarker: ["H"] }));
+  expect(readShortcuts().nextMarker).toEqual(["W"]);
+  expect(readShortcuts().previousMarker).toEqual(["H"]);
+  expect(readShortcuts().createQuestion).toEqual([]);
+});
 it.each([SHORTCUTS_KEY, "classroom.shortcuts.v1"])("ignores retired subtitle movement bindings in %s without resetting other shortcuts", (key) => {
   window.localStorage.setItem(key, JSON.stringify({
     ...defaultShortcuts(), previousMarker: ["H"], nextMarker: ["J"],

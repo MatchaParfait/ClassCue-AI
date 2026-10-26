@@ -40,6 +40,8 @@ vi.mock("./pages/BatchProcessPage", () => ({
 vi.mock("./hooks/useStudyData", () => ({
   useStudyData: () => ({ video: { id: 1, status: "review_ready" }, subtitles: [], markers: [], errors: {}, isLoading: false, source: {} }),
   useMarkerStatusMutation: () => ({}), useMarkerJumpTimeMutation: () => ({}), useMarkerImportanceMutation: () => ({}),
+  useQuestionEmphasisMutation: () => ({}),
+  useCreateManualQuestionMutation: () => ({}), useRenameManualQuestionMutation: () => ({}),
 }));
 vi.mock("./components/VideoPanel", () => ({ VideoPanel: () => <div>Review fixture</div> }));
 

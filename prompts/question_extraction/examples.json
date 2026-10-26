@@ -1,0 +1,80 @@
+[
+  {
+    "label": "完整讲题范围与少量证据编号",
+    "transcript": [
+      {"id": 1, "text": "我们来看一道二分查找的例题。"},
+      {"id": 2, "text": "有一个升序数组，要在里面查找目标值，要求返回它的位置。"},
+      {"id": 3, "text": "这里更新右边界时要判断中点是否已经排除。"},
+      {"id": 4, "text": "所以这个题最后得到的是左闭右开的写法。"}
+    ],
+    "expected": {
+      "candidates": [
+        {
+          "start_sentence_id": 1,
+          "end_sentence_id": 4,
+          "evidence_sentence_ids": [1, 2],
+          "title": "二分查找边界判断例题"
+        }
+      ]
+    }
+  },
+  {
+    "label": "没有考试提示的具体题目也要提取",
+    "transcript": [
+      {"id": 10, "text": "设函数 f(x) 等于 x 的平方减去 2x，求它的单调区间。"},
+      {"id": 11, "text": "先求导，导数等于 2x 减 2。"},
+      {"id": 12, "text": "因此在 1 的左边递减，右边递增。"}
+    ],
+    "expected": {
+      "candidates": [
+        {
+          "start_sentence_id": 10,
+          "end_sentence_id": 12,
+          "evidence_sentence_ids": [10],
+          "title": "二次函数单调区间计算题"
+        }
+      ]
+    }
+  },
+  {
+    "label": "普通方法讲解不提取",
+    "transcript": [
+      {"id": 20, "text": "二分查找一般使用左右边界不断缩小区间。"},
+      {"id": 21, "text": "这种题要特别注意循环结束的条件。"}
+    ],
+    "expected": {"candidates": []}
+  },
+  {
+    "label": "相邻的两道题分别提取",
+    "transcript": [
+      {"id": 30, "text": "第一题给定一个矩阵，求它的转置。"},
+      {"id": 31, "text": "交换行列下标以后就得到结果。"},
+      {"id": 32, "text": "再看第二题，给定一个图，判断它是否连通。"},
+      {"id": 33, "text": "从任意顶点开始做一次搜索即可判断。"}
+    ],
+    "expected": {
+      "candidates": [
+        {
+          "start_sentence_id": 30,
+          "end_sentence_id": 31,
+          "evidence_sentence_ids": [30],
+          "title": "矩阵转置计算题"
+        },
+        {
+          "start_sentence_id": 32,
+          "end_sentence_id": 33,
+          "evidence_sentence_ids": [32],
+          "title": "图连通性判断题"
+        }
+      ]
+    }
+  },
+  {
+    "label": "只有模糊指代时不提取",
+    "transcript": [
+      {"id": 40, "text": "上一题的答案大家应该已经看到了。"},
+      {"id": 41, "text": "这里最容易错的是符号。"}
+    ],
+    "expected": {"candidates": []}
+  }
+]

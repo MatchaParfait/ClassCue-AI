@@ -11,7 +11,8 @@ function decodeSelection(raw: string | null): RecallMode[] {
     try {
       const value: unknown = JSON.parse(raw);
       if (Array.isArray(value) && value.length <= 8 && value.every(mode => typeof mode === "string"
-        && (/^(high|medium|low)_recall$/.test(mode) || /^custom_[a-f0-9]{32}$/.test(mode)))) {
+        && (/^(high|medium|low)_recall$/.test(mode) || mode === "question_extraction"
+          || /^custom_[a-f0-9]{32}$/.test(mode)))) {
         return [...new Set(value)] as RecallMode[];
       }
     } catch { /* Invalid preferences use the first-use default. */ }

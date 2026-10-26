@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { searchSubtitles, getSearchPreviewUrl } from "./client";
 import { getAiSettings, saveAiSettings } from "./client";
-import { getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
+import { createManualQuestion, renameManualQuestion, getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, updateQuestionEmphasis, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -109,6 +109,46 @@ it("defaults old markers to standard importance and preserves saved importance",
     { id: 2, video_id: 1, start_ms: 1000, end_ms: 2000, importance: "critical" },
   ] }));
   expect((await getMarkers(1)).value.map((marker) => marker.importance)).toEqual(["standard", "critical"]);
+});
+
+it.each([true, false, null])("saves question emphasis %s without sending other marker edits", async (emphasized) => {
+  const marker = { id: 9, question_emphasized: emphasized ?? true,
+    question_emphasis_override: emphasized === null ? null : Number(emphasized) };
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => marker });
+  vi.stubGlobal("fetch", fetch);
+  expect(await updateQuestionEmphasis(9, emphasized)).toEqual(marker);
+  expect(fetch).toHaveBeenCalledWith("/api/markers/9/question-emphasis", expect.objectContaining({
+    method: "PATCH", body: JSON.stringify({ emphasized }),
+  }));
+});
+
+it("keeps automatic emphasis and explicit manual cancellation distinct", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [
+    { id: 1, question_emphasized: true, question_emphasis_override: null },
+    { id: 2, question_emphasized: false, question_emphasis_override: 0 },
+  ] }));
+  expect((await getMarkers(1)).value.map(marker => [marker.question_emphasized, marker.question_emphasis_override]))
+    .toEqual([[true, null], [false, false]]);
+});
+
+it("creates an independent manual point using only the captured playback time", async () => {
+  const marker = { id: 9, start_ms: 150_425, analysis_mode: "question_extraction" };
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => marker });
+  vi.stubGlobal("fetch", fetch);
+  expect(await createManualQuestion(7, 150_425)).toEqual(marker);
+  expect(fetch).toHaveBeenCalledWith("/api/videos/7/manual-questions", expect.objectContaining({
+    method: "POST", body: JSON.stringify({ time_ms: 150_425 }),
+  }));
+});
+
+it("renames a manual point without submitting its timestamps or status", async () => {
+  const marker = { id: 9, title: "Updated" };
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => marker });
+  vi.stubGlobal("fetch", fetch);
+  expect(await renameManualQuestion(9, "Updated")).toEqual(marker);
+  expect(fetch).toHaveBeenCalledWith("/api/markers/9/title", expect.objectContaining({
+    method: "PATCH", body: JSON.stringify({ title: "Updated" }),
+  }));
 });
 it("checks folders without starting a job and retries by durable batch id", async () => {
   const preview = { valid: true, folders: [] };

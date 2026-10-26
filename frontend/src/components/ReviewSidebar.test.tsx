@@ -31,7 +31,7 @@ describe("recall review navigation", () => {
     };
     try {
       render(<ReviewSidebar {...props} />);
-      expect(container.querySelectorAll(".mode-switcher [role=tab]").length).toBe(3);
+      expect(container.querySelectorAll(".mode-switcher [role=tab]").length).toBe(4);
       expect(container.querySelector(".mode-switcher [aria-selected=true]")?.textContent).toBe("低召回1");
       expect(container.textContent).not.toContain("旧版考点");
       const jump = container.querySelector<HTMLButtonElement>(".marker-main")!;
@@ -82,7 +82,7 @@ describe("recall review navigation", () => {
       render(<ReviewSidebar {...props} allMarkers={[
         ...markers, { ...markers[0], id: 2, analysis_mode: "strict_exam_intent" },
       ]} />);
-      expect(container.querySelectorAll(".mode-switcher [role=tab]").length).toBe(4);
+      expect(container.querySelectorAll(".mode-switcher [role=tab]").length).toBe(5);
       expect(container.textContent).toContain("旧版考点");
       const quote = "教师要求能够在理解的基础上设计算法，并说明分析问题和验证算法的方法。".repeat(5);
       render(<ReviewSidebar {...props} markers={[{ ...markers[0], source_quote: quote }]} />);
