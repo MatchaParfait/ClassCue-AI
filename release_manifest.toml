@@ -43,6 +43,7 @@ files = [
     "classcue/question_captures.py",
     "classcue/question_service.py",
     "classcue/question_store.py",
+    "classcue/question_visuals.py",
     "classcue/citation_matching.py",
     "classcue/cleanup_progress.py",
     "classcue/core.py",

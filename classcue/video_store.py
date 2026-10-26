@@ -871,6 +871,7 @@ class VideoStore:
         "video_share_imports",
         "question_analyses",
         "question_captures",
+        "question_visuals",
         "bili_frames",
         "bili_study_runs",
         "bili_read_cache",
@@ -1291,7 +1292,7 @@ class VideoStore:
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
                     "llm_experiment_results",
                     "video_share_imports",
-                    "question_materials", "question_analyses", "question_captures",
+                    "question_materials", "question_analyses", "question_captures", "question_visuals",
                     "bili_marker_context", "bili_study_runs", "bili_run_trace",
                     "bili_frames", "bili_read_cache",
                 ):
@@ -1938,7 +1939,10 @@ class VideoStore:
                 connection.execute(
                     "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
                     "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
-                    "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%'",
+                    "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%' "
+                    "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
+                    "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
+                    "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
                     (video_id, analysis_mode),
                 )
             for marker in markers:
@@ -2075,7 +2079,10 @@ class VideoStore:
             connection.execute(
                 "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
                 "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
-                "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%'",
+                "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%' "
+                "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
+                "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
+                "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
                 (video_id, analysis_mode),
             )
 
@@ -2381,7 +2388,10 @@ class VideoStore:
                     # Recheck user edits made after the analysis snapshot.
                     connection.execute(
                         "DELETE FROM video_markers WHERE id = ? AND user_start_ms IS NULL AND importance = 'standard' "
-                        "AND question_emphasis_override IS NULL",
+                        "AND question_emphasis_override IS NULL "
+                        "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
+                        "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
+                        "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
                         (row["id"],),
                     )
             connection.execute(

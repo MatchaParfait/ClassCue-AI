@@ -9,6 +9,9 @@ import { PROCESS_MODES } from "../processOptions";
 import { MarkerTimeEditor } from "./MarkerTimeEditor";
 import { MarkerImportanceControl } from "./MarkerImportanceControl";
 import { RecallAnalysisPanel } from "./RecallAnalysisPanel";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { assignQuestionImages, getQuestionVisuals } from "../api/questionVisuals";
+import { QuestionVisualButton } from "./QuestionVisualButton";
 
 interface ReviewSidebarProps {
   analysisVideoId?: number;
@@ -45,6 +48,9 @@ interface ReviewSidebarProps {
   onChangeImportance: (marker: Marker, importance: MarkerImportance) => Promise<void>;
   onChangeQuestionEmphasis?: (marker: Marker, emphasized: boolean) => Promise<void>;
   onSearchBilibili?: (marker: Marker) => void;
+  onCaptureQuestion?: (marker: Marker) => Promise<void>;
+  onRemoveQuestionImage?: (marker: Marker) => Promise<void>;
+  imageSaving?: boolean;
 }
 
 export function ReviewSidebar({
@@ -82,9 +88,33 @@ export function ReviewSidebar({
   onChangeImportance,
   onChangeQuestionEmphasis,
   onSearchBilibili,
+  onCaptureQuestion,
+  onRemoveQuestionImage,
+  imageSaving = false,
 }: ReviewSidebarProps) {
   const shortcuts = useShortcuts();
   const schemes = useRecallSchemes(Boolean(analysisVideoId));
+  const queryClient = useQueryClient();
+  const visuals = useQuery({
+    queryKey: ["question-visuals", analysisVideoId], queryFn: () => getQuestionVisuals(analysisVideoId!),
+    enabled: Boolean(analysisVideoId) && mode === "question_extraction",
+    retry: false, refetchInterval: query => query.state.data?.active ? 1500 : 10000,
+    refetchIntervalInBackground: false,
+  });
+  const [imageError, setImageError] = useState<string | null>(null);
+  const questionIds = allMarkers.filter(marker => marker.analysis_mode === "question_extraction")
+    .map(marker => marker.id).join(",");
+  useEffect(() => {
+    if (!analysisVideoId || mode !== "question_extraction" || visuals.data?.active !== false) return;
+    let current = true;
+    setImageError(null);
+    void assignQuestionImages(analysisVideoId).then(value => {
+      if (current) queryClient.setQueryData(["question-visuals", analysisVideoId], value);
+    }).catch((error: unknown) => {
+      if (current) setImageError(error instanceof Error ? error.message : "自动配图失败");
+    });
+    return () => { current = false; };
+  }, [analysisVideoId, mode, visuals.data?.active, questionIds, queryClient]);
   const customIds = [...new Set([
     ...(schemes.data ?? []).filter(item => !item.archived).map(item => item.id),
     ...allMarkers.filter(marker => marker.analysis_mode.startsWith("custom_")).map(marker => marker.analysis_mode as RecallMode),
@@ -180,6 +210,9 @@ export function ReviewSidebar({
         <span><Circle size={12} /> {modeCount - viewedCount} 个未看</span>
         <span><Check size={13} /> {viewedCount} 个已看</span>
       </div>
+      {mode === "question_extraction" && (imageError || visuals.error) && <p className="field-error" role="status">
+        {imageError ?? visuals.error?.message}
+      </p>}
 
       {canUndo && (
         <div className="undo-banner">
@@ -211,6 +244,11 @@ export function ReviewSidebar({
             }}>
             <div className="marker-time-row">
               <button className="marker-time marker-time-jump" type="button" title="跳转到这个重点" onClick={() => onSelectMarker(marker)}>{formatTime(markerJumpTime(marker))}</button>
+              {analysisVideoId && marker.analysis_mode === "question_extraction" && <QuestionVisualButton marker={marker}
+                state={visuals.data?.items.find(item => item.marker_id === marker.id)}
+                busy={imageSaving || (visuals.data?.active ?? false)}
+                onCapture={onCaptureQuestion ? () => onCaptureQuestion(marker) : undefined}
+                onRemove={onRemoveQuestionImage ? () => onRemoveQuestionImage(marker) : undefined} />}
               <button className="icon-button marker-edit-time" type="button" title={shortcutTitle("调整跳转时间；快捷键直接保存最近选中考点的播放位置", shortcuts, "captureTime")} aria-label={`调整跳转时间：${marker.title}`}
                 disabled={timeSaving} aria-expanded={editingMarkerId === marker.id} onClick={() => onEditMarker(editingMarkerId === marker.id ? null : marker.id)}><Pencil size={14} /></button>
               {marker.user_start_ms != null && <span className="marker-time-adjusted">已调整 · 原始定位 {formatTime(marker.start_ms)}</span>}

@@ -11,6 +11,8 @@ from classcue.question_captures import QuestionCaptures, initialize_captures
 
 
 def initialize_questions(connection):
+    from classcue.question_visuals import initialize_visuals
+    initialize_visuals(connection)
     initialize_captures(connection)
     connection.execute("""CREATE TABLE IF NOT EXISTS question_materials (
         marker_id INTEGER PRIMARY KEY REFERENCES video_markers(id) ON DELETE CASCADE,

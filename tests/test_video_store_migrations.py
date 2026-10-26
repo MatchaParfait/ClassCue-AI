@@ -61,7 +61,7 @@ def legacy_database(tmp_path):
         # so they never pointed at a legacy video_markers in real databases.
         for table in (
             "bili_marker_context", "bili_study_runs", "bili_frames",
-            "question_materials", "question_analyses", "question_captures",
+            "question_materials", "question_analyses", "question_captures", "question_visuals",
         ):
             connection.execute(f"DROP TABLE {table}")
         connection.execute("DROP TABLE video_markers")

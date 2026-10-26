@@ -128,6 +128,7 @@ class ExamPointJudge:
                           ])
             if progress:
                 progress(1.0, "已复用相同提示词、配置和字幕的结果")
+            self._assign_images(store, video_id, should_stop)
             return "skipped", int(previous["candidate_count"])
         if should_stop and should_stop():
             raise ProcessingCancelled("用户已请求停止处理")
@@ -159,7 +160,13 @@ class ExamPointJudge:
                 raise ProcessingCancelled("用户已请求停止处理")
             store.publish_exam_results(video_id, self.mode, report["results"], signature, run_id,
                                        scheme_revision=self.scheme_revision)
+            self._assign_images(store, video_id, should_stop)
             return "completed", report["candidate_count"]
         except Exception:
             store.set_analysis_run(video_id, self.mode, "failed")
             raise
+
+    def _assign_images(self, store, video_id, should_stop):
+        if self.mode == QUESTION_EXTRACTION_MODE:
+            from classcue.question_visuals import assign_after_extraction
+            assign_after_extraction(store, video_id, should_cancel=should_stop or (lambda: False))

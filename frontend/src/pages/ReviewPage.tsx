@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, CheckCircle2, LoaderCircle, X } from "lucide-react";
 import { useShortcuts, matchesShortcut, isShortcutInput, isUndoShortcut } from "../shortcuts";
@@ -12,6 +12,8 @@ import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
 import { VideoPanel } from "../components/VideoPanel";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { captureVideoFrame } from "../utils/captureVideoFrame";
+import { captureQuestionImage, getQuestionVisual, setQuestionImage, type ImageSelection,
+  type QuestionVisual } from "../api/questionVisuals";
 import { useCreateManualQuestionMutation, useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useQuestionEmphasisMutation, useRenameManualQuestionMutation, useStudyData } from "../hooks/useStudyData";
 import type { Marker, MarkerImportance, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
@@ -21,7 +23,8 @@ type ReviewChange =
   | { kind: "time"; previous: number | null; next: number | null }
   | { kind: "title"; previous: string; next: string }
   | { kind: "importance"; previous: MarkerImportance; next: MarkerImportance }
-  | { kind: "emphasis"; previous: boolean | null; next: boolean | null };
+  | { kind: "emphasis"; previous: boolean | null; next: boolean | null }
+  | { kind: "image"; previous: ImageSelection; next: ImageSelection };
 type ReviewUndoAction = { sequence: number; marker: Marker } & (
   | { kind: "create"; previous: ReviewStatus }
   | { kind: "remove"; previous: ReviewStatus }
@@ -30,6 +33,7 @@ type ReviewUndoAction = { sequence: number; marker: Marker } & (
 const undoLabels: Record<ReviewUndoAction["kind"], string> = {
   create: "已新增手动题目", remove: "重点已移除", time: "已调整跳转时间",
   title: "已修改题目名称", importance: "已修改重要程度", emphasis: "已修改题目强调",
+  image: "已修改题图",
 };
 
 export function ReviewPage({ demo = false }: { demo?: boolean }) {
@@ -44,6 +48,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const mockMode = demo || import.meta.env.VITE_USE_MOCK === "true";
   const navigate = useNavigate();
   const study = useStudyData(videoId || 0, mockMode);
+  const queryClient = useQueryClient();
   const { video, subtitles, markers: allMarkers, errors, isLoading } = study;
   const runs = useQuery({
     queryKey: ["study", "analysis-runs", videoId], queryFn: () => getAnalysisRuns(videoId),
@@ -71,6 +76,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const jumpTimeSavingRef = useRef(false);
   const creatingQuestionRef = useRef(false);
   const changingStatusRef = useRef(false);
+  const imageSavingRef = useRef(false);
+  const [imageSaving, setImageSaving] = useState(false);
   const undoingRef = useRef(false);
   const nextUndoSequence = useRef(0);
   const pendingEditsRef = useRef(0);
@@ -149,6 +156,12 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     }
   }, [markerMutation.mutateAsync, replaceUndoHistory]);
 
+  const publishQuestionImage = useCallback((marker: Marker, value: QuestionVisual) => {
+    queryClient.setQueryData(["question-visual", marker.id], value);
+    for (const queryKey of [["question-visuals", marker.video_id], ["question", marker.id], ["bilibili", marker.id]])
+      void queryClient.invalidateQueries({ queryKey });
+  }, [queryClient]);
+
   const applyChange = useCallback(async (marker: Marker, change: ReviewChange, undo = false) => {
     switch (change.kind) {
       case "time":
@@ -163,9 +176,12 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       case "emphasis":
         await questionEmphasisMutation.mutateAsync({ marker, emphasized: undo ? change.previous : change.next });
         break;
+      case "image":
+        publishQuestionImage(marker, await setQuestionImage(marker.id, undo ? change.previous : change.next));
+        break;
     }
   }, [jumpTimeMutation.mutateAsync, renameQuestionMutation.mutateAsync,
-    importanceMutation.mutateAsync, questionEmphasisMutation.mutateAsync]);
+    importanceMutation.mutateAsync, questionEmphasisMutation.mutateAsync, publishQuestionImage]);
 
   const saveChange = useCallback(async (marker: Marker, change: ReviewChange) => {
     if (undoingRef.current || creatingQuestionRef.current || changingStatusRef.current) throw new Error("正在保存，请稍后重试");
@@ -182,6 +198,57 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       setPendingEdits(pendingEditsRef.current);
     }
   }, [applyChange, replaceUndoHistory]);
+
+  const captureQuestion = useCallback(async (marker: Marker) => {
+    if (imageSavingRef.current || undoingRef.current || creatingQuestionRef.current || changingStatusRef.current) return;
+    const sequence = ++nextUndoSequence.current;
+    imageSavingRef.current = true;
+    setImageSaving(true);
+    pendingEditsRef.current += 1;
+    setPendingEdits(pendingEditsRef.current);
+    setJumpTimeError(null);
+    try {
+      const frame = await captureVideoFrame(videoRef.current);
+      const result = await captureQuestionImage(marker.id, frame);
+      publishQuestionImage(marker, result.visual);
+      replaceUndoHistory([...undoHistoryRef.current, { sequence, marker, kind: "image",
+        previous: result.previous_image,
+        next: { capture_id: result.visual.binding!.capture_id, binding_mode: "manual" } }]);
+      setNotice(`题图已保存 · ${formatTime(frame.captured_at_ms)}`);
+    } catch (failure) {
+      setJumpTimeError(`截图保存失败：${errorMessage(failure)}`);
+    } finally {
+      imageSavingRef.current = false;
+      setImageSaving(false);
+      pendingEditsRef.current -= 1;
+      setPendingEdits(pendingEditsRef.current);
+    }
+  }, [publishQuestionImage, replaceUndoHistory]);
+
+  const removeQuestionImage = useCallback(async (marker: Marker) => {
+    if (imageSavingRef.current || undoingRef.current || creatingQuestionRef.current || changingStatusRef.current) return;
+    const sequence = ++nextUndoSequence.current;
+    imageSavingRef.current = true;
+    setImageSaving(true);
+    pendingEditsRef.current += 1;
+    setPendingEdits(pendingEditsRef.current);
+    try {
+      const current = await getQuestionVisual(marker.id);
+      const next: ImageSelection = { capture_id: null, binding_mode: "manual" };
+      const saved = await setQuestionImage(marker.id, next);
+      publishQuestionImage(marker, saved);
+      replaceUndoHistory([...undoHistoryRef.current, { sequence, marker, kind: "image",
+        previous: { capture_id: current.binding?.capture_id ?? null, binding_mode: current.binding_mode ?? "auto" }, next }]);
+      setNotice("已取消题图");
+    } catch (failure) {
+      setJumpTimeError(`取消题图失败：${errorMessage(failure)}`);
+    } finally {
+      imageSavingRef.current = false;
+      setImageSaving(false);
+      pendingEditsRef.current -= 1;
+      setPendingEdits(pendingEditsRef.current);
+    }
+  }, [publishQuestionImage, replaceUndoHistory]);
 
   const undoReviewAction = useCallback(async () => {
     const action = undoHistoryRef.current.at(-1);
@@ -423,6 +490,9 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onChangeImportance={(marker, importance) => saveChange(marker, { kind: "importance", previous: marker.importance ?? "standard", next: importance })}
               onChangeQuestionEmphasis={(marker, emphasized) => saveChange(marker, { kind: "emphasis", previous: marker.question_emphasis_override ?? null, next: emphasized })}
               onSearchBilibili={mockMode ? undefined : marker => setBilibiliMarkerId(marker.id)}
+              onCaptureQuestion={mockMode ? undefined : captureQuestion}
+              onRemoveQuestionImage={mockMode ? undefined : removeQuestionImage}
+              imageSaving={imageSaving || undoing}
               onChangeStatus={(marker, nextStatus) => void updateStatus(marker, nextStatus)}
               onUndo={() => void undoReviewAction()}
               canUndo={undoHistory.length > 0}

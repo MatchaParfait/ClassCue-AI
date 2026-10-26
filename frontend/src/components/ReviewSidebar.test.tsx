@@ -5,6 +5,7 @@ import { ReviewSidebar } from "./ReviewSidebar";
 import type { Marker } from "../types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import * as questionVisuals from "../api/questionVisuals";
 
 describe("recall review navigation", () => {
   it("keeps three modes separate and displays legacy results only when present", async () => {
@@ -102,6 +103,23 @@ describe("recall review navigation", () => {
       expect(toggle.textContent).toBe("展开原文");
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(props.onSelectMarker).not.toHaveBeenCalled();
+      const visualRequests = vi.spyOn(questionVisuals, "getQuestionVisuals")
+        .mockResolvedValue({ items: [], active: false });
+      const assignments = vi.spyOn(questionVisuals, "assignQuestionImages")
+        .mockResolvedValue({ items: [], active: false });
+      client.setQueryData(["settings", "recall-schemes"], []);
+      const question: Marker = { ...markers[0], analysis_mode: "question_extraction" };
+      try {
+        render(<ReviewSidebar {...props} analysisVideoId={1} mode="question_extraction"
+          markers={[question]} allMarkers={[question]} />);
+        expect(container.querySelector(".question-visual-button")).not.toBeNull();
+        expect(visualRequests).toHaveBeenCalledWith(1);
+        act(() => container.querySelector<HTMLButtonElement>(".marker-time-jump")!.click());
+        expect(props.onSelectMarker).toHaveBeenCalledWith(question);
+      } finally {
+        visualRequests.mockRestore();
+        assignments.mockRestore();
+      }
     } finally {
       act(() => root.unmount());
       container.remove();

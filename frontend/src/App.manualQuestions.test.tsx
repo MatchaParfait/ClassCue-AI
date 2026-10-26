@@ -5,6 +5,15 @@ import App from "./App";
 import * as api from "./api/client";
 import { defaultShortcuts, saveShortcuts } from "./shortcuts";
 import type { Marker } from "./types";
+import * as questionImages from "./api/questionVisuals";
+import * as frameCapture from "./utils/captureVideoFrame";
+
+vi.mock("./api/questionVisuals", async original => ({
+  ...await original<typeof import("./api/questionVisuals")>(),
+  getQuestionVisuals: vi.fn().mockResolvedValue({ items: [], active: false }),
+  assignQuestionImages: vi.fn().mockResolvedValue({ items: [], active: false }),
+  captureQuestionImage: vi.fn(), setQuestionImage: vi.fn(),
+}));
 
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),
@@ -37,6 +46,8 @@ function row(id: number) { return container.querySelector<HTMLElement>(`[data-ma
 
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.mocked(questionImages.getQuestionVisuals).mockResolvedValue({ items: [], active: false });
+  vi.mocked(questionImages.assignQuestionImages).mockResolvedValue({ items: [], active: false });
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => storage.set(key, value) });
@@ -513,4 +524,38 @@ it("does not add unchanged or failed field saves to undo history", async () => {
   key("z", { ctrlKey: true });
   await until(() => expect(api.updateMarkerJumpTime).toHaveBeenLastCalledWith(4, null));
   expect(container.querySelector(".undo-banner")?.textContent).toContain("已新增手动题目");
+});
+
+it("captures the current frame for the clicked question and Ctrl+Z restores its old image", async () => {
+  switchQuestions();
+  await until(() => expect(row(1)?.querySelector(".question-capture-current")).not.toBeNull());
+  const frame = { blob: new Blob(["synthetic"], { type: "image/png" }), captured_at_ms: 150425 };
+  const screenshot = vi.spyOn(frameCapture, "captureVideoFrame").mockResolvedValue(frame);
+  const original = { capture_id: "old", binding_mode: "auto" as const };
+  const visual = { marker_id: 1, question_id: "stable", status: "completed" as const,
+    verdict: "uncertain" as const, reason: "", binding_mode: "manual" as const,
+    algorithm: "question-image-time-v1",
+    binding: { capture_id: "new", slide_id: null, source: "capture" as const, representative_ms: 150425 } };
+  vi.mocked(questionImages.captureQuestionImage).mockResolvedValue({ visual, previous_image: original });
+  vi.mocked(questionImages.setQuestionImage).mockResolvedValue({
+    ...visual, binding_mode: "auto", binding: { ...visual.binding, capture_id: "old" },
+  });
+  await act(async () => row(1).querySelector<HTMLButtonElement>(".question-capture-current")!.click());
+  await until(() => expect(questionImages.captureQuestionImage).toHaveBeenCalledWith(1, frame));
+  expect(screenshot).toHaveBeenCalledWith(container.querySelector("video"));
+  expect(container.querySelector("video")!.currentTime).toBe(150.425);
+  expect(api.updateMarkerJumpTime).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  key("z", { ctrlKey: true });
+  await until(() => expect(questionImages.setQuestionImage).toHaveBeenCalledWith(1, original));
+});
+
+it("a failed current-frame capture leaves the image and undo history unchanged", async () => {
+  switchQuestions();
+  await until(() => expect(row(1)?.querySelector(".question-capture-current")).not.toBeNull());
+  vi.spyOn(frameCapture, "captureVideoFrame").mockRejectedValue(new Error("Frame unavailable"));
+  await act(async () => row(1).querySelector<HTMLButtonElement>(".question-capture-current")!.click());
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("Frame unavailable"));
+  expect(questionImages.captureQuestionImage).not.toHaveBeenCalled();
+  expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
 });

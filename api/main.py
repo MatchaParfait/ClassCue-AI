@@ -3134,7 +3134,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 update: Callable[[float, str, str | None], None],
                 should_cancel: Callable[[], bool],
             ) -> object:
-                return extract_and_store_slides(
+                result = extract_and_store_slides(
                     store,
                     video_id,
                     slide_root,
@@ -3144,6 +3144,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                     progress=update,
                     should_stop=should_cancel,
                 )
+                from classcue.question_visuals import assign_after_extraction
+                assign_after_extraction(store, video_id, slide_root=slide_root, should_cancel=should_cancel)
+                return result
 
             try:
                 job_id = jobs.submit(
