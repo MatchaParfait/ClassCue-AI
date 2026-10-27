@@ -491,6 +491,14 @@ GitHub Actions 的 `Tests` 工作流在分支推送和 PR 时运行 Windows 后�
 
 贡献说明见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 
+## 分类复习资料库
+
+“复习资料”功能暂缓开发，默认隐藏入口，直接访问资料页返回视频库。
+源码、既有 API 和本地资料保留，不自动启动或恢复模型整理任务。
+本地可通过 `VITE_ENABLE_MATERIALS=true` 重新开启前端，需重启 Vite 或重新构建。
+恢复步骤、已实现边界、待办和合成验收见[分类复习资料库](material-library.md)。
+本阶段不运行视频例题自动匹配。
+
 ## 许可证
 
 本项目采用 [MIT License](../LICENSE)。

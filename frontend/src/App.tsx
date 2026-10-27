@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Clock3,
   Database,
+  BookOpen,
   FileVideo,
   Folder,
   FolderInput,
@@ -41,7 +42,8 @@ import {
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { createBrowserRouter, RouterProvider, Link, Route, Routes, useLocation, useNavigate, useNavigationType, type Location } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, Link, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, type Location } from "react-router-dom";
+import { MATERIALS_ENABLED } from "./featureFlags";
 import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestLibraryUndo, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoLibraryEdit } from "./api/client";
 import type { LibraryFolder, LibraryOrderItem } from "./api/client";
 import { GlobalSearchProvider, GlobalSearchButton } from "./components/GlobalSearch";
@@ -86,6 +88,7 @@ const ProcessPage = lazy(() => import("./components/ProcessPage").then(module =>
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then(module => ({ default: module.SettingsPage })));
 const BatchProcessPage = lazy(() => import("./pages/BatchProcessPage").then(module => ({ default: module.BatchProcessPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
+const MaterialsPage = lazy(() => import("./pages/MaterialsPage").then(module => ({ default: module.MaterialsPage })));
 
 function PageLoading() {
   return <div className="library-state" role="status"><LoaderCircle className="spin" size={18} />正在打开页面…</div>;
@@ -131,7 +134,7 @@ function ApplicationViews() {
   </ReviewTabsProvider>;
 }
 
-const PAGE_PATHS = ["/process", "/batch-process", "/settings"];
+const PAGE_PATHS = ["/process", "/batch-process", "/settings", "/materials"];
 
 function Workbench({ visible }: { visible: boolean }) {
   const reviewTabs = useReviewTabs();
@@ -282,6 +285,9 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
                 if (active) navigate(`/process?videoId=${video.id}`, { replace: true, state: { ...location.state, draftKey: panelKey(screen) } });
               }} />} />
             <Route path="/batch-process" element={<BatchProcessPage active={active} onClose={close} onJob={onJob} />} />
+            <Route path="/materials" element={MATERIALS_ENABLED
+              ? <MaterialsPage key={scope} scope={scope} active={active} onJob={onJob} />
+              : <Navigate to="/" replace />} />
             <Route path="/settings" element={<SettingsPage active={active} onClose={close} onJob={onJob}
               onConfigurationSaved={!onboardingActive && active && /^\/(process|batch-process|tasks)/.test(screen.state?.returnTo ?? "") ? close : undefined} />} />
           </Routes></Suspense>
@@ -1277,6 +1283,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         <div className="library-heading">
           <div className="library-heading-copy"><p className="character-tagline">收藏课程，温习重点。</p><h1 tabIndex={-1}>视频库</h1><span className="library-total">{videoList.length} 个视频 · {visibleFolders.length} 个文件夹</span></div>
           <div className="library-heading-actions">
+            {MATERIALS_ENABLED && <Link className="secondary-button" to="/materials"><BookOpen size={17} />复习资料</Link>}
             <Link className="primary-button" to="/process"><FileVideo size={17} />导入视频</Link>
             <Link className="secondary-button" to="/batch-process"><FolderOpen size={17} />导入文件夹</Link>
           </div>

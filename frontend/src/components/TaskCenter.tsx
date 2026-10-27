@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, ChevronRight, Clock3, LoaderCircle } from "l
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
+import { MATERIALS_ENABLED } from "../featureFlags";
 import { createPortal } from "react-dom";
 import { getRecentJobs } from "../api/client";
 import { isTaskTerminal, taskLabel, taskTypeLabel, useTaskStatus } from "../hooks/useTaskStatus";
@@ -22,6 +23,7 @@ export function useRecentTasks(active = true, poll = true) {
 
 export function taskDestination(job: Job) {
   return job.job_type === "storage_migration" ? "/settings?section=storage"
+    : job.job_type === "material_preprocess" ? MATERIALS_ENABLED ? "/materials" : "/"
     : job.job_type === "batch_video_process" ? "/batch-process"
       : job.video_id ? `/process?videoId=${job.video_id}` : "/settings?section=asr";
 }

@@ -5,6 +5,10 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { TopBar } from "./TopBar";
+import { taskDestination } from "./TaskCenter";
+
+const materialFeature = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../featureFlags", () => ({ get MATERIALS_ENABLED() { return materialFeature.enabled; } }));
 
 vi.mock("../api/client", async original => ({
   ...await original<typeof import("../api/client")>(), getRecentJobs: vi.fn(), getJob: vi.fn(),
@@ -17,6 +21,7 @@ let container: HTMLDivElement, root: Root, client: QueryClient;
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
+  materialFeature.enabled = false;
   vi.mocked(api.getRecentJobs).mockResolvedValue([]);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -65,4 +70,12 @@ it("does not read real tasks in demo mode", async () => {
   expect(api.getRecentJobs).not.toHaveBeenCalled();
   expect(api.getJob).not.toHaveBeenCalled();
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("暂无处理任务");
+});
+
+it("routes historical material tasks home while paused and restores their destination when enabled", () => {
+  const job = { id: "materials-history", status: "completed", job_type: "material_preprocess" };
+  expect(taskDestination(job)).toBe("/");
+  materialFeature.enabled = true;
+  expect(taskDestination(job)).toBe("/materials");
+  expect(taskDestination({ ...job, job_type: "batch_video_process" })).toBe("/batch-process");
 });

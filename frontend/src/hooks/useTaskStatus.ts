@@ -47,6 +47,7 @@ export function taskTypeLabel(job: Job) {
     batch_video_process: job.import_only ? "批量导入" : "批量处理",
     video_process: "视频处理", video_transcribe: "重新转写",
     question_analysis: "题目分析", question_visual: "题图复核",
+    material_preprocess: "资料整理",
     asr_prepare: "模型准备", asr_download_cleanup: "下载清理",
     asr_delete: "模型清理", asr_runtime_delete: "运行环境清理", storage_migration: "目录迁移",
   } as Record<string, string>)[job.job_type ?? ""] ?? (job.video_id ? "视频处理" : "模型任务");

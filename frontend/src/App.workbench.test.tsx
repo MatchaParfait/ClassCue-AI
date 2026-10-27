@@ -6,6 +6,13 @@ import App from "./App";
 import * as api from "./api/client";
 import type { Video } from "./types";
 
+const materialFeature = vi.hoisted(() => ({ enabled: false, render: vi.fn() }));
+vi.mock("./featureFlags", () => ({ get MATERIALS_ENABLED() { return materialFeature.enabled; } }));
+vi.mock("./pages/MaterialsPage", () => ({ MaterialsPage: () => {
+  materialFeature.render();
+  return <div data-materials-page>Materials fixture</div>;
+} }));
+
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),
   getVideos: vi.fn(), getLibrary: vi.fn(), getLibraryStatus: vi.fn(),
@@ -51,6 +58,7 @@ const readyModel = { id: "model", name: "Model", engine: "whisper", downloaded: 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
+  materialFeature.enabled = false;
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -97,6 +105,7 @@ async function back() { await act(async () => { window.history.back(); await new
 it("shows both import links directly and opens complete pages", async () => {
   await mount();
   expect([...container.querySelectorAll('.library-heading-actions a')].map((item) => item.textContent)).toEqual(["导入视频", "导入文件夹"]);
+  expect(container.querySelector('a[href="/materials"]')).toBeNull();
   expect(container.querySelector('a[href="/demo"]')).toBeNull();
   click(container.querySelector('.library-heading-actions a[href="/process"]')!);
   await settle(() => expect(visibleScreen().querySelector("[data-process-active]")).not.toBeNull());
@@ -104,6 +113,31 @@ it("shows both import links directly and opens complete pages", async () => {
   expect(container.querySelector(".library-page")).not.toBeNull();
   expect(container.querySelector(".library-page")?.closest("[hidden]")).not.toBeNull();
   expect(container.querySelectorAll('[aria-modal="true"]')).toHaveLength(0);
+});
+
+it.each(["/materials", "/materials?collection=saved#question"])("redirects paused materials route %s without mounting it or clearing navigation", async path => {
+  const key = "classcue-materials:synthetic";
+  const saved = JSON.stringify({ collection: "saved", item: "question" });
+  localStorage.setItem(key, saved);
+  await mount(path);
+  await settle(() => expect(window.location.pathname).toBe("/"));
+  expect(window.location.search).toBe("");
+  expect(window.location.hash).toBe("");
+  expect(container.querySelector("[data-materials-page]")).toBeNull();
+  expect(materialFeature.render).not.toHaveBeenCalled();
+  expect(localStorage.getItem(key)).toBe(saved);
+  expect(container.querySelector(".library-page")?.closest("[hidden]")).toBeNull();
+});
+
+it("restores materials navigation and the page when explicitly enabled", async () => {
+  materialFeature.enabled = true;
+  await mount();
+  const entry = container.querySelector('a[href="/materials"]');
+  expect(entry?.textContent).toContain("复习资料");
+  click(entry!);
+  await settle(() => expect(visibleScreen().querySelector("[data-materials-page]")).not.toBeNull());
+  expect(window.location.pathname).toBe("/materials");
+  expect(materialFeature.render).toHaveBeenCalled();
 });
 
 it("resumes model onboarding from home through the actual settings link", async () => {

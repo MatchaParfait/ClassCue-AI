@@ -321,6 +321,8 @@ class VideoStore:
             initialize_bilibili(connection)
             from classcue.question_store import initialize_questions
             initialize_questions(connection)
+            from classcue.material_store import initialize_materials
+            initialize_materials(connection)
             self._restore_completed_analysis_status(connection)
 
     @staticmethod

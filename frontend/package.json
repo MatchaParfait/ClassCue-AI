@@ -12,12 +12,20 @@
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",
     "@tanstack/react-virtual": "^3.10.8",
+    "katex": "^0.19.1",
     "lucide-react": "^0.468.0",
     "motion": "^14.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^6.28.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "three": "0.186.1"
+  },
+  "overrides": {
+    "katex": "$katex"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
