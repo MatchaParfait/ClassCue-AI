@@ -1,9 +1,20 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { searchSubtitles, getSearchPreviewUrl } from "./client";
+import { searchSubtitles, getSearchPreviewUrl, getRecentJobs } from "./client";
 import { getAiSettings, saveAiSettings } from "./client";
 import { createManualQuestion, renameManualQuestion, getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, updateQuestionEmphasis, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("normalizes recent tasks with the same progress and identity rules as individual tasks", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [
+    { job_id: "slides", status: "running", progress: .45, job_type: "slide_extract", video_name: "Lesson" },
+  ] });
+  vi.stubGlobal("fetch", fetch);
+  expect(await getRecentJobs()).toEqual([
+    { id: "slides", job_id: "slides", status: "running", progress: 45, job_type: "slide_extract", video_name: "Lesson" },
+  ]);
+  expect(fetch).toHaveBeenCalledWith("/api/jobs/recent?limit=20", expect.anything());
+});
 
 it("normalizes legacy API concurrency and sends the saved value to the backend", async () => {
   const profile = { base_url: "https://relay.test/v1", model: "test", max_tokens: 2048 };

@@ -1,17 +1,18 @@
 import { useShortcuts, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedListItem, AnimatedQuote, Collapse, FadeRegion, SelectionIndicator, useEntryMotion, useSelectionScope } from "./Motion";
 import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Save, Search, Star, Trash2, Undo2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AnalysisRun, Marker, MarkerImportance, MarkerMode, RecallMode, ReviewFilter, ReviewStatus } from "../types";
 import { recallLabel, useRecallSchemes } from "../hooks/useRecallSchemes";
 import { formatTime, isManualQuestion, markerJumpTime } from "../utils";
-import { PROCESS_MODES } from "../processOptions";
+import { RECALL_MODES } from "../processOptions";
 import { MarkerTimeEditor } from "./MarkerTimeEditor";
 import { MarkerImportanceControl } from "./MarkerImportanceControl";
 import { RecallAnalysisPanel } from "./RecallAnalysisPanel";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { assignQuestionImages, getQuestionVisuals } from "../api/questionVisuals";
 import { QuestionVisualButton } from "./QuestionVisualButton";
+import "./ReviewModeGroups.css";
 
 interface ReviewSidebarProps {
   analysisVideoId?: number;
@@ -122,6 +123,17 @@ export function ReviewSidebar({
   ])];
   const label = (id: MarkerMode) => recallLabel(id, schemes.data)
     === "自定义方案" ? analysisRuns.find(run => run.analysis_mode === id)?.scheme_name ?? "自定义方案" : recallLabel(id, schemes.data);
+  const countForMode = (value: MarkerMode) => allMarkers.filter(marker =>
+    marker.analysis_mode === value && marker.review_status !== "excluded").length;
+  const builtinSelected = RECALL_MODES.some(item => item.value === mode);
+  const customSelected = customIds.includes(mode as RecallMode);
+  const modeButton = (value: MarkerMode, name: string) => (
+    <button key={value} role="tab" title={name} aria-selected={mode === value}
+      className={mode === value ? "is-selected" : ""} type="button" onClick={() => onModeChange(value)}
+      onKeyDown={navigateModes}>
+      <span>{name}</span><small>{countForMode(value)}</small>
+    </button>
+  );
   const currentRun = analysisRuns.find(run => run.analysis_mode === mode);
   const outdated = mode.startsWith("custom_") && Boolean(currentRun && (currentRun.latest_scheme_revision ?? 0) > (currentRun.scheme_revision ?? 0));
   const sidebarRef = useRef<HTMLElement>(null);
@@ -178,19 +190,36 @@ export function ReviewSidebar({
         </div>
       </div>
 
-      <div className="mode-switcher" role="tablist" aria-label="重点模式">
-        {[
-          ...PROCESS_MODES,
-          ...customIds.map(value => ({ value, label: label(value) })),
-          ...(allMarkers.some((marker) => marker.analysis_mode === "strict_exam_intent")
-            ? [{ value: "strict_exam_intent" as const, label: "旧版考点" }] : []),
-        ].map((item) => (
-          <button key={item.value} role="tab" title={item.label} aria-selected={mode === item.value} className={mode === item.value ? "is-selected" : ""} type="button" onClick={() => onModeChange(item.value)}>
-            {mode === item.value && <SelectionIndicator id={`${selectionScope}-mode`} />}
-            <span>{item.label}</span>
-            <small>{allMarkers.filter((marker) => marker.analysis_mode === item.value && marker.review_status !== "excluded").length}</small>
-          </button>
-        ))}
+      <div className="mode-switcher mode-groups" role="group" aria-label="重点模式">
+        <details className={`recall-mode-drawer${builtinSelected ? " is-current" : ""}`}>
+          <summary>
+            <span className="recall-mode-group-label">默认召回</span>
+            <span className="recall-mode-current">{builtinSelected ? label(mode) : "3 种"}</span>
+            <ChevronDown size={15} aria-hidden="true" />
+          </summary>
+          <div className="recall-mode-options" role="tablist" aria-label="默认召回">
+            {RECALL_MODES.map(item => modeButton(item.value, item.label))}
+          </div>
+        </details>
+        {customIds.length > 1 ? <details className={`recall-mode-drawer${customSelected ? " is-current" : ""}`}>
+          <summary>
+            <span className="recall-mode-group-label">自定义</span>
+            <span className="recall-mode-current">{customSelected ? label(mode) : `${customIds.length} 个方案`}</span>
+            <ChevronDown size={15} aria-hidden="true" />
+          </summary>
+          <div className="recall-mode-options" role="tablist" aria-label="自定义召回">
+            {customIds.map(value => modeButton(value, label(value)))}
+          </div>
+        </details> : customIds.length === 1 && <div className="recall-mode-single" role="tablist" aria-label="自定义召回">
+          {modeButton(customIds[0], label(customIds[0]))}
+        </div>}
+        <div className="recall-mode-single question-mode" role="tablist" aria-label="题目模式">
+          {modeButton("question_extraction", "题目提取")}
+        </div>
+        {allMarkers.some(marker => marker.analysis_mode === "strict_exam_intent") &&
+          <div className="recall-mode-single" role="tablist" aria-label="旧版考点">
+            {modeButton("strict_exam_intent", "旧版考点")}
+          </div>}
       </div>
 
       <div className="status-filter" role="tablist" aria-label="本次查看状态">
@@ -315,6 +344,19 @@ export function ReviewSidebar({
       )}
     </aside>
   );
+}
+
+function navigateModes(event: KeyboardEvent<HTMLButtonElement>) {
+  const buttons = [...(event.currentTarget.closest('[role="tablist"]')
+    ?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])];
+  const index = buttons.indexOf(event.currentTarget);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+    : ["ArrowDown", "ArrowRight"].includes(event.key) ? (index + 1) % buttons.length
+    : ["ArrowUp", "ArrowLeft"].includes(event.key) ? (index - 1 + buttons.length) % buttons.length : null;
+  if (next === null || !buttons[next]) return;
+  event.preventDefault();
+  buttons[next].focus();
+  buttons[next].click();
 }
 
 function ManualQuestionTitleEditor({ marker, onSave, onClose }: {

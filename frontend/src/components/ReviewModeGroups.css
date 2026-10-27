@@ -1,0 +1,68 @@
+:root .review-sidebar .mode-switcher.mode-groups {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 40%;
+  margin-top: 14px;
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mode-groups .recall-mode-drawer {
+  min-width: 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.mode-groups .recall-mode-drawer > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--ui-muted);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.mode-groups .recall-mode-drawer > summary::-webkit-details-marker { display: none; }
+.mode-groups .recall-mode-drawer > summary:hover { background: var(--ui-surface-soft); }
+.mode-groups .recall-mode-drawer.is-current > summary { color: var(--ui-accent-strong); }
+.mode-groups .recall-mode-group-label { font-weight: 600; }
+.mode-groups .recall-mode-current { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.mode-groups .recall-mode-drawer[open] > summary > svg { transform: rotate(180deg); }
+.mode-groups .recall-mode-options { display: grid; gap: 3px; padding: 0 0 8px 12px; }
+.mode-groups .recall-mode-single { min-width: 0; }
+.mode-groups .question-mode { padding-top: 4px; }
+
+:root .review-sidebar .mode-switcher.mode-groups button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-muted);
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+}
+
+:root .review-sidebar .mode-switcher.mode-groups button > span { min-width: 0; overflow-wrap: anywhere; }
+:root .review-sidebar .mode-switcher.mode-groups button small { color: inherit; font-variant-numeric: tabular-nums; }
+:root .review-sidebar .mode-switcher.mode-groups button:hover { background: var(--ui-surface-soft); color: var(--ui-text); }
+:root .review-sidebar .mode-switcher.mode-groups button.is-selected { border-color: var(--ui-border); background: var(--ui-accent-soft); color: var(--ui-accent-strong); box-shadow: none; font-weight: 600; }
+:root .review-sidebar .mode-switcher.mode-groups button:focus-visible,
+.mode-groups .recall-mode-drawer > summary:focus-visible { outline: 2px solid var(--ui-accent-strong); outline-offset: -2px; }

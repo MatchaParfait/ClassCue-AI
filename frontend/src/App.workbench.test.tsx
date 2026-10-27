@@ -9,7 +9,7 @@ import type { Video } from "./types";
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),
   getVideos: vi.fn(), getLibrary: vi.fn(), getLibraryStatus: vi.fn(),
-  getLatestBatch: vi.fn(), getPausedJobs: vi.fn(), getJob: vi.fn(), cancelJob: vi.fn(),
+  getLatestBatch: vi.fn(), getRecentJobs: vi.fn(), getPausedJobs: vi.fn(), getJob: vi.fn(), cancelJob: vi.fn(),
   createLibraryFolder: vi.fn(), moveVideoToFolder: vi.fn(), retryBatch: vi.fn(), resumeJob: vi.fn(),
   getStorageDirectories: vi.fn(), getAsrSelection: vi.fn(), getAsrModelStatus: vi.fn(), getAiSettings: vi.fn(),
 }));
@@ -69,6 +69,7 @@ beforeEach(() => {
   }));
   vi.mocked(api.getLibraryStatus).mockResolvedValue({ data_root: "D:\\Course", database_path: "", temp_audio_dir: "", video_count: 2 });
   vi.mocked(api.getLatestBatch).mockResolvedValue(null);
+  vi.mocked(api.getRecentJobs).mockResolvedValue([]);
   vi.mocked(api.getPausedJobs).mockResolvedValue([]);
   window.history.replaceState({}, "", "/");
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -224,6 +225,7 @@ it("shows awaiting API separately and only retries on a deliberate action", asyn
   const waiting = { id: "batch", status: "awaiting_api", job_type: "batch_video_process", progress: 100,
     batch_summary: { total: 4, completed: 1, skipped: 0, failed: 0, awaiting_ai: 3, pending_asr: 0 } };
   vi.mocked(api.getLatestBatch).mockResolvedValue(waiting);
+  vi.mocked(api.getRecentJobs).mockResolvedValue([waiting]);
   const retried = { ...waiting, id: "retry", status: "queued" };
   vi.mocked(api.getJob).mockImplementation(async (id) => id === "retry" ? retried : waiting);
   vi.mocked(api.retryBatch).mockResolvedValue(retried);
@@ -245,6 +247,43 @@ it("closing a running task panel never cancels it", async () => {
   click(button("关闭面板"));
   expect(api.cancelJob).not.toHaveBeenCalled();
   expect(window.location.pathname).toBe("/");
+});
+
+it("defaults to the latest completed single-video task instead of an older batch", async () => {
+  const batch = { id: "old-batch", status: "completed", job_type: "batch_video_process", progress: 100 };
+  const slides = { id: "new-slides", status: "completed", job_type: "slide_extract", progress: 100,
+    video_id: 1, video_name: "Lesson 1", message: "已提取 12 张 PPT" };
+  vi.mocked(api.getLatestBatch).mockRejectedValue(new Error("Legacy batch endpoint unavailable"));
+  vi.mocked(api.getRecentJobs).mockResolvedValue([slides, batch]);
+  vi.mocked(api.getJob).mockImplementation(async id => id === slides.id ? slides : batch);
+  await mount("/tasks");
+  await settle(() => expect(container.querySelector(".task-details-title")?.textContent).toContain("PPT 提取"));
+  expect(container.querySelector(".task-message")?.textContent).toBe("已提取 12 张 PPT");
+  const rows = container.querySelectorAll<HTMLButtonElement>(".task-history-row");
+  expect(rows).toHaveLength(2);
+  expect(rows[0].getAttribute("aria-pressed")).toBe("true");
+  click(rows[1]);
+  await settle(() => expect(container.querySelector(".task-details-title")?.textContent).toContain("批量处理"));
+});
+
+it("does not resurrect an old batch when recent task history is empty", async () => {
+  vi.mocked(api.getLatestBatch).mockResolvedValue({ id: "deleted-old", status: "completed", job_type: "batch_video_process" });
+  await mount("/tasks");
+  await settle(() => expect(container.querySelector(".task-empty")?.textContent).toContain("暂无处理任务"));
+  expect(container.querySelector(".task-details")).toBeNull();
+});
+
+it("keeps processing blocked by an older paused task while displaying the latest completed task", async () => {
+  const completed = { id: "new-completed", status: "completed", job_type: "slide_extract", video_id: 1, progress: 100 };
+  const paused = { id: "old-paused", status: "resource_paused", job_type: "video_process", video_id: 2, progress: 45 };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([completed, paused]);
+  vi.mocked(api.getPausedJobs).mockResolvedValue([paused]);
+  vi.mocked(api.getJob).mockImplementation(async id => id === completed.id ? completed : paused);
+  await mount();
+  await settle(() => expect(button("查看任务详情").textContent).toContain("处理完成"));
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="处理视频“Lesson 1”"]')?.disabled).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('[aria-label="选择视频“Lesson 1”"]')?.disabled).toBe(true);
+  expect(container.querySelector(".library-processing-blocked")?.textContent).toContain("请先完成或停止当前任务");
 });
 
 it("keeps full-page navigation accessible and traps only the task drawer", async () => {

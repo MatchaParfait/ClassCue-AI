@@ -2,12 +2,78 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { ReviewSidebar } from "./ReviewSidebar";
-import type { Marker } from "../types";
+import type { Marker, MarkerMode } from "../types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import * as questionVisuals from "../api/questionVisuals";
 
 describe("recall review navigation", () => {
+  it("groups built-in and custom modes, keeps questions separate and supports drawer keyboard navigation", async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient();
+    const custom = `custom_${"a".repeat(32)}` as const;
+    const other = `custom_${"b".repeat(32)}` as const;
+    const name = "这是一项名称很长的自定义教师考点提取方案";
+    client.setQueryData(["settings", "recall-schemes"], [
+      { id: custom, name, archived: false }, { id: other, name: "另一个方案", archived: false },
+    ]);
+    const change = vi.fn();
+    const marker: Marker = {
+      id: 1, video_id: 1, start_ms: 0, end_ms: 1000, title: "排序", note: "", source_quote: "",
+      analysis_mode: custom, review_status: "active",
+    };
+    const render = (mode: MarkerMode) => act(() => root.render(<QueryClientProvider client={client}>
+      <ReviewSidebar mode={mode} onModeChange={change} status="all" onStatusChange={vi.fn()}
+        markers={[]} allMarkers={[marker, { ...marker, id: 2, review_status: "excluded" }]} excludedMarkers={[]}
+        selectedMarkerId={null} viewedMarkerIds={new Set()} onSelectMarker={vi.fn()} onChangeStatus={vi.fn()}
+        onUndo={vi.fn()} canUndo={false} onRestoreExcluded={vi.fn()} onPrevious={vi.fn()} onNext={vi.fn()}
+        editingMarkerId={null} timeSaving={false} onEditMarker={vi.fn()} durationMs={10000} currentTimeMs={0}
+        getCurrentTimeMs={() => 0} onSaveTime={vi.fn()} onChangeImportance={vi.fn()} />
+    </QueryClientProvider>));
+    try {
+      render("medium_recall");
+      const drawers = container.querySelectorAll<HTMLDetailsElement>(".recall-mode-drawer");
+      expect(drawers).toHaveLength(2);
+      expect(drawers[0].open).toBe(false);
+      expect(drawers[0].querySelector("summary")?.textContent).toBe("默认召回中召回");
+      expect(drawers[0].querySelectorAll('[role="tab"]')).toHaveLength(3);
+      expect(drawers[1].querySelectorAll('[role="tab"]')).toHaveLength(2);
+      expect(container.querySelector(".question-mode")?.closest("details")).toBeNull();
+      expect(container.querySelector(".question-mode button")?.textContent).toBe("题目提取0");
+      act(() => drawers[0].querySelector("summary")!.click());
+      expect(drawers[0].open).toBe(true);
+      const high = drawers[0].querySelector<HTMLButtonElement>('button[title="高召回"]')!;
+      act(() => high.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+      expect(change).toHaveBeenLastCalledWith("medium_recall");
+      expect(document.activeElement?.textContent).toBe("中召回0");
+      act(() => high.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+      expect(change).toHaveBeenLastCalledWith("low_recall");
+      render(custom);
+      expect(drawers[1].classList.contains("is-current")).toBe(true);
+      expect(drawers[1].querySelector(".recall-mode-current")?.textContent).toBe(name);
+      const customButton = drawers[1].querySelector<HTMLButtonElement>("button")!;
+      expect(customButton.title).toBe(name);
+      expect(customButton.textContent).toBe(`${name}1`);
+      await act(async () => {
+        client.setQueryData(["settings", "recall-schemes"], [{ id: custom, name, archived: false }]);
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(container.querySelectorAll(".recall-mode-drawer")).toHaveLength(1);
+      expect(container.querySelector('[aria-label="自定义召回"]')?.closest("details")).toBeNull();
+      expect(container.querySelector('[aria-label="自定义召回"] button[aria-selected="true"]')?.textContent).toBe(`${name}1`);
+      act(() => container.querySelector<HTMLButtonElement>(".question-mode button")!.click());
+      expect(change).toHaveBeenLastCalledWith("question_extraction");
+    } finally {
+      window.getSelection()?.removeAllRanges();
+      act(() => root.unmount());
+      client.clear();
+      container.remove();
+    }
+  });
+
   it("keeps three modes separate and displays legacy results only when present", async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement("div");

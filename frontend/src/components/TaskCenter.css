@@ -1,0 +1,25 @@
+.task-history { display: grid; gap: 24px; min-width: 0; }
+.task-history .task-details-title span { overflow-wrap: anywhere; }
+.task-history-list { min-width: 0; padding-bottom: 20px; border-bottom: 1px solid var(--ui-border); }
+.task-history-list h3 { margin: 0 0 12px; font-size: 13px; color: var(--ui-muted); font-weight: 600; }
+.task-history-list ul { margin: 0; padding: 0; max-height: 240px; overflow-y: auto; list-style: none; scrollbar-gutter: stable; }
+.task-history-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 14px; gap: 10px; width: 100%; min-height: 60px; padding: 10px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ui-text); text-align: left; align-items: center; cursor: pointer; }
+.task-history-row:hover { background: var(--ui-surface-soft); }
+.task-history-row[aria-pressed="true"] { background: var(--ui-accent-soft); border-color: var(--ui-border-strong); }
+.task-history-row:focus-visible { outline: 2px solid var(--ui-accent-strong); outline-offset: -2px; }
+.task-history-name { display: grid; min-width: 0; gap: 3px; }
+.task-history-name strong { font-size: 13px; font-weight: 600; }
+.task-history-name > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.task-history-name time { font-size: 11px; color: var(--ui-muted); }
+.task-history-status { font-size: 12px; white-space: nowrap; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.task-history-icon { display: flex; color: var(--ui-muted); }
+.task-history-row.task-completed .task-history-icon { color: var(--ui-green); }
+.task-history-row.task-running .task-history-icon, .task-history-row.task-queued .task-history-icon { color: var(--ui-accent-strong); }
+.task-history-row.task-failed .task-history-icon { color: var(--ui-red); }
+.topbar-inner > .task-indicator { justify-self: end; }
+@media (max-width: 640px) {
+  .topbar .task-indicator { max-width: 132px; padding: 8px; gap: 6px; }
+  .topbar .task-indicator-label, .topbar .task-indicator > svg:last-child { display: none; }
+  .topbar .task-indicator-status { padding-left: 0; border-left: 0; }
+  .task-history-row { gap: 8px; padding-inline: 4px; }
+}

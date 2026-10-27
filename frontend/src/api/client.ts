@@ -934,6 +934,10 @@ export async function getLatestBatch(): Promise<Job | null> {
   return job ? normalizeJob(job) : null;
 }
 
+export async function getRecentJobs(): Promise<Job[]> {
+  return (await request<Job[]>("/api/jobs/recent?limit=20")).map(normalizeJob);
+}
+
 export async function retryBatch(jobId: string | number): Promise<Job> {
   return normalizeJob(await request<Job>(`/api/jobs/${jobId}/retry`, { method: "POST" }));
 }

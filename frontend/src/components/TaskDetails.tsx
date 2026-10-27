@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Ban, CheckCircle2, Clock3, LoaderCircle, PauseCircle, RotateCcw, Settings2 } from "lucide-react";
 import { cancelJob, resumeJob, retryBatch } from "../api/client";
-import { isTaskTerminal, taskLabel } from "../hooks/useTaskStatus";
+import { isTaskTerminal, taskLabel, taskTypeLabel } from "../hooks/useTaskStatus";
 import { FireRedResourceStatus } from "./FireRedResourceStatus";
 import type { Job } from "../types";
 import { hasActivePreparation, ModelPreparationProgress } from "./ModelPreparationProgress";
@@ -25,6 +25,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       void client.invalidateQueries({ queryKey: ["library-status"] });
       void client.invalidateQueries({ queryKey: ["batch-latest"] });
       void client.invalidateQueries({ queryKey: ["paused-jobs"] });
+      void client.invalidateQueries({ queryKey: ["recent-jobs"] });
       void client.invalidateQueries({ queryKey: ["videos"] });
       void client.invalidateQueries({ queryKey: ["library"] });
     },
@@ -47,7 +48,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
   return <div className={`task-details task-${job.status}`}>
     <div className="task-details-title">{running ? <LoaderCircle className="spin" size={22} /> : waiting || downloadPaused ? <PauseCircle size={22} />
       : job.status === "completed" ? <CheckCircle2 size={22} /> : <AlertCircle size={22} />}
-      <div><h3>{job.stage === "download_paused" ? "下载已暂停" : job.stage === "pausing" ? "正在暂停下载" : taskLabel(job.status)}</h3><span>{migrating ? "目录迁移" : cleaning ? "模型清理" : job.job_type === "batch_video_process" ? "批量处理" : job.video_id ? "视频处理" : "模型任务"}</span></div>
+      <div><h3>{job.stage === "download_paused" ? "下载已暂停" : job.stage === "pausing" ? "正在暂停下载" : taskLabel(job.status)}</h3><span>{taskTypeLabel(job)}{job.video_name ? ` · ${job.video_name}` : ""}</span></div>
       {!cleaning && !(running && job.job_type === "asr_prepare") && <output>{Math.round(progress)}%</output>}</div>
     {cleaning ? <ModelCleanupProgress job={job} /> : running && job.job_type === "asr_prepare" ? <ModelPreparationProgress job={job} />
       : <div className="job-progress"><span style={{ width: `${progress}%` }} /></div>}

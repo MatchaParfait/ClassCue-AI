@@ -2477,8 +2477,25 @@ class VideoStore:
     def get_job(self, job_id: str) -> sqlite3.Row | None:
         with self.connect() as connection:
             return connection.execute(
-                "SELECT * FROM processing_jobs WHERE id = ?", (job_id,)
+                "SELECT j.*, COALESCE(NULLIF(v.display_name, ''), v.filename) AS video_name "
+                "FROM processing_jobs j LEFT JOIN videos v ON v.id = j.video_id "
+                "WHERE j.id = ?", (job_id,)
             ).fetchone()
+
+    def list_recent_jobs(self, limit: int = 20) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT j.*, COALESCE(NULLIF(v.display_name, ''), v.filename) AS video_name
+                FROM processing_jobs j LEFT JOIN videos v ON v.id = j.video_id
+                ORDER BY CASE WHEN j.status IN ('queued', 'running') THEN 0 ELSE 1 END,
+                    COALESCE(julianday(j.finished_at), julianday(j.started_at),
+                             julianday(j.created_at), 0) DESC,
+                    j.rowid DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
 
     def latest_batch_job(self) -> sqlite3.Row | None:
         with self.connect() as connection:

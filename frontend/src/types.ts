@@ -453,6 +453,8 @@ export interface ProcessingOptions {
 }
 
 export interface Job extends JobStatus {
+  video_name?: string | null;
+  created_at?: string | null;
   model_id?: string | null;
   job_id?: string | number;
   video_id?: number;

@@ -547,6 +547,7 @@ class JobManager:
         return {
             "id": str(row["id"]),
             "video_id": int(row["video_id"]) if row["video_id"] is not None else None,
+            "video_name": row["video_name"] if "video_name" in row.keys() else None,
             "job_type": row["job_type"],
             "status": row["status"],
             "stage": row["stage"],
@@ -828,14 +829,23 @@ class JobManager:
             return self._row_payload(current or row, self.provider.get())
 
     def get(self, job_id: str) -> dict[str, object] | None:
-        row = self.provider.get().get_job(job_id)
+        store = self.provider.get()
+        row = store.get_job(job_id)
+        return self._read_payload(row, store) if row else None
+
+    @staticmethod
+    def _read_payload(row: sqlite3.Row, store) -> dict[str, object]:
         if row and row["job_type"] == "batch_video_process":
             state = json.loads(row["request_json"] or "{}")
             if state.get("kind") == "batch" and state.get("version") != 2:
                 upgraded = dict(row)
-                upgraded["request_json"] = json.dumps(normalize_batch(state, self.provider.get()), ensure_ascii=False)
-                return self._row_payload(upgraded, self.provider.get())
-        return self._row_payload(row, self.provider.get()) if row else None
+                upgraded["request_json"] = json.dumps(normalize_batch(state, store), ensure_ascii=False)
+                return JobManager._row_payload(upgraded, store)
+        return JobManager._row_payload(row, store)
+
+    def recent(self, limit: int = 20) -> list[dict[str, object]]:
+        store = self.provider.get()
+        return [self._read_payload(row, store) for row in store.list_recent_jobs(limit)]
 
     def shutdown(self, *, wait: bool = False) -> None:
         with self._lock:
@@ -2873,6 +2883,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     @api.get("/api/jobs/paused")
     def paused_jobs() -> list[dict[str, object]]:
         return [JobManager._row_payload(row, provider.get()) for row in provider.get().list_paused_jobs()]
+
+    @api.get("/api/jobs/recent")
+    def recent_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, object]]:
+        return jobs.recent(limit)
 
     @api.post("/api/jobs/{job_id}/retry", status_code=202)
     def retry_batch(job_id: str) -> dict:

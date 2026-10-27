@@ -1,23 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { AlertCircle, CheckCircle2, LoaderCircle, X } from "lucide-react";
 import { useShortcuts, matchesShortcut, isShortcutInput, isUndoShortcut } from "../shortcuts";
-import { getApiBaseUrl, getAnalysisRuns } from "../api/client";
+import { getAnalysisRuns } from "../api/client";
 import { TopBar } from "../components/TopBar";
 import { useReviewTabs } from "../components/ReviewTabs";
 import { parseSearchSeek } from "../searchNavigation";
 import { ReviewSidebar } from "../components/ReviewSidebar";
 import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
 import { VideoPanel } from "../components/VideoPanel";
-import { useModalFocus } from "../hooks/useModalFocus";
 import { captureVideoFrame } from "../utils/captureVideoFrame";
 import { captureQuestionImage, getQuestionVisual, setQuestionImage, type ImageSelection,
   type QuestionVisual } from "../api/questionVisuals";
 import { useCreateManualQuestionMutation, useMarkerImportanceMutation, useMarkerJumpTimeMutation, useMarkerStatusMutation, useQuestionEmphasisMutation, useRenameManualQuestionMutation, useStudyData } from "../hooks/useStudyData";
 import type { Marker, MarkerImportance, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
-import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, useMotionTransition, useReducedMotion } from "../components/Motion";
+import { AnimatePresence, AnimatedPopup } from "../components/Motion";
 
 type ReviewChange =
   | { kind: "time"; previous: number | null; next: number | null }
@@ -46,7 +45,6 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const shortcuts = useShortcuts();
   const location = useLocation();
   const mockMode = demo || import.meta.env.VITE_USE_MOCK === "true";
-  const navigate = useNavigate();
   const study = useStudyData(videoId || 0, mockMode);
   const queryClient = useQueryClient();
   const { video, subtitles, markers: allMarkers, errors, isLoading } = study;
@@ -87,14 +85,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const [undoing, setUndoing] = useState(false);
   const [createdMarkerId, setCreatedMarkerId] = useState<number | null>(null);
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [bilibiliMarkerId, setBilibiliMarkerId] = useState<number | null>(null);
   const reviewBackground = useRef<HTMLDivElement>(null);
-  const reviewDialog = useRef<HTMLElement>(null);
-  const reviewDialogClose = useRef<HTMLButtonElement>(null);
-  const reviewDialogMotion = useMotionTransition(.18);
-  const reduceReviewMotion = useReducedMotion();
-  useModalFocus(settingsOpen, reviewDialog, reviewDialogClose, () => setSettingsOpen(false), reviewBackground);
   const [notice, setNotice] = useState<string | null>(null);
   const [jumpTimeError, setJumpTimeError] = useState<string | null>(null);
 
@@ -344,7 +336,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     if (isLoading || !video || (!mockMode && !canOpenReview(video.status, subtitles.length > 0))) return;
     const onMarkerShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing
-        || settingsOpen || editingMarkerId !== null || jumpTimeMutation.isPending || jumpTimeSavingRef.current) return;
+        || editingMarkerId !== null || jumpTimeMutation.isPending || jumpTimeSavingRef.current) return;
       const action = isUndoShortcut(event) ? "undoReview"
         : (["previousMarker", "nextMarker", "captureTime", "createQuestion"] as const).find(id => matchesShortcut(event, shortcuts, id));
       if (!action) return;
@@ -386,17 +378,17 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     };
     document.addEventListener("keydown", onMarkerShortcut);
     return () => document.removeEventListener("keydown", onMarkerShortcut);
-  }, [isLoading, video, mockMode, subtitles.length, settingsOpen, editingMarkerId, jumpTimeMutation.isPending,
+  }, [isLoading, video, mockMode, subtitles.length, editingMarkerId, jumpTimeMutation.isPending,
     renameQuestionMutation.isPending, importanceMutation.isPending, questionEmphasisMutation.isPending,
     moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, undoReviewAction, shortcuts]);
 
   if (isLoading) {
-    return <div className="app-shell"><TopBar /><div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在准备复习工作台…</span></div></div>;
+    return <div className="app-shell"><TopBar demo={mockMode} /><div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在准备复习工作台…</span></div></div>;
   }
 
   if (!video) {
     return (
-      <div className="app-shell"><TopBar /><main className="error-page">
+      <div className="app-shell"><TopBar demo={mockMode} /><main className="error-page">
         <div className="error-panel" role="alert">
           <AlertCircle size={22} />
           <div>
@@ -412,7 +404,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
 
   if (!mockMode && !canOpenReview(video.status, subtitles.length > 0)) {
     return (
-      <div className="app-shell"><TopBar /><main className="error-page">
+      <div className="app-shell"><TopBar demo={mockMode} /><main className="error-page">
         <div className="error-panel" role="alert">
           <AlertCircle size={22} />
           <div><strong>该视频尚未完成转写</strong><p>字幕未就绪或正在重新转写。</p></div>
@@ -428,7 +420,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   return (
     <div className="app-shell">
       <div ref={reviewBackground}>
-      <TopBar video={video} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar video={video} demo={mockMode} backgroundRef={reviewBackground} />
       <main className="study-page">
         <div className="study-grid">
           <div className="study-main">
@@ -521,24 +513,6 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
           <AlertCircle size={17} /><span>{jumpTimeError}</span>
           <button type="button" onClick={() => setJumpTimeError(null)} aria-label="关闭错误提示"><X size={15} /></button>
         </AnimatedPopup>
-      )}</AnimatePresence>
-      <AnimatePresence>{settingsOpen && (
-        <AnimatedOverlay className="modal-backdrop" role="presentation" onClick={() => setSettingsOpen(false)}>
-          <motion.section ref={reviewDialog} initial={{ y: reduceReviewMotion ? 0 : 4 }} animate={{ y: 0 }} exit={{ y: reduceReviewMotion ? 0 : 4 }} transition={reviewDialogMotion}
-            className="settings-dialog motion-surface" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
-            <div className="dialog-heading">
-              <div><p className="eyebrow">复习设置</p><h2 id="settings-title">复习偏好</h2></div>
-              <button ref={reviewDialogClose} className="icon-button" type="button" onClick={() => setSettingsOpen(false)} aria-label="关闭设置"><X size={18} /></button>
-            </div>
-            <div className="settings-list">
-              <div><span>视频编号</span><strong>{video.id}</strong></div>
-              <div><span>视频状态</span><strong>{video.status}</strong></div>
-              <div><span>数据来源</span><strong>{mockMode ? "显式 /demo mock" : getApiBaseUrl()}</strong></div>
-              <div><span>播放记忆</span><strong>已启用</strong></div>
-            </div>
-            <button className="secondary-button" type="button" onClick={() => navigate("/")}>返回视频库</button>
-          </motion.section>
-        </AnimatedOverlay>
       )}</AnimatePresence>
       {markerMutation.isPending && <div className="saving-indicator"><LoaderCircle className="spin" size={14} /> 正在保存</div>}
       {markerMutation.isError && <div className="inline-error"><AlertCircle size={14} /> 状态保存失败，请重试</div>}

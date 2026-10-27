@@ -1,17 +1,20 @@
-import { ArrowLeft, BookOpen, Settings2 } from "lucide-react";
+import { ArrowLeft, BookOpen } from "lucide-react";
+import type { RefObject } from "react";
 import { Link } from "react-router-dom";
 import type { Video } from "../types";
 import { CharacterEye } from "./CharacterAccent";
 import { GlobalSearchButton } from "./GlobalSearch";
 import { ReviewTabs } from "./ReviewTabs";
 import { Announcements } from "./Announcements";
+import { ReviewTaskCenter } from "./TaskCenter";
 
 interface TopBarProps {
   video?: Video;
-  onOpenSettings?: () => void;
+  demo?: boolean;
+  backgroundRef?: RefObject<HTMLDivElement>;
 }
 
-export function TopBar({ video, onOpenSettings }: TopBarProps) {
+export function TopBar({ video, demo, backgroundRef }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="topbar-inner">
@@ -27,10 +30,7 @@ export function TopBar({ video, onOpenSettings }: TopBarProps) {
         <div className="topbar-search-tools"><div className="topbar-video">
           <span title={video?.display_name}>课程复习</span>
         </div><GlobalSearchButton /><Announcements /></div>
-        <button className="icon-button settings-button" type="button" disabled={!onOpenSettings} onClick={onOpenSettings} title="打开复习设置" aria-label="打开复习设置">
-          <Settings2 size={18} aria-hidden="true" />
-          <span>复习设置</span>
-        </button>
+        <ReviewTaskCenter demo={demo} backgroundRef={backgroundRef} />
       </div>
       <ReviewTabs />
     </header>

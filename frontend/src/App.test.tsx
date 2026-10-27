@@ -222,9 +222,9 @@ describe("S saves the last deliberately chosen marker", () => {
     click(container.querySelector(".marker-edit-time"));
     press("s");
     click(container.querySelector(".marker-editor-heading button"));
-    click(container.querySelector(".settings-button"));
+    click(container.querySelector('.topbar [aria-label="查看任务详情"]'));
     press("s");
-    click(container.querySelector(".settings-dialog .dialog-heading button"));
+    click(document.querySelector('.workbench-panel-backdrop:not([hidden]) [aria-label="关闭面板"]'));
     const popover = document.createElement("div");
     popover.className = "audio-channel-popover";
     container.append(popover);
@@ -358,15 +358,15 @@ describe("A/D marker navigation", () => {
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
 
-  it("blocks navigation while adjusting a time or using the settings dialog", () => {
+  it("blocks navigation while adjusting a time or using the task dialog", () => {
     click(container.querySelector(".marker-edit-time"));
     press("d");
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
     click(container.querySelector(".marker-editor-heading button"));
-    click(container.querySelector(".settings-button"));
+    click(container.querySelector('.topbar [aria-label="查看任务详情"]'));
     press("d");
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
-    click(container.querySelector(".settings-dialog .dialog-heading button"));
+    click(document.querySelector('.workbench-panel-backdrop:not([hidden]) [aria-label="关闭面板"]'));
     press("d");
     expect(container.querySelector("video")!.currentTime).toBe(1);
   });

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestLibraryUndo, undoLibraryEdit, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getLibraryStatus, type LibraryResponse } from "./api/client";
+import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestLibraryUndo, undoLibraryEdit, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getRecentJobs, getLibraryStatus, type LibraryResponse } from "./api/client";
 import type { Job, Video } from "./types";
 import type { LibraryUndoEntry } from "./api/client";
 import { saveDragTextHints } from "./libraryPreferences";
@@ -28,6 +28,7 @@ vi.mock("./api/client", async (importOriginal) => ({
   getMarkers: vi.fn(async () => ({ value: [], source: "api" })),
   getLibraryStatus: vi.fn(async () => ({ data_root: "", database_path: "", temp_audio_dir: "", video_count: 2 })),
   getLatestBatch: vi.fn(async () => null),
+  getRecentJobs: vi.fn(async () => []),
   getPausedJobs: vi.fn(async () => []),
   deleteLibraryFolder: vi.fn(),
   deleteVideo: vi.fn(),
@@ -62,6 +63,7 @@ beforeEach(async () => {
   vi.mocked(getJob).mockReset().mockImplementation(async id => ({ id, status: "queued", progress: 0 }));
   vi.mocked(getPausedJobs).mockReset().mockResolvedValue([]);
   vi.mocked(getLatestBatch).mockReset().mockResolvedValue(null);
+  vi.mocked(getRecentJobs).mockReset().mockResolvedValue([]);
   vi.mocked(getLibraryStatus).mockReset().mockResolvedValue({ data_root: "", database_path: "", temp_audio_dir: "", video_count: 2 });
   window.sessionStorage.clear();
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
@@ -382,6 +384,7 @@ describe("discoverable header entries", () => {
   ])("preserves a named task entry for %s", async (status, label, icon) => {
     const job: Job = { id: "header-task", status, progress: 42, job_type: "batch_video_process" };
     vi.mocked(getLatestBatch).mockResolvedValue(job);
+    vi.mocked(getRecentJobs).mockResolvedValue([job]);
     vi.mocked(getJob).mockResolvedValue(job);
     act(() => root.unmount());
     root = createRoot(container);
@@ -668,6 +671,7 @@ describe("library video rename", () => {
       ...(kind === "single" ? { video_id: 1 } : { batch_entries: [{ video_id: 1, status: "pending_asr" }] }),
     };
     vi.mocked(getJob).mockResolvedValue(job);
+    vi.mocked(getRecentJobs).mockResolvedValue([job]);
     vi.mocked(getLibraryStatus).mockResolvedValue({ data_root: "", database_path: "", temp_audio_dir: "",
       video_count: 2, active_job_id: status === "resource_paused" ? null : job.id });
     if (kind === "batch") vi.mocked(getLatestBatch).mockResolvedValue(job);

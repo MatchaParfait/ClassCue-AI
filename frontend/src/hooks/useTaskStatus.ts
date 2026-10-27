@@ -38,3 +38,16 @@ export function taskLabel(status: string) {
     cancelled: "已取消", canceled: "已取消",
   }[status] ?? status;
 }
+
+export function taskTypeLabel(job: Job) {
+  if (job.job_type === "slide_extract") return "PPT 提取";
+  if (job.job_type === "video_analysis") return job.analysis_modes?.length === 1
+    && job.analysis_modes[0] === "question_extraction" ? "题目提取" : "考点提取";
+  return ({
+    batch_video_process: job.import_only ? "批量导入" : "批量处理",
+    video_process: "视频处理", video_transcribe: "重新转写",
+    question_analysis: "题目分析", question_visual: "题图复核",
+    asr_prepare: "模型准备", asr_download_cleanup: "下载清理",
+    asr_delete: "模型清理", asr_runtime_delete: "运行环境清理", storage_migration: "目录迁移",
+  } as Record<string, string>)[job.job_type ?? ""] ?? (job.video_id ? "视频处理" : "模型任务");
+}

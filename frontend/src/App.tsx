@@ -60,7 +60,8 @@ import { VideoMoveMenu } from "./components/VideoMoveMenu";
 import { StudyShareExportMenuItem, StudyShareImportButton } from "./components/StudyShareControls";
 import { DeviceTransferButton, DeviceTransferSendMenuItem } from "./components/DeviceTransferControls";
 import { openDeviceTransfer } from "./api/deviceTransfers";
-import { useTaskStatus, isTaskTerminal, taskLabel, videoFileChangeBlockReason } from "./hooks/useTaskStatus";
+import { useTaskStatus, isTaskTerminal, videoFileChangeBlockReason } from "./hooks/useTaskStatus";
+import { TaskHistory, TaskIndicator, taskDestination, useRecentTasks } from "./components/TaskCenter";
 import type { Job, Video, VideoLibraryFolder, VideoLibraryState } from "./types";
 import { canOpenReview, formatTime } from "./utils";
 import "./styles.css";
@@ -76,8 +77,6 @@ import "./onboarding.css";
 import { CharacterAccent, CharacterEye } from "./components/CharacterAccent";
 import { DesktopControls } from "./components/DesktopControls";
 import { WarmAtmosphere } from "./components/WarmAtmosphere";
-import { hasActivePreparation, preparationSummary } from "./components/ModelPreparationProgress";
-import { cleanupSummary, isCleanupJob } from "./components/ModelCleanupProgress";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, spotlight, useEntryMotion, useMotionTransition, useNewItems, useReducedMotion } from "./components/Motion";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import { PptViewer } from "./components/PptViewer";
@@ -87,7 +86,6 @@ const ProcessPage = lazy(() => import("./components/ProcessPage").then(module =>
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then(module => ({ default: module.SettingsPage })));
 const BatchProcessPage = lazy(() => import("./pages/BatchProcessPage").then(module => ({ default: module.BatchProcessPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
-const TaskDetails = lazy(() => import("./components/TaskDetails").then(module => ({ default: module.TaskDetails })));
 
 function PageLoading() {
   return <div className="library-state" role="status"><LoaderCircle className="spin" size={18} />正在打开页面…</div>;
@@ -192,9 +190,13 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
   const discoveryOptions = { enabled: visible, staleTime: 15_000, refetchInterval: visible ? 15_000 : false as const, refetchIntervalInBackground: false };
   const latest = useQuery({ queryKey: ["batch-latest"], queryFn: getLatestBatch, ...discoveryOptions });
   const paused = useQuery({ queryKey: ["paused-jobs"], queryFn: getPausedJobs, ...discoveryOptions });
+  const recent = useRecentTasks(visible);
   const fallback = paused.data?.[0] ?? latest.data;
   const remembered = queryClient.getQueryData<Job>(["jobs", rememberedJob]);
-  const jobId = activeJobId && remembered && isTaskTerminal(remembered) ? activeJobId : rememberedJob ?? activeJobId ?? fallback?.id ?? null;
+  const activeKnown = recent.data?.find(item => String(item.id) === String(activeJobId));
+  const jobId = rememberedJob != null && (!remembered || !isTaskTerminal(remembered)) ? rememberedJob
+    : activeJobId != null && (!activeKnown || !isTaskTerminal(activeKnown)) ? activeJobId
+      : recent.isSuccess ? recent.data[0]?.id ?? null : rememberedJob ?? fallback?.id ?? null;
   const job = useTaskStatus(jobId, visible, libraryActive || isPanel || pageLocation.pathname === "/settings");
   const terminalSeen = useRef("");
   useEffect(() => {
@@ -205,6 +207,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
     void queryClient.invalidateQueries({ queryKey: ["videos"] });
     void queryClient.invalidateQueries({ queryKey: ["library"] });
     void queryClient.invalidateQueries({ queryKey: ["library-status"] });
+    void queryClient.invalidateQueries({ queryKey: ["recent-jobs"] });
   }, [job.data, queryClient]);
   const open = (path: string) => {
     const target = new URL(path, locationOrigin());
@@ -228,13 +231,11 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
     setRememberedJob(id);
     void queryClient.invalidateQueries({ queryKey: ["library-status"] });
     void queryClient.invalidateQueries({ queryKey: ["batch-latest"] });
+    void queryClient.invalidateQueries({ queryKey: ["recent-jobs"] });
   };
   const displayedScreens = isPage && !screens.some((screen) => panelKey(screen) === panelKey(pageLocation))
     ? [...screens, pageLocation] : screens;
-  const currentTask = job.data ?? fallback ?? undefined;
-  const taskRunning = Boolean(currentTask && ["running", "queued"].includes(currentTask.status));
-  const TaskIcon = job.isError || currentTask?.status === "failed" ? AlertCircle
-    : taskRunning ? LoaderCircle : currentTask?.status === "completed" ? CheckCircle2 : Clock3;
+  const currentTask = job.data ?? recent.data?.[0] ?? (recent.isSuccess ? undefined : fallback ?? undefined);
   return <div className="workbench" hidden={!visible} onClickCapture={(event) => {
     const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
     if (!anchor || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -251,17 +252,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
           <div className="workbench-topbar-tools">
             <GlobalSearchButton />
             <Announcements active={visible} />
-            <button type="button" className={`task-indicator ${currentTask ? `task-${currentTask.status}` : ""}`} onClick={() => open("/tasks")}
-              title="查看任务详情" aria-label="查看任务详情" aria-haspopup="dialog" aria-expanded={isPanel}>
-              <TaskIcon className={taskRunning && !job.isError ? "spin" : undefined} size={20} aria-hidden="true" />
-              <span className="task-indicator-label">任务</span>
-              <span className="task-indicator-status" role="status">{job.isError ? "状态读取失败" : currentTask?.stage === "download_paused" ? "下载已暂停"
-                : currentTask?.stage === "pausing" ? "正在暂停下载" : currentTask && !isTaskTerminal(currentTask) && isCleanupJob(currentTask)
-                  ? cleanupSummary(currentTask) : currentTask ? hasActivePreparation(currentTask)
-                ? preparationSummary(currentTask)
-                : `${taskLabel(currentTask.status)}${!isTaskTerminal(currentTask) ? ` · ${Math.round(currentTask.progress ?? 0)}%` : ""}` : "暂无任务"}</span>
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
+            <TaskIndicator job={currentTask} error={job.isError || (!currentTask && recent.isError)} expanded={isPanel} onClick={() => open("/tasks")} />
             <Link data-onboarding="settings" className={`workbench-settings-link${pageLocation.pathname === "/settings" ? " is-selected" : ""}`}
               title="设置" aria-label="设置" aria-current={pageLocation.pathname === "/settings" ? "page" : undefined} to="/settings">
               <Settings2 size={20} aria-hidden="true" /><span>设置</span><UpdateNotice active={visible} />
@@ -273,7 +264,8 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
       <div hidden={!libraryActive}>
         <LibraryPage active={libraryActive} suspended={isPanel || !libraryActive} scope={scope}
           libraryId={libraryId} workspaceSettled={workspaceSettled} startupView={startupView} onStartupRestored={onStartupRestored}
-          onJob={onJob} processingBlocked={Boolean(currentTask && (!isTaskTerminal(currentTask) || currentTask.status === "resource_paused"))}
+          onJob={onJob} processingBlocked={Boolean(currentTask && (!isTaskTerminal(currentTask) || currentTask.status === "resource_paused"))
+            || Boolean(paused.data?.some(item => item.status === "resource_paused"))}
           fileChangeJobs={[...(currentTask ? [currentTask] : []), ...(paused.data ?? [])]}
           routeFolderId={pageLocation.pathname.startsWith("/library/folder/") ? decodeURIComponent(pageLocation.pathname.split("/").at(-1)!) : null}
           onOpenPanel={open} />
@@ -297,10 +289,10 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
       })}
     </div>
     <WorkbenchPanel active={isPanel} scrollKey="tasks" title="任务详情" onClose={close} backgroundRef={background}>
-      {isPanel && location.pathname === "/tasks" && <Suspense fallback={<PageLoading />}><TaskDetails job={job.data ?? fallback ?? undefined} loading={job.isLoading || latest.isLoading}
-        error={job.error ?? latest.error ?? paused.error} onRetryLoad={() => { void job.refetch(); void latest.refetch(); void paused.refetch(); }}
-        onJob={onJob} onSettings={() => open("/settings?section=ai")} onOpen={(value) => open(value.job_type === "storage_migration" ? "/settings?section=storage" : value.job_type === "batch_video_process" ? "/batch-process"
-          : value.video_id ? `/process?videoId=${value.video_id}` : "/settings?section=asr")} /></Suspense>}
+      {isPanel && location.pathname === "/tasks" && <TaskHistory jobs={recent.data ?? []} current={currentTask} loading={job.isLoading || recent.isLoading}
+        error={job.error ?? (recent.isSuccess ? null : recent.error ?? latest.error ?? paused.error)}
+        onRetryLoad={() => { if (jobId != null) void job.refetch(); void recent.refetch(); void latest.refetch(); void paused.refetch(); }}
+        onJob={onJob} onSettings={() => open("/settings?section=ai")} onOpen={value => open(taskDestination(value))} />}
     </WorkbenchPanel>
     <OnboardingGuide active={visible && workspaceSettled && !isPanel} scope={scope} onActiveChange={setOnboardingActive} />
   </div>;

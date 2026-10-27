@@ -2,6 +2,14 @@ import { useEffect, useRef, type RefObject } from "react";
 import { lockModalEnvironment } from "./modalEnvironment";
 
 const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const activeDialogs: RefObject<HTMLElement>[] = [];
+
+function topDialog() {
+  // Portals can appear later in the DOM than dialogs opened above them.
+  return activeDialogs.map(ref => ref.current).filter((element): element is HTMLElement =>
+    Boolean(element?.matches('[role="dialog"][aria-modal="true"]')
+      && !element.closest('[hidden], [inert], [aria-hidden="true"]'))).at(-1);
+}
 
 export function useModalFocus(
   active: boolean, dialogRef: RefObject<HTMLElement>, initialRef: RefObject<HTMLElement>,
@@ -14,9 +22,8 @@ export function useModalFocus(
     const background = backgroundRef?.current;
     const opener = returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const release = lockModalEnvironment(background);
+    activeDialogs.push(dialogRef);
     initialRef.current?.focus();
-    const topDialog = () => [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')]
-      .filter((element) => !element.closest("[hidden], [inert]")).at(-1);
     const controls = (scope: HTMLElement) => [...scope.querySelectorAll<HTMLElement>(FOCUSABLE)]
       .filter((element) => !element.closest("[hidden], [inert]")
         && getComputedStyle(element).display !== "none" && getComputedStyle(element).visibility !== "hidden");
@@ -49,8 +56,11 @@ export function useModalFocus(
     return () => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("focusin", onFocus);
+      activeDialogs.splice(activeDialogs.lastIndexOf(dialogRef), 1);
       release();
-      if (opener?.isConnected && !opener.closest("[hidden], [inert]")) opener.focus({ preventScroll: true });
+      const scope = topDialog();
+      if (opener?.isConnected && !opener.closest('[hidden], [inert], [aria-hidden="true"]')
+        && (!scope || scope.contains(opener))) opener.focus({ preventScroll: true });
     };
   }, [active, backgroundRef, dialogRef, initialRef, returnFocus]);
 }
