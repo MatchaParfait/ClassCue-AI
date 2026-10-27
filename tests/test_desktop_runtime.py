@@ -210,6 +210,78 @@ def test_startup_error_allows_retry_and_does_not_create_second_service(lifecycle
     assert controller.dialog["kind"] == "starting" and not controller.allow_destroy
 
 
+@pytest.mark.parametrize("entry", ["restart_requested", "start"])
+def test_restart_preserves_unsaved_settings_before_service_or_navigation(lifecycle, entry):
+    controller, _state, calls = lifecycle
+    controller.unsaved_changes = True
+    controller.hidden = True
+    controller.services.start = lambda _action: pytest.fail("Unsaved settings must not restart services")
+    controller.services.status = lambda: pytest.fail("Draft protection precedes external status requests")
+    if entry == "start":
+        controller.start("restart")
+    else:
+        controller.restart_requested()
+    assert controller.unsaved_changes and controller.ready and not controller.starting
+    assert not controller.hidden and not calls
+    assert controller.dialog["kind"] == "starting"
+    assert "未保存" in controller.dialog["message"]
+    assert not any(name == "open" for name, _args in controller.ui.events)
+
+
+def test_restart_rechecks_drafts_after_waiting_for_service_status(lifecycle):
+    controller, _state, _calls = lifecycle
+    def status():
+        controller.unsaved_changes = True
+        return {"processing": False}
+    controller.services.status = status
+    controller.services.start = lambda _action: pytest.fail("A newly edited draft must block restart")
+    controller.restart_requested()
+    assert controller.unsaved_changes and "未保存" in controller.dialog["message"]
+    assert not any(name == "open" for name, _args in controller.ui.events)
+
+
+def test_restart_requires_idle_services_and_clean_settings(lifecycle):
+    controller, state, _calls = lifecycle
+    started = []
+    controller.services.start = lambda action: started.append(action) or "http://127.0.0.1:8765"
+    state["processing"] = True
+    controller.restart_requested()
+    assert not started and "处理任务" in controller.dialog["message"]
+    state["processing"] = False
+    controller.restart_requested()
+    assert started == ["restart"]
+    assert controller.ui.events[-1] == ("open", ("http://127.0.0.1:8765",))
+
+
+@pytest.mark.parametrize("startup_fails", [False, True], ids=["success", "failure"])
+def test_restart_preserves_settings_edited_during_service_startup(lifecycle, startup_fails):
+    controller, _state, _calls = lifecycle
+    started = []
+    def start(action):
+        started.append(action)
+        controller.unsaved_changes = True
+        if startup_fails:
+            raise OSError("not reachable")
+        return "http://127.0.0.1:8765"
+    controller.services.start = start
+    controller.restart_requested()
+    assert started == ["restart"]
+    assert controller.unsaved_changes and controller.ready and not controller.starting
+    assert controller.dialog["kind"] == ("service-error" if startup_fails else "starting")
+    assert "未保存" in controller.dialog["message"]
+    assert not any(name in {"open", "error"} for name, _args in controller.ui.events)
+
+
+def test_restart_status_failure_preserves_current_window(lifecycle):
+    controller, _state, _calls = lifecycle
+    controller.services.status = lambda: (_ for _ in ()).throw(OSError("not reachable"))
+    controller.services.start = lambda _action: pytest.fail("Uncertain task status must not restart services")
+    controller.restart_requested()
+    assert controller.ready and not controller.starting
+    assert controller.dialog["kind"] == "service-error"
+    assert not any(name == "open" for name, _args in controller.ui.events)
+
+
 def test_single_instance_authenticates_commands_and_keeps_primary_record(tmp_path):
     received = []
     primary = SingleInstance(tmp_path, lambda action: received.append(action) or {"action": action})

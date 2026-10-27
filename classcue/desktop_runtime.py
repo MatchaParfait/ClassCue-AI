@@ -252,18 +252,41 @@ class Lifecycle:
         with self.guard:
             if self.starting or self.exiting or self.allow_destroy:
                 return
-            self.starting = True
+            preserve_edits = action == "restart" and self.unsaved_changes
+            if not preserve_edits:
+                self.starting = True
+        if preserve_edits:
+            self.prompt("starting", "设置有未保存的修改，请先保存或放弃修改后再重启。")
+            return
         try:
             self.ui.progress("正在启动本地服务…")
             origin = self.services.start(action)
             self.ready = True
+            if action == "restart" and self.unsaved_changes:
+                self.prompt("starting", "服务已重启，设置有未保存的修改；当前页面已保留，请先保存或放弃修改。")
+                return
             self.ui.open(origin)
         except Exception as error:
             logging.getLogger(__name__).exception("Desktop service startup failed")
-            self.ready = False
-            self.ui.error(str(error))
+            if action == "restart" and self.unsaved_changes:
+                self.prompt("service-error", f"重启服务失败，未保存的设置仍保留在当前页面：{error}")
+            else:
+                self.ready = False
+                self.ui.error(str(error))
         finally:
             self.starting = False
+
+    def restart_requested(self):
+        if self.unsaved_changes:
+            self.prompt("starting", "设置有未保存的修改，请先保存或放弃修改后再重启。")
+            return
+        try:
+            if self.services.status().get("processing"):
+                self.prompt("starting", "仍有处理任务，请完成或停止任务后再重启。")
+            else:
+                self.start("restart")
+        except Exception as error:
+            self.prompt("service-error", str(error))
 
     def close_requested(self, *, exit_app=False, ignore_unsaved=False):
         if self.exiting:

@@ -273,15 +273,7 @@ def main(action="activate"):
         elif command == "exit":
             background(lifecycle.close_requested, exit_app=True)
         elif command == "restart":
-            def restart():
-                try:
-                    if lifecycle.services.status().get("processing"):
-                        lifecycle.prompt("starting", "仍有处理任务，请完成或停止任务后再重启。")
-                    else:
-                        lifecycle.start("restart")
-                except Exception as error:
-                    lifecycle.prompt("service-error", str(error))
-            background(restart)
+            background(lifecycle.restart_requested)
         return {"ok": True}
 
     instance = SingleInstance(PROJECT / ".runtime", dispatch)
