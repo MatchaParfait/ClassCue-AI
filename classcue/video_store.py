@@ -331,6 +331,8 @@ class VideoStore:
             initialize_questions(connection)
             from classcue.material_store import initialize_materials
             initialize_materials(connection)
+            from classcue.study_materials import initialize_study_materials
+            initialize_study_materials(connection)
             self._restore_completed_analysis_status(connection)
 
     @staticmethod

@@ -89,6 +89,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage").then(module => ({
 const BatchProcessPage = lazy(() => import("./pages/BatchProcessPage").then(module => ({ default: module.BatchProcessPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 const MaterialsPage = lazy(() => import("./pages/MaterialsPage").then(module => ({ default: module.MaterialsPage })));
+const StudyMaterialsPage = lazy(() => import("./pages/StudyMaterialsPage").then(module => ({ default: module.StudyMaterialsPage })));
 
 function PageLoading() {
   return <div className="library-state" role="status"><LoaderCircle className="spin" size={18} />正在打开页面…</div>;
@@ -134,7 +135,7 @@ function ApplicationViews() {
   </ReviewTabsProvider>;
 }
 
-const PAGE_PATHS = ["/process", "/batch-process", "/settings", "/materials"];
+const PAGE_PATHS = ["/process", "/batch-process", "/settings", "/materials", "/study-materials"];
 
 function Workbench({ visible }: { visible: boolean }) {
   const reviewTabs = useReviewTabs();
@@ -285,6 +286,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
                 if (active) navigate(`/process?videoId=${video.id}`, { replace: true, state: { ...location.state, draftKey: panelKey(screen) } });
               }} />} />
             <Route path="/batch-process" element={<BatchProcessPage active={active} onClose={close} onJob={onJob} />} />
+            <Route path="/study-materials" element={<StudyMaterialsPage key={scope} scope={scope} active={active} />} />
             <Route path="/materials" element={MATERIALS_ENABLED
               ? <MaterialsPage key={scope} scope={scope} active={active} onJob={onJob} />
               : <Navigate to="/" replace />} />
@@ -1283,6 +1285,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         <div className="library-heading">
           <div className="library-heading-copy"><p className="character-tagline">收藏课程，温习重点。</p><h1 tabIndex={-1}>视频库</h1><span className="library-total">{videoList.length} 个视频 · {visibleFolders.length} 个文件夹</span></div>
           <div className="library-heading-actions">
+            <Link className="secondary-button" to="/study-materials"><BookOpen size={17} />学习资料</Link>
             {MATERIALS_ENABLED && <Link className="secondary-button" to="/materials"><BookOpen size={17} />复习资料</Link>}
             <Link className="primary-button" to="/process"><FileVideo size={17} />导入视频</Link>
             <Link className="secondary-button" to="/batch-process"><FolderOpen size={17} />导入文件夹</Link>

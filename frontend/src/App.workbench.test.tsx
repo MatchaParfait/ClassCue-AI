@@ -12,6 +12,7 @@ vi.mock("./pages/MaterialsPage", () => ({ MaterialsPage: () => {
   materialFeature.render();
   return <div data-materials-page>Materials fixture</div>;
 } }));
+vi.mock("./pages/StudyMaterialsPage", () => ({ StudyMaterialsPage: () => <div data-study-materials-page>Study materials fixture</div> }));
 
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),
@@ -104,7 +105,7 @@ async function back() { await act(async () => { window.history.back(); await new
 
 it("shows both import links directly and opens complete pages", async () => {
   await mount();
-  expect([...container.querySelectorAll('.library-heading-actions a')].map((item) => item.textContent)).toEqual(["导入视频", "导入文件夹"]);
+  expect([...container.querySelectorAll('.library-heading-actions a')].map((item) => item.textContent)).toEqual(["学习资料", "导入视频", "导入文件夹"]);
   expect(container.querySelector('a[href="/materials"]')).toBeNull();
   expect(container.querySelector('a[href="/demo"]')).toBeNull();
   click(container.querySelector('.library-heading-actions a[href="/process"]')!);
@@ -113,6 +114,14 @@ it("shows both import links directly and opens complete pages", async () => {
   expect(container.querySelector(".library-page")).not.toBeNull();
   expect(container.querySelector(".library-page")?.closest("[hidden]")).not.toBeNull();
   expect(container.querySelectorAll('[aria-modal="true"]')).toHaveLength(0);
+});
+
+it("opens the independent manual study reader without enabling the old materials library", async () => {
+  await mount();
+  click(container.querySelector('a[href="/study-materials"]')!);
+  await settle(() => expect(visibleScreen().querySelector("[data-study-materials-page]")).not.toBeNull());
+  expect(window.location.pathname).toBe("/study-materials");
+  expect(materialFeature.render).not.toHaveBeenCalled();
 });
 
 it.each(["/materials", "/materials?collection=saved#question"])("redirects paused materials route %s without mounting it or clearing navigation", async path => {

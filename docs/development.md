@@ -508,6 +508,20 @@ GitHub Actions 的 `Tests` 工作流在分支推送和 PR 时运行 Windows 后�
 恢复步骤、已实现边界、待办和合成验收见[分类复习资料库](material-library.md)。
 本阶段不运行视频例题自动匹配。
 
+## 学习资料与手动选题
+
+首页“学习资料”打开独立 `/study-materials` 页面，支持多选或拖入 PDF、
+Markdown、JPEG/PNG/WebP。导入只复制原文件；同名和重复内容各自保留。
+PDF 可连续拖拽跨页并按每页全部文字的最大宽度向外吸附，扫描页和照片支持自由框选；
+跨页裁片按一次操作保存、撤销和锁定。Markdown 支持拖框自动选择原文结构块。
+保存后可预览、修改、定位原文及移除恢复，阅读位置和缩放随资料持久保存。
+
+`classcue/study_materials.py` 管理独立 SQLite 表和库作用域内的相对资源引用，
+`classcue/study_material_parser.py` 提供本地结构解析与 PDF 按需渲染；
+`api/study_materials.py` 提供 `/api/study-documents` 和 `/api/study-questions`。
+本功能不依赖旧资料库分类、Agent、模型配置或 DSH。
+实现边界、接口和隔离验收命令见[学习资料与手动选题](study-materials.md)。
+
 ## 许可证
 
 本项目采用 [MIT License](../LICENSE)。
