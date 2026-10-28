@@ -1,0 +1,14 @@
+.dsh-question-actions { min-width: 0; font-size: 13px; }
+.study-question-pane > .dsh-question-actions { flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--ui-border); max-height: 35%; overflow: auto; }
+.dsh-question-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dsh-question-actions p { margin: 8px 0; overflow-wrap: anywhere; }
+.dsh-question-actions details { margin-top: 8px; }
+.dsh-question-actions summary { cursor: pointer; }
+.dsh-question-actions ul { margin: 6px 0; padding-left: 16px; }
+.dsh-question-actions .text-button { max-width: 100%; white-space: normal; text-align: left; }
+.dsh-connection-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.dsh-connection-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dsh-connection-dialog h2 { font-size: 18px; margin: 0; }
+.dsh-connection-dialog .settings-field { min-width: 0; margin: 16px 0; }
+.dsh-connection-dialog input { width: 100%; min-width: 0; box-sizing: border-box; }
+.dsh-connection-dialog p { overflow-wrap: anywhere; }

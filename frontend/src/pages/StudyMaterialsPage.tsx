@@ -9,6 +9,7 @@ import { getStudyBlocks, getStudyDocuments, getStudyQuestions, getStudyTextBound
 import { StudyPageCanvas } from "../components/StudyPageCanvas";
 import { StudyMarkdown } from "../components/StudyMarkdown";
 import { StudyQuestionContent, StudyQuestionPreview } from "../components/StudyQuestionPreview";
+import { DshQuestionActions } from "../components/DshQuestionActions";
 import { useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
 import { useStudyMarkdownBoxSelection } from "../hooks/useStudyMarkdownBoxSelection";
 import { expandToTextWidth, useStudyPageBoxSelection } from "../hooks/useStudyPageBoxSelection";
@@ -324,6 +325,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   const editableIndices = draft.regions.flatMap((region, index) =>
     index === editableIndex || (editableGroup && region.selection_group === editableGroup) ? [index] : []);
   const editing = selecting || isDirty;
+  const savedQuestion = activeQuestions.find(item => item.id === draft.id && item.document_id === documentId);
   const questionTitle = draft.title || `题目 ${draftNumber}`;
   const continuousPreview = document?.format === "markdown" || draft.regions.some((region, index, values) =>
     region.selection_group && values.some((other, position) => position !== index && other.selection_group === region.selection_group));
@@ -522,6 +524,9 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
           {!questionList.length && !selecting && !draft.regions.length && <div className="study-empty"><Crop size={26} /><span>尚未保存题目</span>
             <button className="text-button" disabled={!readable} onClick={newQuestion}><Plus size={15} />选取一道题</button></div>}
         </div>
+        {readable && savedQuestion && !editing && !busy && !uploading && <DshQuestionActions
+          questionId={savedQuestion.id} contentVersion={savedQuestion.version} scope={scope}
+          active={active && rightOpen} />}
         {editing && <div className="study-draft-actions"><span className="study-muted">{draft.regions.length} 个区域</span>
           <button className="primary-button" disabled={busy || !draft.regions.length || !isDirty}
             onClick={() => { void save().catch(() => {}); }}>{busy ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存题目</button>

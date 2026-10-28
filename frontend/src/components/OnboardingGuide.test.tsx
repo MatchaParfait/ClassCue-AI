@@ -179,6 +179,16 @@ it("does not start until a previously unknown library is confirmed empty", async
   expect(tip()).toBeNull();
 });
 
+it("can be dismissed before setup is complete and reopened explicitly later", async () => {
+  await mount();
+  await settle(() => expect(title()).toBe("确认存储"));
+  await click("稍后设置", tip()!);
+  await settle(() => expect(tip()).toBeNull());
+  expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ dismissed: true });
+  await act(async () => window.dispatchEvent(new Event(ONBOARDING_RESET_EVENT)));
+  await settle(() => expect(title()).toBe("确认存储"));
+});
+
 it.each([true, false])("confirms existing storage with delete_source_after_import=%s without requiring or changing that choice", async deleteSource => {
   vi.mocked(api.getStorageDirectories).mockResolvedValue({ ...directories, delete_source_after_import: deleteSource });
   await mount(undefined, "/settings");

@@ -302,7 +302,8 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
         onRetryLoad={() => { if (jobId != null) void job.refetch(); void recent.refetch(); void latest.refetch(); void paused.refetch(); }}
         onJob={onJob} onSettings={() => open("/settings?section=ai")} onOpen={value => open(taskDestination(value))} />}
     </WorkbenchPanel>
-    <OnboardingGuide active={visible && workspaceSettled && !isPanel} scope={scope} onActiveChange={setOnboardingActive} />
+    <OnboardingGuide active={visible && workspaceSettled && !isPanel && pageLocation.pathname !== "/study-materials"}
+      scope={scope} onActiveChange={setOnboardingActive} />
   </div>;
 }
 

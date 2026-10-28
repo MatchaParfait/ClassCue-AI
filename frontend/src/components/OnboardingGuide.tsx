@@ -158,6 +158,8 @@ export function OnboardingGuide({ active, scope, onActiveChange }: Props) {
       if (selection.data) void status.refetch();
     }}><RefreshCw size={14} />重新读取状态</button>}
     <div className="onboarding-actions">
+      <button type="button" className="secondary-button onboarding-dismiss"
+        disabled={saving} onClick={() => leave(() => updateState({ dismissed: true }))}>稍后设置</button>
       {index > 0 && <button className="icon-button" type="button" title="上一步" aria-label="上一步" disabled={saving}
         onClick={() => changeStep(steps[index - 1].key)}><ArrowLeft size={16} /></button>}
       {inForm && step.key !== "shortcuts" && <button type="button" className="primary-button"

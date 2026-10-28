@@ -95,6 +95,7 @@ from api.bilibili import router as bilibili_router
 from api.questions import router as question_router
 from api.materials import router as materials_router
 from api.study_materials import router as study_materials_router
+from api.dsh_bridge import router as dsh_bridge_router
 from classcue.video_library import register_managed_video, video_filename
 from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
 from classcue.api_failure import ApiUnavailable
@@ -1110,6 +1111,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     ))
     api.include_router(materials_router(provider, jobs))
     api.include_router(study_materials_router(provider, jobs))
+    api.include_router(dsh_bridge_router(provider))
     api.include_router(update_router(update_center, jobs, provider, storage_migrating, updating))
     api.state.update_center = update_center
     api.state.updating = updating

@@ -28,6 +28,7 @@
 .onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .onboarding-actions:empty { display: none; }
 .onboarding-actions button { white-space: normal; }
+.onboarding-dismiss { margin-right: auto; }
 .onboarding-region-controls { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
 .onboarding-spotlight.has-nested-dialog { visibility: hidden; }
 body[data-onboarding-active="true"] .workbench { padding-bottom: 300px; }

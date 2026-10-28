@@ -125,6 +125,13 @@ it("opens the independent manual study reader without enabling the old materials
   expect(materialFeature.render).not.toHaveBeenCalled();
 });
 
+it("does not block the independent study reader with the video onboarding guide", async () => {
+  await mount();
+  click(container.querySelector('a[href="/study-materials"]')!);
+  await settle(() => expect(visibleScreen().querySelector("[data-study-materials-page]")).not.toBeNull());
+  expect(document.querySelector(".onboarding-tip")).toBeNull();
+});
+
 it.each(["/materials", "/materials?collection=saved#question"])("redirects paused materials route %s without mounting it or clearing navigation", async path => {
   const key = "classcue-materials:synthetic";
   const saved = JSON.stringify({ collection: "saved", item: "question" });
