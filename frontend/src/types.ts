@@ -61,6 +61,13 @@ export interface VideoLibraryFolder {
   markerImportanceCounts?: Record<MarkerImportance, number>;
 }
 
+export interface SecondaryView {
+  video_id: number;
+  filename: string;
+  duration_ms: number;
+  offset_ms: number;
+}
+
 export interface VideoLibraryState {
   folders: VideoLibraryFolder[];
   assignments: Record<string, string | null>;

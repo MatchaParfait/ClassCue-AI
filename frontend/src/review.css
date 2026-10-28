@@ -46,8 +46,10 @@
 .video-section .section-heading { min-height: 36px; margin-bottom: 20px; gap: 16px; }
 .video-section h1 { min-width: 0; overflow-wrap: anywhere; font-size: 20px; line-height: 1.5; font-weight: 500; }
 .video-frame { position: relative; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; min-height: 200px; background: var(--ui-player-bg); border-radius: 6px; }
-.video-meta-details { padding-top: 16px; color: var(--ui-muted); font-size: 12px; }
-.video-meta-details summary { width: fit-content; cursor: pointer; }
+.video-secondary-row { display: grid; grid-template-columns: 6em minmax(0, 1fr); align-items: start; column-gap: 8px; margin-top: 16px; color: var(--ui-muted); font-size: 12px; }
+.video-meta-details { grid-area: 1 / 1 / 2 / -1; min-width: 0; color: inherit; font-size: inherit; }
+.video-meta-details summary { width: fit-content; min-height: 20px; line-height: 20px; cursor: pointer; }
+.video-secondary-row > .secondary-view-control { grid-area: 1 / 2; justify-self: start; }
 .video-meta { display: flex; min-width: 0; flex-direction: column; gap: 3px; color: var(--ui-muted); font-size: 12px; margin-top: 12px; }
 .video-meta span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: normal; overflow-wrap: anywhere; }
 .player-controls { position: absolute; inset: auto 0 0; color: var(--ui-player-text); background: linear-gradient(transparent, var(--ui-player-scrim) 35%); padding: 12px 16px 10px; }

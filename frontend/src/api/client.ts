@@ -24,6 +24,7 @@ import type {
   StorageMigrationPlan,
   ApplicationDataPlan,
   StudySharePreview,
+  SecondaryView,
 } from "../types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -792,6 +793,27 @@ export async function uploadVideo(file: File): Promise<{ video: Video; existed: 
     { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file },
   );
   return { ...raw, video: normalizeVideo(raw.video) };
+}
+
+export function getSecondaryView(videoId: number): Promise<SecondaryView | null> {
+  return request(`/api/videos/${videoId}/secondary-view`);
+}
+
+export function setSecondaryView(videoId: number, secondaryVideoId: number): Promise<SecondaryView> {
+  return request(`/api/videos/${videoId}/secondary-view`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ secondary_video_id: secondaryVideoId, offset_ms: 0 }),
+  });
+}
+
+export function setSecondaryViewOffset(videoId: number, offsetMs: number): Promise<SecondaryView> {
+  return request(`/api/videos/${videoId}/secondary-view`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ offset_ms: offsetMs }),
+  });
+}
+
+export async function removeSecondaryView(videoId: number): Promise<void> {
+  await request(`/api/videos/${videoId}/secondary-view`, { method: "DELETE" });
 }
 
 export async function renameVideoFile(videoId: number, filename: string): Promise<Video> {

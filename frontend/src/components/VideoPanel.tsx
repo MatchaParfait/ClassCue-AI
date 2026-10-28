@@ -1,15 +1,22 @@
 import { useShortcuts, matchesShortcut, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedPopup, useEntryMotion } from "./Motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, Type, Volume2, VolumeX } from "lucide-react";
 import type { CSSProperties, KeyboardEvent, RefObject } from "react";
-import type { Subtitle, Video } from "../types";
+import type { SecondaryView, Subtitle, Video } from "../types";
 import { getStreamUrl } from "../api/client";
 import { formatTime } from "../utils";
 import { DraggableSubtitle } from "./DraggableSubtitle";
 import { AudioChannelControl } from "./AudioChannelControl";
 import type { SearchSeek } from "../searchNavigation";
 import { useReviewTabs } from "./ReviewTabs";
+import { SecondaryViewControl } from "./SecondaryViewControl";
+
+export interface PlayerTimeline {
+  getCurrentTime: () => number;
+  seekTo: (seconds: number, autoPlay?: boolean) => void;
+  isReady: () => boolean;
+}
 
 interface VideoPanelProps {
   video: Video;
@@ -21,6 +28,7 @@ interface VideoPanelProps {
   onTimeUpdate: (time: number) => void;
   onDurationChange: (durationSeconds: number) => void;
   videoRef: RefObject<HTMLVideoElement>;
+  timelineRef?: RefObject<PlayerTimeline>;
   navigationSeek?: SearchSeek;
   autoPlay?: boolean;
 }
@@ -40,19 +48,38 @@ function readSubtitlePreferences() {
   }
 }
 
-export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false, currentTime, onTimeUpdate, onDurationChange, videoRef, navigationSeek, autoPlay = false }: VideoPanelProps) {
+export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false, currentTime, onTimeUpdate, onDurationChange, videoRef, timelineRef, navigationSeek, autoPlay = false }: VideoPanelProps) {
   const shortcuts = useShortcuts();
   const headingRef = useRef<HTMLDivElement>(null);
   useEntryMotion(headingRef, { duration: .14 });
   const progressKey = `classroom-study-progress:${libraryId}:${videoId}`;
   const positions = useReviewTabs()?.positions;
+  const [secondary, setSecondary] = useState<SecondaryView | null>(null);
+  const [secondaryActive, setSecondaryActive] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const mainDuration = useRef(0);
+  const secondaryDuration = useRef(0);
+  const mapping = useRef({ active: false, offset: 0 });
+  const pendingSource = useRef<{
+    time: number; resume: boolean; rate: number; volume: number; muted: boolean;
+  } | null>(null);
+  const queuedPrimarySeek = useRef<{ seconds: number; play: boolean } | null>(null);
+  const lastPrimaryTime = useRef(0);
+  const boundTime = (time: number) => Math.max(0, Math.min(mainDuration.current || Infinity, time));
+  const getPrimaryTime = () => {
+    if (pendingSource.current) return pendingSource.current.time;
+    const element = videoRef.current;
+    return element && element.readyState >= 1 && Number.isFinite(element.currentTime)
+      ? boundTime(element.currentTime - mapping.current.offset) : lastPrimaryTime.current;
+  };
   useEffect(() => {
     const element = videoRef.current;
     if (!element) return;
     const save = () => {
-      if (!Number.isFinite(element.currentTime) || element.readyState < 1) return;
-      positions?.set(progressKey, element.currentTime);
-      try { localStorage.setItem(progressKey, String(element.currentTime)); } catch { /* Playback does not require storage. */ }
+      if (!pendingSource.current && (!Number.isFinite(element.currentTime) || element.readyState < 1)) return;
+      const time = pendingSource.current?.time ?? boundTime(element.currentTime - mapping.current.offset);
+      positions?.set(progressKey, time);
+      try { localStorage.setItem(progressKey, String(time)); } catch { /* Playback does not require storage. */ }
     };
     window.addEventListener("pagehide", save);
     return () => {
@@ -79,10 +106,89 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
 
+  const publishTime = (time: number) => {
+    lastPrimaryTime.current = time;
+    onTimeUpdate(time);
+  };
+
+  const switchSource = (active: boolean, time = getPrimaryTime(), resume = !videoRef.current?.paused) => {
+    const element = videoRef.current;
+    if (!element || (active && !secondary)) return;
+    const offset = active ? secondary!.offset_ms / 1000 : 0;
+    const target = time + offset;
+    if (active && (target < 0 || (secondaryDuration.current > 0 && target >= secondaryDuration.current))) {
+      setPlaybackError("当前主视频时间超出副视角范围，已保留主视角。");
+      return;
+    }
+    pendingSource.current = pendingSource.current
+      ? { ...pendingSource.current, time, resume }
+      : { time, resume, rate: element.playbackRate, volume: element.volume, muted: element.muted };
+    // Source changes can emit pause/timeupdate with an empty timeline.
+    element.pause();
+    mapping.current = { active, offset };
+    setSwitching(true);
+    setSecondaryActive(active);
+    setPlaybackError(null);
+    publishTime(time);
+  };
+
+  const seek = (seconds: number, play = false) => {
+    const element = videoRef.current;
+    if (!element || !Number.isFinite(seconds)) return;
+    if (mainDuration.current <= 0) {
+      queuedPrimarySeek.current = { seconds, play };
+      publishTime(Math.max(0, seconds));
+      return;
+    }
+    const next = boundTime(seconds);
+    if (pendingSource.current) {
+      pendingSource.current.time = next;
+      if (play) pendingSource.current.resume = true;
+      publishTime(next);
+      return;
+    }
+    const target = next + mapping.current.offset;
+    if (mapping.current.active && (target < 0 || target >= element.duration)) {
+      switchSource(false, next, play || !element.paused);
+      setPlaybackError("该时间点超出副视角范围，已切回主视角。");
+      return;
+    }
+    element.currentTime = target;
+    publishTime(next);
+    if (play) void element.play().catch(() => undefined);
+  };
+
+  useImperativeHandle(timelineRef, () => ({
+    getCurrentTime: getPrimaryTime,
+    seekTo: seek,
+    isReady: () => !pendingSource.current && (videoRef.current?.readyState ?? 0) >= 2,
+  }));
+
+  const changeSecondary = (view: SecondaryView | null) => {
+    const time = getPrimaryTime();
+    if (!view && mapping.current.active) switchSource(false, time);
+    if (view && mapping.current.active && view.offset_ms / 1000 !== mapping.current.offset) {
+      const offset = view.offset_ms / 1000;
+      const target = time + offset;
+      if (target < 0 || (secondaryDuration.current > 0 && target >= secondaryDuration.current)) {
+        switchSource(false, time);
+        setPlaybackError("新的偏移超出副视角范围，已切回主视角。");
+      } else {
+        mapping.current.offset = offset;
+        if (pendingSource.current) pendingSource.current.time = time;
+        else if (videoRef.current) videoRef.current.currentTime = target;
+        publishTime(time);
+      }
+    }
+    secondaryDuration.current = view?.duration_ms ? view.duration_ms / 1000 : 0;
+    setSecondary(view);
+  };
+
   useEffect(() => {
     restoredRef.current = false;
     const element = videoRef.current;
     const seconds = element && Number.isFinite(element.duration) ? element.duration : 0;
+    mainDuration.current = seconds;
     setDuration(seconds);
     setPlaying(Boolean(element && !element.paused));
     setPlaybackError(null);
@@ -133,13 +239,10 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
 
   const applyNavigationSeek = (element: HTMLVideoElement) => {
     if (!navigationSeek || consumedSeek.current === navigationSeek.token || !Number.isFinite(element.duration) || element.duration <= 0) return false;
-    const next = Math.max(0, Math.min(element.duration, navigationSeek.seconds));
-    element.currentTime = next;
+    const next = boundTime(navigationSeek.seconds);
+    seek(next, true);
     consumedSeek.current = navigationSeek.token;
     restoredRef.current = true;
-    onTimeUpdate(next);
-    // Seeking is reliable even if the browser denies autoplay after navigation.
-    void element.play().catch(() => undefined);
     return true;
   };
 
@@ -150,26 +253,31 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     const sessionTime = positions?.get(progressKey);
     if (sessionTime !== undefined && Number.isFinite(sessionTime)) {
       const next = Math.max(0, Math.min(sessionTime, element.duration));
-      element.currentTime = next;
-      onTimeUpdate(next);
+      seek(next);
       return;
     }
     let saved = 0;
     try { saved = Number(localStorage.getItem(progressKey)); } catch { return; }
     if (Number.isFinite(saved) && saved > 1 && saved < element.duration - 3) {
-      element.currentTime = saved;
-      onTimeUpdate(saved);
+      seek(saved);
     }
   };
 
   const saveProgress = (element: HTMLVideoElement) => {
-    positions?.set(progressKey, element.currentTime);
-    try { localStorage.setItem(progressKey, String(element.currentTime)); } catch { /* Playback does not require storage. */ }
+    if (pendingSource.current || element.readyState < 1) return;
+    const time = boundTime(element.currentTime - mapping.current.offset);
+    positions?.set(progressKey, time);
+    try { localStorage.setItem(progressKey, String(time)); } catch { /* Playback does not require storage. */ }
   };
 
   const togglePlay = async () => {
     const element = videoRef.current;
     if (!element) return;
+    if (pendingSource.current) {
+      pendingSource.current.resume = !pendingSource.current.resume;
+      setPlaying(pendingSource.current.resume);
+      return;
+    }
     if (!element.paused) {
       element.pause();
       return;
@@ -180,13 +288,6 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     } catch {
       setPlaybackError("视频无法播放，请检查视频文件或连接。");
     }
-  };
-
-  const seek = (seconds: number) => {
-    if (!videoRef.current || duration <= 0) return;
-    const next = Math.max(0, Math.min(duration, seconds));
-    videoRef.current.currentTime = next;
-    onTimeUpdate(next);
   };
 
   const toggleMute = () => {
@@ -233,36 +334,96 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
           ref={videoRef}
           className="video-player"
           playsInline
-          autoPlay={autoPlay}
+          autoPlay={autoPlay && !restoredRef.current && !switching}
           crossOrigin="anonymous"
           preload="metadata"
-          src={getStreamUrl(videoId, demo)}
+          src={getStreamUrl(secondaryActive && secondary ? secondary.video_id : videoId, demo)}
           onLoadedMetadata={(event) => {
             const element = event.currentTarget;
             const seconds = Number.isFinite(element.duration) ? element.duration : 0;
-            setDuration(seconds);
-            onDurationChange(seconds);
-            setPlaybackError(null);
-            restoreProgress(element);
+            if (mapping.current.active) secondaryDuration.current = seconds;
+            else {
+              mainDuration.current = seconds;
+              setDuration(seconds);
+              onDurationChange(seconds);
+            }
+            const pending = pendingSource.current;
+            if (pending) {
+              const target = pending.time + mapping.current.offset;
+              if (mapping.current.active && (target < 0 || target >= seconds)) {
+                switchSource(false, pending.time, pending.resume);
+                setPlaybackError("该时间点超出副视角范围，已切回主视角。");
+                return;
+              }
+              element.playbackRate = pending.rate;
+              element.volume = pending.volume;
+              element.muted = pending.muted;
+              element.currentTime = Math.max(0, Math.min(seconds, target));
+              pendingSource.current = null;
+              setSwitching(false);
+              publishTime(boundTime(element.currentTime - mapping.current.offset));
+              if (pending.resume) void element.play().catch(() => {
+                setPlaying(false);
+                setPlaybackError("视角已切换，请点击播放继续。");
+              });
+              else setPlaying(false);
+              applyNavigationSeek(element);
+            } else {
+              setPlaybackError(null);
+              restoreProgress(element);
+              const queuedSeek = queuedPrimarySeek.current;
+              queuedPrimarySeek.current = null;
+              if (queuedSeek) seek(queuedSeek.seconds, queuedSeek.play);
+            }
           }}
           onDurationChange={(event) => {
             const seconds = event.currentTarget.duration;
-            if (Number.isFinite(seconds)) {
+            if (Number.isFinite(seconds) && !mapping.current.active) {
+              mainDuration.current = seconds;
               setDuration(seconds);
               onDurationChange(seconds);
               applyNavigationSeek(event.currentTarget);
             }
           }}
-          onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
+          onTimeUpdate={(event) => {
+            if (pendingSource.current) return;
+            const element = event.currentTarget;
+            const time = element.currentTime - mapping.current.offset;
+            if (mapping.current.active && mainDuration.current > 0 && time >= mainDuration.current) {
+              element.pause();
+              const end = mainDuration.current + mapping.current.offset;
+              if (Math.abs(element.currentTime - end) > .01) element.currentTime = end;
+              saveProgress(element);
+            }
+            publishTime(boundTime(time));
+          }}
           onPlay={() => setPlaying(true)}
           onPause={(event) => {
+            if (pendingSource.current) return;
             setPlaying(false);
             saveProgress(event.currentTarget);
           }}
-          onEnded={(event) => { setPlaying(false); saveProgress(event.currentTarget); }}
+          onEnded={(event) => {
+            if (pendingSource.current) return;
+            const time = boundTime(event.currentTarget.currentTime - mapping.current.offset);
+            if (mapping.current.active && time < mainDuration.current) {
+              switchSource(false, time, true);
+              setPlaybackError("副视角已结束，已切回主视角继续播放。");
+            } else { setPlaying(false); saveProgress(event.currentTarget); }
+          }}
           onVolumeChange={(event) => { setVolume(event.currentTarget.volume); setMuted(event.currentTarget.muted); }}
           onRateChange={(event) => setPlaybackRate(event.currentTarget.playbackRate)}
-          onError={() => setPlaybackError("视频加载失败，请检查视频文件或连接。")}
+          onError={() => {
+            if (mapping.current.active) {
+              switchSource(false, getPrimaryTime(), pendingSource.current?.resume ?? playing);
+              setPlaybackError("副视角加载失败，已切回主视角。");
+            } else {
+              pendingSource.current = null;
+              setSwitching(false);
+              setPlaying(false);
+              setPlaybackError("视频加载失败，请检查视频文件或连接。");
+            }
+          }}
           onClick={() => void togglePlay()}
           onDoubleClick={() => void toggleFullscreen()}
         >
@@ -367,13 +528,17 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
           </div>
         </div>
       </div>
-      <details className="video-meta-details">
-        <summary>文件详情</summary>
-        <div className="video-meta">
-          <span>{video.filename}</span>
-          <span>{video.video_path || "本地视频库"}</span>
-        </div>
-      </details>
+      <div className="video-secondary-row">
+        <details className="video-meta-details">
+          <summary>文件详情</summary>
+          <div className="video-meta">
+            <span>{video.filename}</span>
+            <span>{video.video_path || "本地视频库"}</span>
+          </div>
+        </details>
+        <SecondaryViewControl videoId={videoId} demo={demo} secondary={secondary} active={secondaryActive}
+          switching={switching || duration <= 0} onChange={changeSecondary} onSwitch={() => switchSource(!secondaryActive)} />
+      </div>
     </section>
   );
 }

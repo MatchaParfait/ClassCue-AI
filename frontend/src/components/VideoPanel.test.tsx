@@ -7,6 +7,8 @@ import type { Subtitle, Video } from "../types";
 import { VideoPanel } from "./VideoPanel";
 import type { SearchSeek } from "../searchNavigation";
 import { ReviewTabsProvider } from "./ReviewTabs";
+import * as api from "../api/client";
+import type { PlayerTimeline } from "./VideoPanel";
 
 const video: Video = {
   id: 1, display_name: "Lesson", filename: "lesson.mp4",
@@ -19,6 +21,7 @@ const subtitles: Subtitle[] = [
 let container: HTMLDivElement;
 let root: Root;
 let videoRef: ReturnType<typeof createRef<HTMLVideoElement>>;
+let timelineRef: ReturnType<typeof createRef<PlayerTimeline>>;
 let timeUpdate: ReturnType<typeof vi.fn>;
 let durationChange: ReturnType<typeof vi.fn>;
 let observerCallback: ResizeObserverCallback;
@@ -47,10 +50,12 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(40);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+  vi.spyOn(api, "getSecondaryView").mockImplementation(() => new Promise(() => undefined));
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   videoRef = createRef<HTMLVideoElement>();
+  timelineRef = createRef<PlayerTimeline>();
   timeUpdate = vi.fn();
   durationChange = vi.fn();
 });
@@ -65,7 +70,7 @@ afterEach(() => {
 function mount(currentTime = 0, items = subtitles, navigationSeek?: SearchSeek, autoPlay = false) {
   act(() => root.render(
     <VideoPanel video={video} subtitles={items} videoId={1} libraryId="test"
-      currentTime={currentTime} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef} navigationSeek={navigationSeek} autoPlay={autoPlay} />,
+      currentTime={currentTime} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef} timelineRef={timelineRef} navigationSeek={navigationSeek} autoPlay={autoPlay} />,
   ));
 }
 
@@ -130,8 +135,9 @@ function inputValue(input: HTMLInputElement, value: string) {
   });
 }
 
-function loadMetadata() {
-  Object.defineProperty(videoRef.current!, "duration", { configurable: true, value: 60 });
+function loadMetadata(seconds = 60) {
+  Object.defineProperty(videoRef.current!, "duration", { configurable: true, value: seconds });
+  Object.defineProperty(videoRef.current!, "readyState", { configurable: true, value: 2 });
   act(() => videoRef.current!.dispatchEvent(new Event("loadedmetadata")));
 }
 
@@ -329,6 +335,152 @@ describe("video subtitles and player controls", () => {
     await act(async () => button("播放").click());
     expect(container.querySelector(".video-playback-error")?.textContent).toContain("视频无法播放");
     expect(button("字幕")).toBeTruthy();
+  });
+});
+
+describe("secondary camera and primary timeline", () => {
+  const secondary = { video_id: 2, filename: "camera.mp4", duration_ms: 120000, offset_ms: 5000 };
+  async function mountSecondary(view = secondary) {
+    vi.mocked(api.getSecondaryView).mockResolvedValue(view);
+    await act(async () => mount());
+    loadMetadata();
+    act(() => { videoRef.current!.currentTime = 20; });
+  }
+  function changeCamera() {
+    act(() => button("切换到副视角").click());
+    loadMetadata(120);
+  }
+
+  it("switches at mapped time, preserves playback settings and keeps primary duration", async () => {
+    await mountSecondary();
+    const element = videoRef.current!;
+    element.playbackRate = 1.5; element.volume = .4; element.muted = true;
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    act(() => element.dispatchEvent(new Event("play")));
+    changeCamera();
+    expect(element.getAttribute("src")).toContain("/2/stream");
+    expect(element.currentTime).toBe(25);
+    expect([element.playbackRate, element.volume, element.muted]).toEqual([1.5, .4, true]);
+    expect(element.play).toHaveBeenCalledOnce();
+    expect(durationChange).toHaveBeenLastCalledWith(60);
+    element.currentTime = 30;
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(timeUpdate).toHaveBeenLastCalledWith(25);
+    expect(timelineRef.current!.getCurrentTime()).toBe(25);
+    act(() => button("切换到主视角").click());
+    loadMetadata();
+    expect(element.currentTime).toBe(25);
+  });
+
+  it("queues timestamp jumps made before primary metadata is ready", () => {
+    mount();
+    expect(timelineRef.current!.isReady()).toBe(false);
+    act(() => timelineRef.current!.seekTo(8, true));
+    expect(videoRef.current!.currentTime).toBe(0);
+    expect(videoRef.current!.play).not.toHaveBeenCalled();
+    loadMetadata();
+    expect(videoRef.current!.currentTime).toBe(8);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+    expect(timeUpdate).toHaveBeenLastCalledWith(8);
+  });
+
+  it("keeps paused switches paused and maps timestamp and search jumps using the primary clock", async () => {
+    await mountSecondary();
+    changeCamera();
+    expect(videoRef.current!.play).not.toHaveBeenCalled();
+    act(() => timelineRef.current!.seekTo(8, true));
+    expect(videoRef.current!.currentTime).toBe(13);
+    expect(timeUpdate).toHaveBeenLastCalledWith(8);
+    mount(8, subtitles, { token: "secondary-search", seconds: 12 });
+    expect(videoRef.current!.currentTime).toBe(17);
+    act(() => videoRef.current!.dispatchEvent(new Event("pause")));
+    expect(localStorage.getItem("classroom-study-progress:test:1")).toBe("12");
+    act(() => window.dispatchEvent(new Event("pagehide")));
+    expect(localStorage.getItem("classroom-study-progress:test:1")).toBe("12");
+  });
+
+  it("changes a saved offset without moving the primary time and removes an active view", async () => {
+    await mountSecondary();
+    changeCamera();
+    vi.spyOn(api, "setSecondaryViewOffset").mockResolvedValue({ ...secondary, offset_ms: -3000 });
+    act(() => button("副视角设置").click());
+    inputValue(container.querySelector<HTMLInputElement>('[aria-label="副视角时间偏移（秒）"]')!, "-3");
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(api.setSecondaryViewOffset).toHaveBeenCalledWith(1, -3000);
+    expect(videoRef.current!.currentTime).toBe(17);
+    expect(timelineRef.current!.getCurrentTime()).toBe(20);
+    vi.spyOn(api, "removeSecondaryView").mockResolvedValue();
+    await act(async () => button("删除副视角").click());
+    expect(api.removeSecondaryView).toHaveBeenCalledWith(1);
+    loadMetadata();
+    expect(videoRef.current!.currentTime).toBe(20);
+    expect(button("导入副视角")).not.toBeNull();
+  });
+
+  it("falls back to the primary recording for gaps and early endings without changing the timestamp", async () => {
+    await mountSecondary({ ...secondary, duration_ms: 30000 });
+    act(() => button("切换到副视角").click());
+    loadMetadata(30);
+    act(() => timelineRef.current!.seekTo(50, true));
+    loadMetadata();
+    expect(videoRef.current!.currentTime).toBe(50);
+    expect(container.querySelector(".video-playback-error")?.textContent).toContain("超出副视角范围");
+    act(() => timelineRef.current!.seekTo(20));
+    act(() => button("切换到副视角").click());
+    loadMetadata(30);
+    videoRef.current!.currentTime = 30;
+    act(() => videoRef.current!.dispatchEvent(new Event("ended")));
+    loadMetadata();
+    expect(videoRef.current!.currentTime).toBe(25);
+    expect(videoRef.current!.getAttribute("src")).toContain("/1/stream");
+  });
+
+  it("retains a timestamp selected during loading and recovers from a missing secondary file", async () => {
+    await mountSecondary();
+    act(() => button("切换到副视角").click());
+    expect(timelineRef.current!.isReady()).toBe(false);
+    act(() => timelineRef.current!.seekTo(35, true));
+    act(() => videoRef.current!.dispatchEvent(new Event("timeupdate")));
+    expect(timeUpdate).toHaveBeenLastCalledWith(35);
+    act(() => window.dispatchEvent(new Event("pagehide")));
+    expect(localStorage.getItem("classroom-study-progress:test:1")).toBe("35");
+    act(() => videoRef.current!.dispatchEvent(new Event("error")));
+    loadMetadata();
+    expect(videoRef.current!.currentTime).toBe(35);
+    expect(container.querySelector(".video-playback-error")?.textContent).toContain("副视角加载失败");
+  });
+
+  it("stops a longer secondary view at the primary end without repeatedly seeking", async () => {
+    await mountSecondary();
+    changeCamera();
+    const element = videoRef.current!;
+    let mediaTime = 65.25;
+    const setTime = vi.fn((value: number) => { mediaTime = value; });
+    Object.defineProperty(element, "currentTime", { configurable: true, get: () => mediaTime, set: setTime });
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(element.currentTime).toBe(65);
+    expect(timeUpdate).toHaveBeenLastCalledWith(60);
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(setTime).toHaveBeenCalledOnce();
+    expect(localStorage.getItem("classroom-study-progress:test:1")).toBe("60");
+  });
+
+  it("opens a single video picker and imports without starting analysis", async () => {
+    vi.mocked(api.getSecondaryView).mockResolvedValue(null);
+    await act(async () => mount());
+    loadMetadata();
+    const file = new File(["synthetic camera"], "camera.mp4", { type: "video/mp4" });
+    const picker = container.querySelector<HTMLInputElement>('[aria-label="选择副视角视频"]')!;
+    const click = vi.spyOn(picker, "click").mockImplementation(() => undefined);
+    act(() => button("导入副视角").click());
+    expect(click).toHaveBeenCalledOnce();
+    vi.spyOn(api, "uploadVideo").mockResolvedValue({ video: { ...video, id: 2 }, existed: false });
+    vi.spyOn(api, "setSecondaryView").mockResolvedValue(secondary);
+    Object.defineProperty(picker, "files", { configurable: true, value: [file] });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(api.uploadVideo).toHaveBeenCalledWith(file);
+    expect(api.setSecondaryView).toHaveBeenCalledWith(1, 2);
+    expect(button("切换到副视角")).not.toBeNull();
   });
 });
 

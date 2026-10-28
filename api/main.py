@@ -321,6 +321,16 @@ class VideoFilenamePayload(BaseModel):
     filename: str = Field(min_length=1, max_length=200)
 
 
+class SecondaryViewOffsetPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    offset_ms: int = Field(ge=-MAX_SQLITE_INTEGER, le=MAX_SQLITE_INTEGER, strict=True)
+
+
+class SecondaryViewPayload(SecondaryViewOffsetPayload):
+    secondary_video_id: int = Field(gt=0, le=MAX_SQLITE_INTEGER, strict=True)
+
+
 class FolderRenamePayload(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
@@ -2391,6 +2401,48 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def ensure_file_changes_allowed() -> None:
         if storage_migrating.is_set() or jobs.is_running() or provider.get().list_paused_jobs():
             raise HTTPException(status_code=409, detail="请先完成或停止任务，再移动视频或修改文件名")
+
+    @api.get("/api/videos/{video_id}/secondary-view")
+    def get_secondary_view(video_id: int) -> dict[str, object] | None:
+        store = provider.get()
+        _video_or_404(store, video_id)
+        view = store.get_secondary_view(video_id)
+        return _row_to_dict(view) if view else None
+
+    @api.put("/api/videos/{video_id}/secondary-view")
+    def put_secondary_view(video_id: int, payload: SecondaryViewPayload) -> dict[str, object]:
+        with jobs._lock:
+            if storage_migrating.is_set():
+                raise HTTPException(status_code=409, detail="存储迁移期间暂不能修改副视角")
+            store = provider.get()
+            _video_or_404(store, video_id)
+            secondary = _video_or_404(store, payload.secondary_video_id)
+            if not Path(secondary["video_path"]).is_file():
+                raise HTTPException(status_code=404, detail="副视角视频源文件不存在")
+            try:
+                store.set_secondary_view(video_id, payload.secondary_video_id, payload.offset_ms)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return _row_to_dict(store.get_secondary_view(video_id))
+
+    @api.patch("/api/videos/{video_id}/secondary-view")
+    def patch_secondary_view(video_id: int, payload: SecondaryViewOffsetPayload) -> dict[str, object]:
+        with jobs._lock:
+            store = provider.get()
+            _video_or_404(store, video_id)
+            try:
+                store.set_secondary_view_offset(video_id, payload.offset_ms)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return _row_to_dict(store.get_secondary_view(video_id))
+
+    @api.delete("/api/videos/{video_id}/secondary-view")
+    def delete_secondary_view(video_id: int) -> dict[str, bool]:
+        with jobs._lock:
+            store = provider.get()
+            _video_or_404(store, video_id)
+            store.remove_secondary_view(video_id)
+            return {"removed": True}
 
     def import_video(path: str | Path, filename: str | None = None, *, on_registered=None,
                      rename: bool = False, browser_upload: bool = False):

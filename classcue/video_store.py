@@ -134,6 +134,14 @@ class VideoStore:
                     imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(video_id, package_hash)
                 );
+                CREATE TABLE IF NOT EXISTS video_secondary_views (
+                    video_id INTEGER PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+                    secondary_video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    offset_ms INTEGER NOT NULL DEFAULT 0,
+                    CHECK(video_id != secondary_video_id)
+                );
+                CREATE INDEX IF NOT EXISTS secondary_views_by_video
+                    ON video_secondary_views(secondary_video_id);
                 CREATE TABLE IF NOT EXISTS recall_schemes (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -860,6 +868,35 @@ class VideoStore:
             if deleted.rowcount == 0:
                 raise ValueError("文件夹不存在")
 
+    def get_secondary_view(self, video_id: int) -> sqlite3.Row | None:
+        with self.connect() as connection:
+            return connection.execute(
+                "SELECT s.secondary_video_id AS video_id, s.offset_ms, v.filename, v.duration_ms "
+                "FROM video_secondary_views s JOIN videos v ON v.id = s.secondary_video_id "
+                "WHERE s.video_id = ?", (video_id,),
+            ).fetchone()
+
+    def set_secondary_view(self, video_id: int, secondary_video_id: int, offset_ms: int = 0) -> None:
+        if video_id == secondary_video_id:
+            raise ValueError("副视角不能使用主视频本身，请选择另一个视频")
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO video_secondary_views(video_id, secondary_video_id, offset_ms) VALUES (?, ?, ?) "
+                "ON CONFLICT(video_id) DO UPDATE SET secondary_video_id = excluded.secondary_video_id, "
+                "offset_ms = excluded.offset_ms", (video_id, secondary_video_id, offset_ms),
+            )
+
+    def set_secondary_view_offset(self, video_id: int, offset_ms: int) -> None:
+        with self.connect() as connection:
+            if not connection.execute(
+                "UPDATE video_secondary_views SET offset_ms = ? WHERE video_id = ?", (offset_ms, video_id),
+            ).rowcount:
+                raise ValueError("尚未导入副视角视频")
+
+    def remove_secondary_view(self, video_id: int) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM video_secondary_views WHERE video_id = ?", (video_id,))
+
     # ---- Recycle bin --------------------------------------------------------------
     _RECYCLE_CHILD_TABLES = (
         "video_transcript_segments",
@@ -871,6 +908,7 @@ class VideoStore:
         "video_processing_metrics",
         "video_experiments",
         "video_share_imports",
+        "video_secondary_views",
         "question_analyses",
         "question_captures",
         "question_visuals",
@@ -910,7 +948,14 @@ class VideoStore:
         ) if folder_ids else []
         related: dict[str, list[dict[str, object]]] = {}
         for table in self._RECYCLE_CHILD_TABLES:
-            if table == "video_experiments":
+            if table == "video_secondary_views":
+                slots = ",".join("?" for _ in video_ids)
+                rows = self._json_rows(
+                    connection,
+                    f"SELECT * FROM {table} WHERE video_id IN ({slots}) OR secondary_video_id IN ({slots})",
+                    tuple(video_ids) * 2,
+                ) if video_ids else []
+            elif table == "video_experiments":
                 query = (
                     f"SELECT * FROM {table} WHERE video_id IN "
                     f"({','.join('?' for _ in video_ids)}) ORDER BY id"
@@ -1299,6 +1344,15 @@ class VideoStore:
                     "bili_frames", "bili_read_cache",
                 ):
                     self._insert_rows(connection, table, related.get(table, []))
+                # Restore links only when both recordings still exist, preserving later choices.
+                for view in related.get("video_secondary_views", []):
+                    connection.execute(
+                        "INSERT OR IGNORE INTO video_secondary_views(video_id, secondary_video_id, offset_ms) "
+                        "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM videos WHERE id = ?) "
+                        "AND EXISTS (SELECT 1 FROM videos WHERE id = ?)",
+                        (view["video_id"], view["secondary_video_id"], view["offset_ms"],
+                         view["video_id"], view["secondary_video_id"]),
+                    )
                 # Undo recreates these rows and their files; keeping the queued
                 # cleanup entries would let the next collect() delete the
                 # restored screenshots, so remove exactly the restored ids here.

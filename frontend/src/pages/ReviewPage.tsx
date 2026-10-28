@@ -9,7 +9,7 @@ import { useReviewTabs } from "../components/ReviewTabs";
 import { parseSearchSeek } from "../searchNavigation";
 import { ReviewSidebar } from "../components/ReviewSidebar";
 import { BilibiliStudyPanel } from "../components/BilibiliStudyPanel";
-import { VideoPanel } from "../components/VideoPanel";
+import { VideoPanel, type PlayerTimeline } from "../components/VideoPanel";
 import { captureVideoFrame } from "../utils/captureVideoFrame";
 import { captureQuestionImage, getQuestionVisual, setQuestionImage, type ImageSelection,
   type QuestionVisual } from "../api/questionVisuals";
@@ -63,6 +63,14 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const createQuestionMutation = useCreateManualQuestionMutation(videoId || 0, mockMode);
   const renameQuestionMutation = useRenameManualQuestionMutation(videoId || 0, mockMode);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const timelineRef = useRef<PlayerTimeline>(null);
+  const getPlayerTime = useCallback(() => timelineRef.current?.getCurrentTime() ?? videoRef.current?.currentTime, []);
+  const captureFrame = useCallback(async () => {
+    if (timelineRef.current && !timelineRef.current.isReady()) throw new Error("正在切换视角，请等待画面加载后再截图");
+    const time = getPlayerTime();
+    const frame = await captureVideoFrame(videoRef.current);
+    return { ...frame, captured_at_ms: time === undefined ? frame.captured_at_ms : Math.round(time * 1000) };
+  }, [getPlayerTime]);
   const [mode, setMode] = useState<MarkerMode>("medium_recall");
   const initializedModeVideo = useRef<number | null>(null);
   const [status, setStatus] = useState<ReviewFilter>("all");
@@ -114,6 +122,10 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       setViewedMarkerIds((previous) => previous.has(markerId) ? previous : new Set([...previous, markerId]));
     }
     if (!videoRef.current) return;
+    if (timelineRef.current) {
+      timelineRef.current.seekTo(seconds, true);
+      return;
+    }
     videoRef.current.currentTime = seconds;
     setCurrentTime(seconds);
     videoRef.current.play().catch(() => undefined);
@@ -200,7 +212,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     setPendingEdits(pendingEditsRef.current);
     setJumpTimeError(null);
     try {
-      const frame = await captureVideoFrame(videoRef.current);
+      const frame = await captureFrame();
       const result = await captureQuestionImage(marker.id, frame);
       publishQuestionImage(marker, result.visual);
       replaceUndoHistory([...undoHistoryRef.current, { sequence, marker, kind: "image",
@@ -215,7 +227,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       pendingEditsRef.current -= 1;
       setPendingEdits(pendingEditsRef.current);
     }
-  }, [publishQuestionImage, replaceUndoHistory]);
+  }, [publishQuestionImage, replaceUndoHistory, captureFrame]);
 
   const removeQuestionImage = useCallback(async (marker: Marker) => {
     if (imageSavingRef.current || undoingRef.current || creatingQuestionRef.current || changingStatusRef.current) return;
@@ -306,7 +318,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const createQuestion = useCallback(async () => {
     if (creatingQuestionRef.current || changingStatusRef.current || undoingRef.current || pendingEditsRef.current) return;
     const sequence = ++nextUndoSequence.current;
-    const time = videoRef.current?.currentTime;
+    const time = getPlayerTime();
     if (time === undefined || !Number.isFinite(time) || time < 0) {
       setJumpTimeError("无法读取当前播放位置，请稍后重试");
       return;
@@ -330,7 +342,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     } finally {
       creatingQuestionRef.current = false;
     }
-  }, [createQuestionMutation.mutateAsync, duration, video?.duration_ms, videoId, replaceUndoHistory]);
+  }, [createQuestionMutation.mutateAsync, duration, video?.duration_ms, videoId, replaceUndoHistory, getPlayerTime]);
 
   useEffect(() => {
     if (isLoading || !video || (!mockMode && !canOpenReview(video.status, subtitles.length > 0))) return;
@@ -343,7 +355,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input[type="range"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) return;
       if (target?.closest('input:not([type="range"]), [data-shortcut-recorder], .video-caption, .review-tabs, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')
-        || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, [role="dialog"][aria-modal="true"]')]
+        || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, .secondary-view-popover, [role="dialog"][aria-modal="true"]')]
           .some((element) => !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
       if (action === "undoReview") {
         if (isShortcutInput(event.target) || !undoHistoryRef.current.length || undoingRef.current
@@ -363,7 +375,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
         if (!marker) return;
         event.preventDefault();
         setNotice(null);
-        const time = videoRef.current?.currentTime;
+        const time = getPlayerTime();
         if (time === undefined || !Number.isFinite(time)) {
           setJumpTimeError("无法读取当前播放位置，请稍后重试");
           return;
@@ -380,7 +392,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
     return () => document.removeEventListener("keydown", onMarkerShortcut);
   }, [isLoading, video, mockMode, subtitles.length, editingMarkerId, jumpTimeMutation.isPending,
     renameQuestionMutation.isPending, importanceMutation.isPending, questionEmphasisMutation.isPending,
-    moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, undoReviewAction, shortcuts]);
+    moveToMarker, allMarkers, duration, saveJumpTime, createQuestion, undoReviewAction, shortcuts, getPlayerTime]);
 
   if (isLoading) {
     return <div className="app-shell"><TopBar demo={mockMode} /><div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在准备复习工作台…</span></div></div>;
@@ -450,6 +462,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               }}
               onDurationChange={setDuration}
               videoRef={videoRef}
+              timelineRef={timelineRef}
             />
             {errors.subtitles && <LocalError label="字幕" error={errors.subtitles} />}
           </div>
@@ -477,7 +490,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onEditMarker={setEditingMarkerId}
               durationMs={(duration > 0 ? duration : video.duration_ms / 1000) * 1000}
               currentTimeMs={currentTime * 1000}
-              getCurrentTimeMs={() => (videoRef.current?.currentTime ?? currentTime) * 1000}
+              getCurrentTimeMs={() => (getPlayerTime() ?? currentTime) * 1000}
               onSaveTime={saveJumpTime}
               onChangeImportance={(marker, importance) => saveChange(marker, { kind: "importance", previous: marker.importance ?? "standard", next: importance })}
               onChangeQuestionEmphasis={(marker, emphasized) => saveChange(marker, { kind: "emphasis", previous: marker.question_emphasis_override ?? null, next: emphasized })}
@@ -500,7 +513,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       </div>
       {!mockMode && allMarkers.some(marker => marker.id === bilibiliMarkerId) && <BilibiliStudyPanel
         key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
-        onCaptureFrame={() => captureVideoFrame(videoRef.current)}
+        onCaptureFrame={captureFrame}
         backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}
       <AnimatePresence>{notice && (
         <AnimatedPopup key="notice" duration={.18} className="toast" role="status">
