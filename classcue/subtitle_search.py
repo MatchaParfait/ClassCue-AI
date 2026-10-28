@@ -91,12 +91,13 @@ def search_subtitles(
     offset: int = 0,
     video_id: int | None = None,
     preferred_video_id: int | None = None,
+    folder_id: int | None = None,
 ) -> dict[str, object]:
     query = validate_query(query)
     if (not 1 <= limit <= MAX_PAGE_SIZE or not 0 <= offset <= MAX_SQLITE_INTEGER
             or any(value is not None and not 1 <= value <= MAX_SQLITE_INTEGER
-                   for value in (video_id, preferred_video_id))):
-        raise ValueError("搜索分页或视频参数无效")
+                   for value in (video_id, preferred_video_id, folder_id))):
+        raise ValueError("搜索分页、视频或文件夹参数无效")
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     parameters: list[object] = []
     index_join = ""
@@ -111,6 +112,18 @@ def search_subtitles(
     if video_id is not None:
         predicates.append("s.video_id = ?")
         parameters.append(video_id)
+    if folder_id is not None:
+        predicates.append("""
+            v.library_folder_id IN (
+                WITH RECURSIVE tree(id) AS (
+                    SELECT id FROM video_folders WHERE id = ?
+                    UNION
+                    SELECT f.id FROM video_folders f JOIN tree t ON f.parent_id = t.id
+                )
+                SELECT id FROM tree
+            )
+        """)
+        parameters.append(folder_id)
     matching = f"""
         SELECT s.row_id, s.video_id, s.segment_id, s.start_ms, s.end_ms, s.text
         FROM video_transcript_segments s

@@ -78,6 +78,49 @@ def test_pagination_filtering_and_empty_pages(library):
 
 
 @pytest.mark.parametrize("query", ["分治", "分治法"])
+def test_folder_search_includes_all_descendants_before_counting_and_pagination(library, query):
+    store, client, first, second, _, folder = library
+    child = store.create_folder("第一单元", folder)
+    grandchild = store.create_folder("例题", child)
+    sibling = store.create_folder("其他课程")
+    unrelated = store.create_folder("第一单元", sibling)
+    nested = add_video(store, "子文件夹课程", ["分治法一", "分治法二"])
+    deep = add_video(store, "深层课程", ["分治法三"])
+    outside = add_video(store, "同名目录课程", ["分治法四"])
+    for video, target in ((nested, child), (deep, grandchild), (outside, unrelated)):
+        store.set_video_folder(video, target)
+    pages = [client.get("/api/library/search", params={
+        "q": query, "folder_id": folder, "limit": 1, "offset": offset,
+        "preferred_video_id": first,
+    }).json() for offset in range(5)]
+    assert all((page["total"], page["total_videos"]) == (4, 3) for page in pages)
+    assert [page["has_more"] for page in pages] == [True, True, True, False, False]
+    assert [page["items"][0]["video_id"] for page in pages[:4]] == [nested, nested, deep, second]
+    assert pages[-1]["items"] == []
+    assert store.search_subtitles(query, folder_id=child)["total"] == 3
+    assert store.search_subtitles(query, folder_id=grandchild)["total"] == 1
+    assert store.search_subtitles(query, folder_id=folder, video_id=first)["total"] == 0
+    assert store.search_subtitles(query, folder_id=folder, video_id=deep)["total"] == 1
+
+
+def test_folder_scope_tracks_moves_names_and_missing_folders(library):
+    store, client, first, second, _, folder = library
+    child = store.create_folder("子目录", folder)
+    store.set_video_folder(first, child)
+    store.update_folder(folder, "改名课程")
+    assert store.search_subtitles("分治法", folder_id=folder)["total"] == 3
+    store.set_folder_parent(child, None)
+    assert store.search_subtitles("分治法", folder_id=folder)["total"] == 1
+    store.set_video_folder(second, child)
+    assert store.search_subtitles("分治法", folder_id=folder)["total"] == 0
+    store.delete_folder(folder)
+    for missing in (folder, 999999):
+        body = client.get("/api/library/search", params={"q": "分治法", "folder_id": missing}).json()
+        assert (body["total"], body["total_videos"], body["items"], body["has_more"]) == (0, 0, [], False)
+    assert store.search_subtitles("分治法")["total"] == 3
+
+
+@pytest.mark.parametrize("query", ["分治", "分治法"])
 def test_preferred_video_is_ranked_before_pagination_without_filtering(library, query):
     _, client, first, second, other, _ = library
     pages = [client.get("/api/library/search", params={
@@ -150,6 +193,8 @@ def test_snippet_centers_match_and_returns_text_not_html(tmp_path):
     {"q": "分治法", "video_id": "invalid"},
     {"q": "分治法", "preferred_video_id": 0}, {"q": "分治法", "preferred_video_id": -1},
     {"q": "分治法", "preferred_video_id": 1 << 63}, {"q": "分治法", "preferred_video_id": "invalid"},
+    {"q": "分治法", "folder_id": 0}, {"q": "分治法", "folder_id": -1},
+    {"q": "分治法", "folder_id": 1 << 63}, {"q": "分治法", "folder_id": "invalid"},
 ])
 def test_api_rejects_invalid_search_parameters_before_database_access(tmp_path, monkeypatch, params):
     application = api_main.create_app(VideoStore(tmp_path / "input.db"))
@@ -283,8 +328,11 @@ def test_separate_application_instances_keep_search_identity_and_data_isolated(l
     assert store.search_subtitles("分治法")["total"] == 3
 
 
-def test_search_counts_and_page_share_snapshot_during_transcription(library, monkeypatch):
-    store, _, first, *_ = library
+@pytest.mark.parametrize("scoped", [False, True])
+def test_search_counts_and_page_share_snapshot_during_transcription(library, monkeypatch, scoped):
+    store, _, first, _, _, folder = library
+    if scoped:
+        store.set_video_folder(first, folder)
     base = video_store.ClosingConnection
     changed = False
 
@@ -297,14 +345,17 @@ def test_search_counts_and_page_share_snapshot_during_transcription(library, mon
             return super().execute(sql, *args, **kwargs)
 
     monkeypatch.setattr(video_store, "ClosingConnection", ConcurrentWrite)
-    page = store.search_subtitles("分治法")
+    page = store.search_subtitles("分治法", folder_id=folder if scoped else None)
     assert changed
     assert page["total"] == len(page["items"]) == 3
     assert store.search_subtitles("分治法")["total"] == 1
 
 
-def test_search_is_read_only_and_uses_one_closed_connection(library, monkeypatch):
-    store, client, *_ = library
+@pytest.mark.parametrize("scoped", [False, True])
+def test_search_is_read_only_and_uses_one_closed_connection(library, monkeypatch, scoped):
+    store, client, first, _, _, folder = library
+    if scoped:
+        store.set_video_folder(first, folder)
     base = video_store.ClosingConnection
     connections = []
 
@@ -320,7 +371,7 @@ def test_search_is_read_only_and_uses_one_closed_connection(library, monkeypatch
             super().close()
 
     monkeypatch.setattr(video_store, "ClosingConnection", ReadOnlyConnection)
-    result = client.get("/api/library/search", params={"q": "分治法"})
+    result = client.get("/api/library/search", params={"q": "分治法", **({"folder_id": folder} if scoped else {})})
     assert result.status_code == 200
     assert result.json()["total"] == 3
     assert len(connections) == 1

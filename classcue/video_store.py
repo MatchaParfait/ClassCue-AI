@@ -1872,11 +1872,11 @@ class VideoStore:
 
     def search_subtitles(
         self, query: str, *, limit: int = 20, offset: int = 0, video_id: int | None = None,
-        preferred_video_id: int | None = None,
+        preferred_video_id: int | None = None, folder_id: int | None = None,
     ) -> dict[str, object]:
         with self.connect() as connection:
             return search_subtitles(connection, query, limit=limit, offset=offset, video_id=video_id,
-                                    preferred_video_id=preferred_video_id)
+                                    preferred_video_id=preferred_video_id, folder_id=folder_id)
 
     def replace_keyword_hits(self, video_id: int, matches: list[TriggerMatch], segments: list[TranscriptSegment]) -> None:
         source_by_id = {segment.id: segment.text for segment in segments}

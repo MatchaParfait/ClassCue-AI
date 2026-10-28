@@ -2201,6 +2201,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         offset: int = Query(default=0, ge=0, le=MAX_SQLITE_INTEGER),
         video_id: int | None = Query(default=None, ge=1, le=MAX_SQLITE_INTEGER),
         preferred_video_id: int | None = Query(default=None, ge=1, le=MAX_SQLITE_INTEGER),
+        folder_id: int | None = Query(default=None, ge=1, le=MAX_SQLITE_INTEGER),
     ) -> dict[str, object]:
         try:
             query = validate_query(q)
@@ -2212,7 +2213,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             library_id = provider.library_id()
         return {
             **store.search_subtitles(query, limit=limit, offset=offset, video_id=video_id,
-                                    preferred_video_id=preferred_video_id),
+                                    preferred_video_id=preferred_video_id, folder_id=folder_id),
             "library_id": library_id,
         }
 

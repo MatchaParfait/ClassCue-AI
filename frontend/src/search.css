@@ -8,10 +8,21 @@
 .global-search-heading { display: flex; align-items: center; justify-content: space-between; padding: 22px 26px 18px; flex-shrink: 0; }
 .global-search-eyebrow { color: var(--ui-accent-strong); font-size: 11px; font-weight: 650; letter-spacing: .12em; }
 .global-search-heading h2 { font-size: 22px; margin: 5px 0 0; }
+.global-search-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 24px 14px; min-width: 0; flex-shrink: 0; }
+.global-search-folder-name { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; color: var(--ui-muted); font-size: 12px; }
+.global-search-range { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); }
+.global-search-range button { min-height: 32px; padding: 6px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-muted); background: transparent; font-size: 12px; }
+.global-search-range button:hover { color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
+.global-search-range button[aria-pressed="true"] { color: var(--ui-accent-strong); border-color: var(--ui-accent); background: var(--ui-surface); }
 .global-search-field { display: flex; align-items: center; gap: 12px; margin: 0 24px; padding: 4px 12px 4px 16px; border: 1px solid var(--ui-border-strong); border-radius: 16px; background: var(--ui-surface); color: var(--ui-accent-strong); flex-shrink: 0; }
 .global-search-field:focus-within { outline: 2px solid var(--ui-accent-strong); outline-offset: 2px; }
 .global-search-field input { width: 100%; min-width: 0; padding: 12px 0; border: 0; outline: none; box-shadow: none; background: transparent; color: var(--ui-text); font-size: 16px; }
 .global-search-field input:focus { outline: none; box-shadow: none; }
+.global-search-field.has-folder-prefix { gap: 10px; padding-left: 10px; }
+.global-search-field.has-folder-prefix input { flex: 1; width: 0; }
+.global-search-field > svg { flex-shrink: 0; }
+.global-search-folder-prefix { flex: 0 1 170px; width: 170px; min-width: 90px; max-width: 38%; padding: 8px 22px 8px 8px; border: 0; border-right: 1px solid var(--ui-border); border-radius: 0; background-color: transparent; color: var(--ui-accent-strong); font: inherit; font-size: 13px; text-overflow: ellipsis; }
+.global-search-folder-error { display: flex; align-items: center; gap: 8px; margin: 8px 26px 0; color: var(--ui-danger); font-size: 12px; }
 .global-search-summary { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 8px 26px; color: var(--ui-muted); font-size: 12px; flex-shrink: 0; }
 .global-search-summary button { margin-left: auto; font-size: 12px; }
 .global-search-summary .global-search-refresh {
@@ -76,6 +87,9 @@
   .global-search-dialog { max-height: calc(100dvh - 32px); border-radius: 20px; }
   .global-search-heading { padding: 18px 18px 16px; }
   .global-search-field { margin: 0 16px; }
+  .global-search-scope { margin: 0 16px 12px; }
+  .global-search-field.has-folder-prefix { flex-wrap: wrap; }
+  .global-search-folder-prefix { flex: 1 1 100%; width: 100%; max-width: 100%; border-right: 0; border-bottom: 1px solid var(--ui-border); }
   .global-search-summary { padding: 8px 18px; }
   .global-search-scroll { padding: 0 8px 12px; }
   .global-search-footer { padding: 12px 18px; }

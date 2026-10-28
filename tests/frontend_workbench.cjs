@@ -33,7 +33,7 @@ async function main() {
   fs.mkdirSync(fixture, { recursive: true });
   for (const file of fs.readdirSync(root)) if (file.endsWith(".py")) fs.copyFileSync(`${root}/${file}`, `${fixture}/${file}`);
   for (const file of ["pyproject.toml", "release_config.json", "uv.lock"]) fs.copyFileSync(`${root}/${file}`, `${fixture}/${file}`);
-  for (const dir of ["api", "scripts"]) fs.cpSync(`${root}/${dir}`, `${fixture}/${dir}`, {
+  for (const dir of ["api", "classcue", "scripts"]) fs.cpSync(`${root}/${dir}`, `${fixture}/${dir}`, {
     recursive: true, filter: (item) => fs.statSync(item).isDirectory() ? !item.includes("__pycache__") : item.endsWith(".py"),
   });
   const protectedFiles = ["data/asr_settings.json", "data/asr_storage.json", "data/video_workspace.json", ".runtime/frontend_state.json"];

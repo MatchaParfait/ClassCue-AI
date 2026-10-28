@@ -431,9 +431,10 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
   return normalizeLibraryStatus(await request("/api/library/status"));
 }
 
-export function searchSubtitles(query: string, offset = 0, signal?: AbortSignal, preferredVideoId?: number): Promise<SubtitleSearchResult> {
+export function searchSubtitles(query: string, offset = 0, signal?: AbortSignal, preferredVideoId?: number, folderId?: number): Promise<SubtitleSearchResult> {
   const params = new URLSearchParams({ q: query.trim(), limit: "20", offset: String(offset) });
   if (preferredVideoId !== undefined) params.set("preferred_video_id", String(preferredVideoId));
+  if (folderId !== undefined) params.set("folder_id", String(folderId));
   return request(`/api/library/search?${params}`, { signal });
 }
 

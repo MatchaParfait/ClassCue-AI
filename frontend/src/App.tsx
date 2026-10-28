@@ -1354,6 +1354,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       </LibraryFileImport>
       {folderId && active && !suspended && !renamingFolder && !isCreatingFolder && (
         <FolderWindow viewKey={folderId} name={activeFolder?.name ?? "文件夹"} count={activeFolder?.videoCount ?? folderVideos.length}
+          folderId={activeFolder ? parseFolderId(folderId) ?? undefined : undefined}
           folderCount={folderItems.filter((item) => item.kind === "folder").length}
           breadcrumbs={folderBreadcrumbs}
           onNavigate={(id) => { clearDragState(); if (id) setFolderId(id); else closeFolder(); }}

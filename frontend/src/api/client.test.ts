@@ -60,6 +60,12 @@ it("encodes literal subtitle searches and forwards cancellation with pagination"
   expect(preferred.searchParams.get("preferred_video_id")).toBe("7");
   expect(preferred.searchParams.get("offset")).toBe("40");
   expect(preferred.searchParams.has("video_id")).toBe(false);
+  expect(preferred.searchParams.has("folder_id")).toBe(false);
+  await searchSubtitles("分治", 20, signal, undefined, 12);
+  const folder = new URL(fetch.mock.calls[2][0], "http://local");
+  expect(folder.searchParams.get("folder_id")).toBe("12");
+  expect(folder.searchParams.get("offset")).toBe("20");
+  expect(folder.searchParams.has("preferred_video_id")).toBe(false);
 });
 
 it("starts a durable batch from explicit library video IDs without importing folders", async () => {

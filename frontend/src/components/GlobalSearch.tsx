@@ -3,7 +3,7 @@ import { Fragment, createContext, useCallback, useContext, useEffect, useRef, us
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMatch, useNavigate } from "react-router-dom";
 import { ArrowUpRight, FileVideo, LoaderCircle, RotateCcw, Search, X } from "lucide-react";
-import { getLibraryStatus, searchSubtitles } from "../api/client";
+import { getLibrary, getLibraryStatus, searchSubtitles } from "../api/client";
 import type { SubtitleSearchHit, SubtitleSearchResult } from "../types";
 import { formatTime } from "../utils";
 import { useModalFocus } from "../hooks/useModalFocus";
@@ -11,7 +11,8 @@ import { AnimatePresence, AnimatedOverlay, AnimatedPopup, useIsPresent } from ".
 import { SearchFramePreview, type SearchPreviewTarget } from "./SearchFramePreview";
 import "../search.css";
 
-const SearchContext = createContext<(() => void) | null>(null);
+interface SearchFolder { id: number; name: string }
+const SearchContext = createContext<((folder?: SearchFolder) => void) | null>(null);
 const hitKey = (hit: SubtitleSearchHit) => `${hit.video_id}:${hit.segment_id}`;
 
 function useReviewVideoId() {
@@ -27,8 +28,17 @@ export function GlobalSearchButton() {
   const videoId = useReviewVideoId();
   const label = videoId === null ? "搜索所有视频的字幕" : "搜索字幕 · 本视频优先";
   if (!open) return null;
-  return <button type="button" className="global-search-trigger" onClick={open} aria-label="全局搜索字幕" title={shortcutTitle(label, shortcuts, "search")} aria-keyshortcuts={shortcutAria(shortcuts, "search")}>
+  return <button type="button" className="global-search-trigger" onClick={() => open()} aria-label="全局搜索字幕" title={shortcutTitle(label, shortcuts, "search")} aria-keyshortcuts={shortcutAria(shortcuts, "search")}>
     <Search size={17} aria-hidden="true" /><span>{label}</span>{shortcuts.search.length > 0 && <kbd>{shortcutLabel(shortcuts, "search")}</kbd>}
+  </button>;
+}
+
+export function FolderSubtitleSearchButton({ folderId, name }: { folderId: number; name: string }) {
+  const open = useContext(SearchContext);
+  if (!open) return null;
+  return <button type="button" className="secondary-button compact" aria-label="搜索文件夹字幕"
+    title={`搜索“${name}”及所有子文件夹的字幕`} onClick={() => open({ id: folderId, name })}>
+    <Search size={16} aria-hidden="true" />搜索字幕
   </button>;
 }
 
@@ -45,7 +55,10 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [composing, setComposing] = useState(false);
-  const [data, setData] = useState<(SubtitleSearchResult & { preferredVideoId: number | null }) | null>(null);
+  const [folder, setFolder] = useState<SearchFolder | null>(null);
+  const [fromFolder, setFromFolder] = useState(false);
+  const [allVideos, setAllVideos] = useState(false);
+  const [data, setData] = useState<(SubtitleSearchResult & { preferredVideoId: number | null; folderId: number | null }) | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -56,15 +69,28 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const background = useRef<HTMLDivElement>(null);
   const previousScope = useRef(scope);
   const navigate = useNavigate();
-  const preferredVideoId = useReviewVideoId();
+  const reviewVideoId = useReviewVideoId();
+  const rootRoute = useMatch("/");
+  const showFolderPrefix = Boolean(rootRoute) && !fromFolder;
+  const rootLibrary = useQuery({
+    queryKey: ["library", "search-folders", scope], queryFn: () => getLibrary(),
+    enabled: open && showFolderPrefix, staleTime: 15_000,
+  });
+  const rootFolders = (rootLibrary.data?.items ?? []).flatMap(item =>
+    item.type === "folder" && item.folder && item.folder.parent_id == null ? [item.folder] : []);
+  const folderId = folder && !allVideos ? folder.id : null;
+  const preferredVideoId = folderId === null ? reviewVideoId : null;
   const client = useQueryClient();
   const trimmed = query.trim();
   const valid = trimmed.length > 0 && [...trimmed].length <= 120;
   const sameLibrary = !libraryId || data?.library_id === libraryId;
   const sameVideo = data?.preferredVideoId === preferredVideoId;
-  const current = data?.query === trimmed && sameLibrary && sameVideo && !composing ? data : null;
+  const sameFolder = data?.folderId === folderId;
+  const current = data?.query === trimmed && sameLibrary && sameVideo && sameFolder && !composing ? data : null;
   const items = current?.items ?? [];
-  const show = useCallback(() => { setOpen(true); }, []);
+  const show = useCallback((target?: SearchFolder) => {
+    setFolder(target ?? null); setFromFolder(Boolean(target)); setAllVideos(false); setOpen(true);
+  }, []);
   const clearPreview = useCallback(() => setPreview(null), []);
   const close = () => { clearPreview(); setOpen(false); setComposing(false); };
   const previewHit = (hit: SubtitleSearchHit, anchor: HTMLElement, source: SearchPreviewTarget["source"]) => {
@@ -78,6 +104,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
     if (previousScope.current !== scope && previousScope.current !== "") {
       controller.current?.abort(); ++generation.current;
       setOpen(false); setPreview(null); setQuery(""); setData(null); setError(""); setBusy(false); setSelected(0); setComposing(false);
+      setFolder(null); setFromFolder(false); setAllVideos(false);
     }
     previousScope.current = scope;
   }, [scope]);
@@ -99,7 +126,9 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const load = async (offset: number, token: number, signal: AbortSignal) => {
     setBusy(true); setError("");
     try {
-      const result = await searchSubtitles(trimmed, offset, signal, preferredVideoId ?? undefined);
+      const result = folderId !== null
+        ? await searchSubtitles(trimmed, offset, signal, undefined, folderId)
+        : await searchSubtitles(trimmed, offset, signal, preferredVideoId ?? undefined);
       if (signal.aborted || token !== generation.current) return;
       if ((libraryId && result.library_id !== libraryId) || (offset > 0 && data?.library_id !== result.library_id)) {
         setData(null);
@@ -108,10 +137,10 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
       }
       setData((previous) => {
         if (!offset || !previous || previous.library_id !== result.library_id || previous.query !== result.query
-            || previous.preferredVideoId !== preferredVideoId) return { ...result, preferredVideoId };
+            || previous.preferredVideoId !== preferredVideoId || previous.folderId !== folderId) return { ...result, preferredVideoId, folderId };
         const merged = new Map(previous.items.map((hit) => [hitKey(hit), hit]));
         result.items.forEach((hit) => merged.set(hitKey(hit), hit));
-        return { ...result, preferredVideoId, items: [...merged.values()] };
+        return { ...result, preferredVideoId, folderId, items: [...merged.values()] };
       });
     } catch (failure) {
       if (!signal.aborted && token === generation.current) setError(failure instanceof Error ? failure.message : "搜索失败，请重试。");
@@ -125,7 +154,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
     const token = ++generation.current;
     setBusy(false); setError(""); setPreview(null);
     if (!valid || composing) { setData(null); setSelected(0); return; }
-    if (!open || (data?.query === trimmed && sameLibrary && sameVideo)) return;
+    if (!open || (data?.query === trimmed && sameLibrary && sameVideo && sameFolder)) return;
     setData(null); setSelected(0); setBusy(true);
     const request = new AbortController();
     controller.current = request;
@@ -133,7 +162,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
     return () => { window.clearTimeout(timer); request.abort(); };
     // Data updates and polling must not replay searches or reset pagination.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trimmed, composing, open, revision, scope, preferredVideoId]);
+  }, [trimmed, composing, open, revision, scope, preferredVideoId, folderId]);
   useEffect(() => () => { controller.current?.abort(); }, []);
 
   const loadMore = () => {
@@ -158,14 +187,35 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
       {open && <SearchDialog key="global-search" background={background} onClose={close} onDismissPreview={clearPreview}
         preview={current && preview?.libraryId === current.library_id && items.some(hit => hitKey(hit) === hitKey(preview.hit))
           ? preview : null}>
-        <div className="global-search-heading"><div><span className="global-search-eyebrow">{preferredVideoId === null ? "跨视频查找" : "本视频优先 · 跨视频查找"}</span><h2 id="global-search-title">全局字幕搜索</h2></div>
+        <div className="global-search-heading"><div><span className="global-search-eyebrow">{folderId !== null ? "当前文件夹及所有子文件夹" : preferredVideoId === null ? "跨视频查找" : "本视频优先 · 跨视频查找"}</span><h2 id="global-search-title">{folderId !== null ? "文件夹字幕搜索" : "全局字幕搜索"}</h2></div>
           <button type="button" className="icon-button" aria-label="关闭全局搜索" onClick={close}><X size={20} /></button>
         </div>
-        <div className="global-search-field"><Search size={21} aria-hidden="true" />
-          <input autoComplete="off" spellCheck={false} role="combobox" aria-label="搜索所有视频的字幕" aria-autocomplete="list"
+        {fromFolder && folder && <div className="global-search-scope">
+          <span className="global-search-folder-name" title={folder.name}>{folder.name}</span>
+          <div className="global-search-range" aria-label="字幕搜索范围">
+            <button type="button" aria-pressed={!allVideos} onClick={() => setAllVideos(false)}>当前文件夹（含子文件夹）</button>
+            <button type="button" aria-pressed={allVideos} onClick={() => setAllVideos(true)}>全部视频</button>
+          </div>
+        </div>}
+        <div className={`global-search-field${showFolderPrefix ? " has-folder-prefix" : ""}`}>
+          {showFolderPrefix && <select className="global-search-folder-prefix" aria-label="搜索文件夹范围"
+            title={folder?.name ?? "全部视频"} value={folder?.id ?? ""}
+            onChange={event => {
+              const selectedFolder = rootFolders.find(candidate => String(candidate.id) === event.target.value);
+              setFolder(selectedFolder ? { id: selectedFolder.id, name: selectedFolder.name } : null);
+              setAllVideos(false);
+            }}>
+            <option value="">全部视频</option>
+            {rootLibrary.isLoading && <option disabled>正在加载文件夹…</option>}
+            {folder && !rootFolders.some(candidate => candidate.id === folder.id)
+              && <option value={folder.id} disabled>{folder.name}</option>}
+            {rootFolders.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+          </select>}
+          <Search size={21} aria-hidden="true" />
+          <input autoComplete="off" spellCheck={false} role="combobox" aria-label={folderId !== null ? "搜索当前文件夹及子文件夹的字幕" : "搜索所有视频的字幕"} aria-autocomplete="list"
             aria-expanded={items.length > 0} aria-controls="global-search-results"
             aria-activedescendant={items[selected] ? `search-hit-${hitKey(items[selected])}` : undefined}
-            placeholder={preferredVideoId === null ? "输入课堂上说过的关键词…" : "输入关键词，优先查找本视频字幕…"} value={query}
+            placeholder={folderId !== null ? "输入关键词，查找文件夹内的字幕…" : preferredVideoId === null ? "输入课堂上说过的关键词…" : "输入关键词，优先查找本视频字幕…"} value={query}
             onChange={(event) => { clearPreview(); setQuery(event.target.value); }}
             onCompositionStart={() => { clearPreview(); setComposing(true); }} onCompositionEnd={(event) => { setQuery(event.currentTarget.value); setComposing(false); }}
             onKeyDown={(event) => {
@@ -186,9 +236,13 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
             clearPreview(); setQuery(""); event.currentTarget.parentElement?.querySelector("input")?.focus();
           }}><X size={16} /></button>}
         </div>
+        {showFolderPrefix && rootLibrary.isError && <div className="global-search-folder-error" role="alert">
+          <span>文件夹列表加载失败</span>
+          <button type="button" className="text-button" onClick={() => void rootLibrary.refetch()}>重试</button>
+        </div>}
         <div className="global-search-summary" role="status" aria-live="polite">
           {!valid && trimmed ? "关键词最多 120 个字符" : busy ? <><LoaderCircle className="spin" size={14} />正在查找…</>
-            : current ? `${current.total} 处字幕 · ${current.total_videos} 个视频` : "搜索视频库所有文件夹中已保存的字幕"}
+            : current ? `${current.total} 处字幕 · ${current.total_videos} 个视频` : folderId !== null ? "仅搜索当前文件夹及所有子文件夹中已保存的字幕" : "搜索视频库所有文件夹中已保存的字幕"}
           {current && !busy && <button type="button" className="secondary-button compact global-search-refresh" onClick={refresh}><RotateCcw size={14} aria-hidden="true" />刷新结果</button>}
         </div>
         <div className="global-search-scroll">

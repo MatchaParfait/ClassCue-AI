@@ -20,6 +20,7 @@ vi.mock("./api/client", async (importOriginal) => ({
   getLatestBatch: vi.fn(), getRecentJobs: vi.fn(), getPausedJobs: vi.fn(), getJob: vi.fn(), cancelJob: vi.fn(),
   createLibraryFolder: vi.fn(), moveVideoToFolder: vi.fn(), retryBatch: vi.fn(), resumeJob: vi.fn(),
   getStorageDirectories: vi.fn(), getAsrSelection: vi.fn(), getAsrModelStatus: vi.fn(), getAiSettings: vi.fn(),
+  searchSubtitles: vi.fn(),
 }));
 vi.mock("./components/ProcessPage", () => ({
   ProcessPage: ({ active, onRegistered, onJob, guided = false }: {
@@ -217,6 +218,31 @@ it("releases the folder focus trap for a processing page and restores the folder
   leavePage();
   await settle(() => expect(container.querySelector(".folder-window .video-card")).not.toBeNull());
   expect(container.querySelector<HTMLElement>(".folder-window-content")!.scrollTop).toBe(120);
+});
+
+it("opens folder subtitle search above the folder and restores its reading position and focus", async () => {
+  vi.mocked(api.searchSubtitles).mockResolvedValue({
+    query: "分治", library_id: "fixture", total: 0, total_videos: 0,
+    offset: 0, limit: 20, has_more: false, items: [],
+  });
+  await mount();
+  click(container.querySelector(".folder-card-link")!);
+  await settle(() => expect(container.querySelector(".folder-window .video-card")).not.toBeNull());
+  const content = container.querySelector<HTMLElement>(".folder-window-content")!;
+  act(() => { content.scrollTop = 120; content.dispatchEvent(new Event("scroll", { bubbles: true })); });
+  const trigger = button("搜索文件夹字幕");
+  act(() => trigger.focus());
+  click(trigger);
+  await settle(() => expect(document.activeElement).toBe(container.querySelector('[role="combobox"]')));
+  expect(container.querySelector("h2#global-search-title")?.textContent).toBe("文件夹字幕搜索");
+  type(container.querySelector<HTMLInputElement>('[role="combobox"]')!, "分治");
+  await settle(() => expect(api.searchSubtitles).toHaveBeenCalled());
+  expect(vi.mocked(api.searchSubtitles).mock.calls[0][4]).toBe(7);
+  click(button("关闭全局搜索"));
+  await settle(() => expect(container.querySelector(".global-search-dialog")).toBeNull());
+  expect(container.querySelector(".folder-window")).not.toBeNull();
+  expect(content.scrollTop).toBe(120);
+  expect(document.activeElement).toBe(trigger);
 });
 
 it("retains the registration draft when updating the URL for reload recovery", async () => {

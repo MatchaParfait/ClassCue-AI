@@ -10,12 +10,20 @@ module.exports = async ({ page, origin, output, requests, base }) => {
   });
   const input = () => page.getByRole("combobox", { name: "搜索所有视频的字幕" });
   const dialog = () => page.getByRole("dialog", { name: "全局字幕搜索" });
-  const rows = () => dialog().getByRole("option");
+  const rows = () => dialog().locator('#global-search-results [role="option"]');
   const close = async () => { await page.keyboard.press("Escape"); await page.locator(".global-search-dialog").waitFor({ state: "detached" }); };
   const search = async () => { await page.keyboard.press("Control+k"); await input().fill("分治"); await rows().first().waitFor(); };
-  const capture = async (name) => {
+  const capture = async (name, dialogOnly = false) => {
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(230);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `overflow: ${name}`);
+    if (dialogOnly) {
+      const bounds = await page.locator(".global-search-dialog").boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= page.viewportSize().width, `dialog overflow: ${name}`);
+      assert.equal(await page.locator(".global-search-dialog").evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+    } else {
+      await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth + 1, null, { timeout: 5000 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `overflow: ${name}`);
+    }
     await page.screenshot({ path: `${output}/${name}.png`, fullPage: false });
   };
   const workspace = await (await fetch(`${base}/api/library/status`)).json();
@@ -36,10 +44,51 @@ module.exports = async ({ page, origin, output, requests, base }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await input().focus();
   await page.keyboard.press("Shift+Tab");
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), "搜索文件夹范围");
+  await page.keyboard.press("Shift+Tab");
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), "关闭全局搜索");
   await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
   assert.equal(await input().evaluate((node) => document.activeElement === node), true);
+  // Put an existing synthetic video two levels below the course for recursive search.
+  const mutate = async (pathname, body) => {
+    const response = await fetch(`${base}${pathname}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    assert.ok(response.ok, `${pathname}: ${response.status}`);
+    return response.json();
+  };
+  const child = await mutate("/api/folders", { name: "复习单元", parent_id: 1 });
+  const nested = await mutate("/api/folders", { name: "例题讲解", parent_id: child.id });
+  await mutate("/api/videos/1/folder", { folder_id: nested.id });
+  const prefix = page.getByRole("combobox", { name: "搜索文件夹范围" });
+  assert.deepEqual(await prefix.locator("option").allTextContents(), ["全部视频", "算法课程"]);
+  await prefix.selectOption("1");
+  await page.getByRole("dialog", { name: "文件夹字幕搜索" }).locator('#global-search-results [role="option"]').first().waitFor();
+  await page.waitForFunction(() => document.querySelector(".global-search-summary").textContent.includes("50 处字幕 · 2 个视频"));
+  assert.equal(await page.getByRole("combobox", { name: "搜索当前文件夹及子文件夹的字幕" }).inputValue(), "分治");
+  await page.getByRole("button", { name: "加载更多字幕" }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 40);
+  assert.deepEqual(await page.locator(".global-search-group").evaluateAll(nodes =>
+    nodes.map(node => node.getAttribute("aria-labelledby"))), ["search-video-13", "search-video-1"]);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 960 });
+    // The existing video-library grid is desktop-only; check the new dialog at phone width.
+    await capture(`search-folder-prefix-${width}`, width < 856);
+    const field = await page.locator(".global-search-field input").boundingBox();
+    const selector = await prefix.boundingBox();
+    assert.ok(field.width >= 100);
+    if (width >= 856) assert.ok(selector.x + selector.width <= field.x + 1);
+    else assert.ok(selector.y + selector.height <= field.y + 1);
+  }
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await mutate("/api/videos/1/folder", { folder_id: null });
+  await prefix.selectOption("");
+  await rows().first().waitFor();
+  await page.getByRole("button", { name: "加载更多字幕" }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 40);
   await page.evaluate((id) => localStorage.setItem(`classroom-study-progress:${id}:13`, "5"), workspace.library_id);
+  await input().focus();
   await page.keyboard.press("ArrowDown");
   const targetId = await page.locator('[role="option"][aria-selected="true"]').getAttribute("id");
   assert.ok(targetId.startsWith("search-hit-13:"));
@@ -97,6 +146,17 @@ module.exports = async ({ page, origin, output, requests, base }) => {
   await page.getByRole("link", { name: "返回视频库" }).click();
   await page.locator(".folder-card-link").first().click();
   await page.locator(".folder-window").waitFor();
+  await page.getByRole("button", { name: "搜索文件夹字幕", exact: true }).click();
+  const scopedInput = page.getByRole("combobox", { name: "搜索当前文件夹及子文件夹的字幕" });
+  await scopedInput.fill("分治");
+  await page.waitForFunction(() => document.querySelector(".global-search-summary").textContent.includes("25 处字幕 · 1 个视频"));
+  assert.equal(await page.locator(".global-search-folder-prefix").count(), 0);
+  await capture("search-folder-entry-1440");
+  await scopedInput.fill("合成资料不存在的短语");
+  await page.waitForFunction(() => document.querySelector(".global-search-summary").textContent.includes("0 处字幕 · 0 个视频"));
+  assert.equal(await page.getByRole("button", { name: "当前文件夹（含子文件夹）" }).getAttribute("aria-pressed"), "true");
+  await close();
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), "搜索文件夹字幕");
   await page.keyboard.press("Control+k");
   assert.equal(await input().evaluate((node) => document.activeElement === node), true);
   await close();
@@ -147,9 +207,11 @@ module.exports = async ({ page, origin, output, requests, base }) => {
   assert.equal(await input().inputValue(), "");
   assert.equal(await rows().count(), 0);
   await close();
-  fs.writeFileSync(`${output}/search-qa.json`, JSON.stringify({ passed: true, widths: [856, 1316, 1540, 1920],
+  fs.writeFileSync(`${output}/search-qa.json`, JSON.stringify({ passed: true, widths: [390, 856, 1316, 1440, 1540, 1920],
     checks: ["real backend search", "pagination across video groups", "keyboard and focus", "search over saved progress",
       "repeat same-video seek without remount", "query/results retained", "no marker writes", "nested folder focus", "settings draft", "reduced motion",
       "reopen during exit", "search over task drawer", "review video priority before pagination", "current/other video divider",
+      "root prefix lists only first-level folders", "folder search includes grandchildren before pagination",
+      "folder prefix desktop and narrow layout", "folder toolbar entry and empty scope",
       "server identity change clears search and preserves folder"] }, null, 2));
 };

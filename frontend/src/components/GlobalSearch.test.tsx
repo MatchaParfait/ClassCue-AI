@@ -4,12 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GlobalSearchButton, GlobalSearchProvider } from "./GlobalSearch";
-import { getLibraryStatus, searchSubtitles } from "../api/client";
+import { FolderSubtitleSearchButton, GlobalSearchButton, GlobalSearchProvider } from "./GlobalSearch";
+import { getLibrary, getLibraryStatus, searchSubtitles } from "../api/client";
 import type { SubtitleSearchHit, SubtitleSearchResult } from "../types";
 
 vi.mock("../api/client", () => ({
-  getLibraryStatus: vi.fn(), searchSubtitles: vi.fn(),
+  getLibrary: vi.fn(), getLibraryStatus: vi.fn(), searchSubtitles: vi.fn(),
   getSearchPreviewUrl: (videoId: number, timeMs: number, libraryId: string) =>
     `/api/videos/${videoId}/preview-frame?time_ms=${timeMs}&library_id=${libraryId}`,
 }));
@@ -38,6 +38,7 @@ function Page() {
     <button aria-label="查看视频2" onClick={() => navigate("/review/2")} />
     <button aria-label="查看视频3" onClick={() => navigate("/review/3")} />
     <button aria-label="返回视频库" onClick={() => navigate("/")} />
+    <FolderSubtitleSearchButton folderId={7} name="算法课程" />
   </>;
 }
 const input = () => container.querySelector<HTMLInputElement>('[role="combobox"]')!;
@@ -61,6 +62,14 @@ beforeEach(() => {
   client.setQueryData(["library-status"], { data_root: "library-one", library_id: "one" });
   vi.mocked(getLibraryStatus).mockImplementation(async () => client.getQueryData(["library-status"])!);
   vi.mocked(searchSubtitles).mockResolvedValue(result());
+  vi.mocked(getLibrary).mockResolvedValue({
+    folder: null, parent_id: null, sort: "manual", order: "asc", items: [
+      { type: "folder", folder: { id: 7, name: "算法课程", parent_id: null } },
+      { type: "folder", folder: { id: 8, name: "数据库课程", parent_id: null } },
+      { type: "folder", folder: { id: 9, name: "第二单元", parent_id: 8 } },
+      { type: "video" },
+    ],
+  });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   act(() => root.render(<QueryClientProvider client={client}><MemoryRouter><GlobalSearchProvider><Page /></GlobalSearchProvider></MemoryRouter></QueryClientProvider>));
 });
@@ -79,6 +88,53 @@ it("debounces, groups literal highlights, navigates by keyboard and retains the 
   expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
   expect(searchSubtitles).toHaveBeenCalledTimes(2);
   expect(vi.mocked(searchSubtitles).mock.calls[1][3]).toBe(1);
+});
+
+function selectFolder(value: string) {
+  act(() => {
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="搜索文件夹范围"]')!;
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+it("offers only first-level folder prefixes and preserves keywords while switching and paginating", async () => {
+  open(); await tick(1);
+  const prefix = container.querySelector<HTMLSelectElement>('[aria-label="搜索文件夹范围"]')!;
+  expect([...prefix.options].map(option => option.text)).toEqual(["全部视频", "算法课程", "数据库课程"]);
+  expect(prefix.value).toBe("");
+  type("分治"); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBeUndefined();
+  vi.mocked(searchSubtitles).mockResolvedValueOnce(result("分治", [hit(2, 1)], { total: 2, has_more: true }))
+    .mockResolvedValueOnce(result("分治", [hit(2, 2)], { total: 2, offset: 20 }));
+  selectFolder("8"); await tick();
+  expect(input().value).toBe("分治");
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBe(8);
+  expect(container.querySelector(".global-search-range")).toBeNull();
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-more")!.click()); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[1]).toBe(20);
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBe(8);
+  selectFolder("7"); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[1]).toBe(0);
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBe(7);
+  selectFolder(""); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBeUndefined();
+  expect(input().value).toBe("分治");
+});
+
+it("keeps global search usable when root folders fail to load and supports retry", async () => {
+  vi.mocked(getLibrary).mockRejectedValueOnce(new Error("连接失败"));
+  open(); await tick(1);
+  expect(container.querySelector(".global-search-folder-error")?.textContent).toContain("文件夹列表加载失败");
+  type("分治"); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBeUndefined();
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-folder-error button")!.click()); await tick(1);
+  expect(container.querySelector(".global-search-folder-error")).toBeNull();
+  expect(container.querySelectorAll(".global-search-folder-prefix option")).toHaveLength(3);
+  key("Escape"); await tick();
+  act(() => button("查看视频2").click()); open(); await tick();
+  expect(container.querySelector(".global-search-folder-prefix")).toBeNull();
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[3]).toBe(2);
 });
 
 it("prioritizes the review video through all pages, separates other videos, and preserves keyboard ordering", async () => {
@@ -133,6 +189,53 @@ it("aborts stale video searches when navigating between review videos", async ()
   await act(async () => resolveOld(result("分治", [hit(2, 1)])));
   expect(container.querySelectorAll('[role="option"]')).toHaveLength(1);
   expect(container.querySelector('[role="option"]')?.id).toBe("search-hit-3:1");
+});
+
+it("keeps the folder scope through pagination, refresh and reopening, with an explicit global switch", async () => {
+  vi.mocked(searchSubtitles).mockResolvedValueOnce(result("分治", [hit(1, 1)], { has_more: true, total: 3 }))
+    .mockResolvedValueOnce(result("分治", [hit(2, 1)], { offset: 20, total: 3 }));
+  act(() => { button("搜索文件夹字幕").focus(); button("搜索文件夹字幕").click(); }); type("分治"); await tick();
+  expect(container.querySelector("h2")?.textContent).toBe("文件夹字幕搜索");
+  expect(container.textContent).toContain("算法课程");
+  expect(vi.mocked(searchSubtitles).mock.calls[0][4]).toBe(7);
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-more")!.click()); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls[1][4]).toBe(7);
+  expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
+  key("Escape"); await tick();
+  expect(document.activeElement).toBe(button("搜索文件夹字幕"));
+  act(() => button("搜索文件夹字幕").click()); await tick();
+  expect(searchSubtitles).toHaveBeenCalledTimes(2);
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-refresh")!.click()); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls[2][1]).toBe(0);
+  expect(vi.mocked(searchSubtitles).mock.calls[2][4]).toBe(7);
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-range button")[1].click()); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls[3][4]).toBeUndefined();
+  expect(container.querySelector("h2")?.textContent).toBe("全局字幕搜索");
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-range button")[0].click()); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls[4][4]).toBe(7);
+  key("Escape"); await tick(); open(); await tick();
+  expect(vi.mocked(searchSubtitles).mock.calls[5][4]).toBeUndefined();
+  expect(container.querySelector(".global-search-range")).toBeNull();
+});
+
+it("aborts old folder responses when changing scope and never widens an empty folder search", async () => {
+  let resolveOld!: (value: SubtitleSearchResult) => void;
+  vi.mocked(searchSubtitles).mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+    .mockResolvedValueOnce(result("分治", [], { total_videos: 0 }));
+  act(() => button("搜索文件夹字幕").click()); type("分治"); await tick();
+  const signal = vi.mocked(searchSubtitles).mock.calls[0][2]!;
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-range button")[1].click()); await tick();
+  expect(signal.aborted).toBe(true);
+  await act(async () => resolveOld(result()));
+  expect(container.querySelectorAll('[role="option"]')).toHaveLength(0);
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-range button")[0].click()); await tick();
+  vi.mocked(searchSubtitles).mockResolvedValue(result("分治", [], { total_videos: 0 }));
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-refresh")!.click()); await tick();
+  const calls = vi.mocked(searchSubtitles).mock.calls.length;
+  await tick(1000);
+  expect(searchSubtitles).toHaveBeenCalledTimes(calls);
+  expect(vi.mocked(searchSubtitles).mock.calls.at(-1)?.[4]).toBe(7);
+  expect(container.textContent).toContain("没有找到匹配字幕");
 });
 
 it("does not capture Ctrl+K or Cmd+K by default and keeps click-to-search", () => {

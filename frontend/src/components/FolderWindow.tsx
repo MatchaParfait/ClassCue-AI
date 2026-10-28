@@ -3,9 +3,11 @@ import type { VideoLibraryFolder } from "../types";
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
 import { motion, useMotionTransition, useReducedMotion } from "./Motion";
 import { lockModalEnvironment } from "../hooks/modalEnvironment";
+import { FolderSubtitleSearchButton } from "./GlobalSearch";
 
 interface FolderWindowProps {
   viewKey?: string;
+  folderId?: number;
   name: string;
   count: number;
   folderCount?: number;
@@ -27,7 +29,7 @@ interface FolderWindowProps {
   onScroll?: (scroll: number) => void;
 }
 
-export function FolderWindow({ viewKey = "", name, count, folderCount = 0, breadcrumbs = [], onNavigate, onCreateFolder,
+export function FolderWindow({ viewKey = "", folderId, name, count, folderCount = 0, breadcrumbs = [], onNavigate, onCreateFolder,
   outsideDropLabel = "移至一级目录", sortMode, onSortChange, onClose, canDropOutside, showDragTextHints = true, onDropOutside, onDropTo, backgroundRef, returnFocus, children, initialScroll = 0, onScroll }: FolderWindowProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -222,6 +224,7 @@ export function FolderWindow({ viewKey = "", name, count, folderCount = 0, bread
                 : <button className="text-button" type="button" {...destinationProps(folder.id)} onClick={() => onNavigate(folder.id)} title={folder.name}>{folder.name}</button>}
             </span>)}
           </nav>}
+          {folderId !== undefined && <FolderSubtitleSearchButton folderId={folderId} name={name} />}
           <label className="sort-control">
             <span>排序</span>
             <select value={sortMode} aria-label="文件夹内排序" onChange={(event) => onSortChange(event.target.value as FolderWindowProps["sortMode"])}>

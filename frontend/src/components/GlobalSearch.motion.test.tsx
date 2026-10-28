@@ -7,6 +7,7 @@ import { GlobalSearchButton, GlobalSearchProvider } from "./GlobalSearch";
 import { waitForExit } from "../test/waitForExit";
 
 vi.mock("../api/client", () => ({
+  getLibrary: vi.fn(async () => ({ items: [] })),
   getLibraryStatus: vi.fn(async () => ({ data_root: "test", library_id: "test" })),
   searchSubtitles: vi.fn(async () => ({
     query: "课程", library_id: "test", total: 1, total_videos: 1,
