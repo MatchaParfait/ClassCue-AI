@@ -97,6 +97,20 @@ def test_first_use_discovers_the_default_desktop_connection(tmp_path, monkeypatc
         assert db.execute("SELECT descriptor_path FROM dsh_bridge_connection").fetchone()[0] == str(descriptor)
 
 
+def test_prepare_and_explicit_reopen_wake_desktop_but_polling_does_not(bridge, monkeypatch):
+    service, _ = bridge
+    wakes = []
+    monkeypatch.setattr(service.records, "wake", lambda: wakes.append(True))
+    receipt = service.prepare("question")
+    assert len(wakes) == 1
+    service.resume(receipt["request_id"])
+    assert len(wakes) == 1
+    reopened = service.resume(receipt["request_id"], open_session=True)
+    assert len(wakes) == 2
+    assert reopened["session_id"] == receipt["session_id"]
+    assert len(FakeClient.requests) == 1
+
+
 def test_open_recovers_timeout_before_host_admission_using_the_saved_request(bridge):
     service, _ = bridge
     FakeClient.fail_after_write = True

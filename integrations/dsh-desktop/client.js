@@ -8,6 +8,12 @@ window.__ModuleLoader__.load({
       if (!answer.ok) throw new Error(answer.error?.message ?? "DSH 桥接操作失败");
       return answer.value;
     };
+    const explain = error => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/directoryPicker|without inject/i.test(message))
+        return "DSH 原生文件夹选择器尚未加载，请关闭 DSH、重新安装 ClassCue 插件后再启动。";
+      return message;
+    };
 
     class DraftController {
       constructor(conversation, markers) {
@@ -49,7 +55,7 @@ window.__ModuleLoader__.load({
       const run = async operation => {
         setBusy(true);
         setError("");
-        try { await operation(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+        try { await operation(); } catch (e) { setError(explain(e)); } finally { setBusy(false); }
       };
       return h(Modal, {
         open: true, title: "选择题目讨论的工作区", closeLabel: "取消",
@@ -75,6 +81,9 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      const desktopPicker = globalThis.__DSH_DIRECTORY_PICKER__;
+      const pickDirectory = desktopPicker === undefined
+        ? () => ctx.uiWorkspace.pickDirectory() : () => desktopPicker.pick();
       const clientId = crypto.randomUUID();
       const markers = new Map();
       const drafts = new DraftController(ctx.conversation, markers);
@@ -111,7 +120,8 @@ window.__ModuleLoader__.load({
             publish(null);
           },
           add: async () => {
-            const path = unwrap(await ctx.remote.directoryPicker.pick());
+            // Match DSH's native directory-flow component, including cancellation.
+            const path = await pickDirectory();
             if (!path) return;
             const created = unwrap(await ctx.remote.workspace.create({ path }));
             unwrap(await rpc.choose(choice.request_id, created.workspace.workspaceId));
@@ -209,6 +219,13 @@ window.__ModuleLoader__.load({
         };
       });
     }
-    return { apply, inject: ["connection", "remote", "sessions", "conversation", "uiWorkspace", "slots"], DraftController };
+    return {
+      apply,
+      inject: [
+        "connection", "remote", "remote.directoryPicker", "remote.workspace",
+        "sessions", "conversation", "uiWorkspace", "slots",
+      ],
+      DraftController,
+    };
   },
 });

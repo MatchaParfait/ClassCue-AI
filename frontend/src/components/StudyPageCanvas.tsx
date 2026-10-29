@@ -21,10 +21,12 @@ function boxStyle(box: StudyBBox) {
 
 export function StudyPageCanvas({ documentId, block, zoom, selecting, regions, savedRegions, selectedIndex, editableIndex = -1,
   editableIndices = [editableIndex], scope = "default", snap = false, drawing, onDrawStart,
-  onAdd, onChange, onSelect, onCommit, onError }: {
+  allowNewRegion = true, questionLabel, onOpenRegion, onAdd, onChange, onSelect, onCommit, onError }: {
   documentId: string; block: StudyBlock; zoom: number; selecting: boolean;
-  regions: SelectedRegion[]; savedRegions: StudyRegion[]; selectedIndex: number; editableIndex?: number;
+  regions: SelectedRegion[]; savedRegions: (StudyRegion & { questionKey?: string; label?: string })[]; selectedIndex: number; editableIndex?: number;
   editableIndices?: number[]; scope?: string; snap?: boolean; drawing?: StudyBBox;
+  allowNewRegion?: boolean;
+  questionLabel?: string; onOpenRegion?: (key: string) => void;
   onDrawStart?: (event: PointerEvent<HTMLDivElement>, block: string, resize?: PageSelectionResize) => void;
   onAdd: (box: StudyBBox) => void; onChange: (index: number, box: StudyBBox) => void;
   onSelect: (index: number) => void; onCommit: () => void; onError: (message: string) => void;
@@ -58,10 +60,15 @@ export function StudyPageCanvas({ documentId, block, zoom, selecting, regions, s
   function start(event: PointerEvent<HTMLDivElement>) {
     if (!selecting || !loaded || event.button !== 0) return;
     const target = event.target as HTMLElement;
+    const questionKey = target.closest<HTMLElement>("[data-question-key]")?.dataset.questionKey;
+    if (questionKey && onOpenRegion) { event.preventDefault(); onOpenRegion(questionKey); return; }
     const indexValue = target.closest<HTMLElement>("[data-region-index]")?.dataset.regionIndex;
     const index = indexValue === undefined ? -1 : Number(indexValue);
     const original = editableIndices.includes(index) ? regions.find(region => region.index === index)?.bbox : undefined;
-    if (!original && onDrawStart) { onDrawStart(event, block.id); return; }
+    if (!original) {
+      if (!allowNewRegion || !onDrawStart) return;
+      onDrawStart(event, block.id); return;
+    }
     const mode = target.dataset.handle || (original ? "move" : "draw");
     if (original) onSelect(index);
     drag.current = { start: point(event), mode, index, original };
@@ -139,18 +146,25 @@ export function StudyPageCanvas({ documentId, block, zoom, selecting, regions, s
           <span role="alert">页面加载失败</span><button className="text-button" onPointerDown={e => e.stopPropagation()}
             onClick={() => { setAttempt(n => n + 1); setFailed(false); }}><RotateCcw size={16} />重试</button>
         </> : <LoaderCircle className="spin" size={20} />}</div>}
-        {savedRegions.filter(region => region.bbox).map((region, index) =>
-          <div key={`saved-${index}`} className="study-saved-box" style={boxStyle(region.bbox!)} />)}
+        {selecting && savedRegions.filter(region => region.bbox).map((region, index) =>
+          <div key={`saved-${index}`} className="study-saved-box" style={boxStyle(region.bbox!)}
+            data-question-key={region.questionKey} role={region.questionKey ? "button" : undefined}
+            aria-label={region.label} tabIndex={region.questionKey ? 0 : -1}
+            onKeyDown={event => { if (region.questionKey && ["Enter", " "].includes(event.key)) {
+              event.preventDefault(); onOpenRegion?.(region.questionKey);
+            } }}>
+            {region.label && <span className="study-selection-number">{region.label}</span>}
+          </div>)}
         {selecting && snap && textBounds && <div className="study-text-guides" aria-hidden="true">
           <span style={{ left: `${textLeft! * 100}%` }} /><span style={{ left: `${textRight! * 100}%` }} />
         </div>}
-        {regions.filter(region => region.bbox).map(region => <div key={region.index}
+        {selecting && regions.filter(region => region.bbox).map(region => <div key={region.index}
           tabIndex={selecting && editableIndices.includes(region.index) ? 0 : -1}
           role={selecting && editableIndices.includes(region.index) ? "button" : undefined} aria-label={`选区 ${region.index + 1}`}
           data-region-index={region.index} className={`study-selection-box${selectedIndex === region.index ? " active" : ""}${selecting && editableIndices.includes(region.index) ? "" : " locked"}`}
           style={boxStyle(region.bbox!)} onFocus={() => { if (selecting && editableIndices.includes(region.index)) onSelect(region.index); }}
           onKeyDown={event => keyboard(event, region.index, region.bbox!)}>
-          <span className="study-selection-number">{region.index + 1}</span>
+          <span className="study-selection-number">{questionLabel || `区域 ${region.index + 1}`}</span>
           {selecting && editableIndices.includes(region.index) && ["nw", "ne", "sw", "se"].map(handle =>
             <span key={handle} data-handle={handle} className={`study-selection-handle ${handle}`} />)}
         </div>)}

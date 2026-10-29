@@ -8,6 +8,7 @@ import { StudyMarkdown } from "../components/StudyMarkdown";
 import { rectangle, translateBox } from "../components/StudyPageCanvas";
 import { StudyQuestionContent } from "../components/StudyQuestionPreview";
 import { expandToTextWidth } from "../hooks/useStudyPageBoxSelection";
+import { UnsavedChangesProvider } from "../components/UnsavedChanges";
 
 vi.mock("../api/studyMaterials", async original => ({
   ...await original<typeof import("../api/studyMaterials")>(),
@@ -115,6 +116,7 @@ it("selects a complete Markdown question by dragging once and undoes the entire 
 it("adds reverse-dragged Markdown blocks to existing selection and saves original block ranges", async () => {
   await mount(); await click(button("选题"));
   await click(container.querySelector(".study-block-check")!);
+  await click(button("添加另一区域"));
   const surface = markdownSurface();
   await pointer(surface, "pointerdown", 550, 280);
   await pointer(surface, "pointermove", 30, 120);
@@ -136,6 +138,147 @@ it("cancels an unfinished Markdown box with Escape without changing the draft", 
   await pointer(surface, "pointerup", 550, 280);
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(0);
   expect(api.saveStudyQuestion).not.toHaveBeenCalled();
+});
+
+it("creates independent questions continuously, retains edits when switching and adds to only the armed question", async () => {
+  await mount(); await click(button("选题"));
+  const surface = markdownSurface();
+  async function draw(top: number, bottom: number) {
+    await pointer(surface, "pointerdown", 30, top);
+    await pointer(surface, "pointerup", 550, bottom);
+  }
+  await draw(20, 80);
+  const title = container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(title, "第一题");
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await draw(120, 180);
+  expect(button("选题").getAttribute("aria-pressed")).toBe("true");
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(2);
+  expect(container.querySelectorAll(".study-region-preview")).toHaveLength(1);
+  await click(container.querySelectorAll(".study-question-draft-row .study-question-open")[0]);
+  expect(container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!.value).toBe("第一题");
+  await click(button("添加另一区域"));
+  await draw(220, 280);
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(2);
+  expect(container.querySelectorAll(".study-region-preview")).toHaveLength(2);
+  await draw(120, 180);
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(3);
+  await click(container.querySelectorAll(".study-question-draft-row .study-question-open")[0]);
+  expect(container.querySelectorAll(".study-region-preview")).toHaveLength(2);
+  await click(button("阅读"));
+  expect(container.querySelectorAll(".study-markdown-block.is-selected,.study-markdown-block.has-question")).toHaveLength(0);
+  await click(button("选题"));
+  expect(container.querySelectorAll(".study-markdown-block.is-selected")).toHaveLength(2);
+  expect(api.saveStudyQuestion).not.toHaveBeenCalled();
+});
+
+it("retains successful batch saves and retries only remaining drafts after a partial failure", async () => {
+  let attempt = 0;
+  vi.mocked(api.saveStudyQuestion).mockImplementation(async value => {
+    attempt++;
+    if (attempt === 2) throw new Error("第二题保存失败");
+    return { ...value, id: `saved${attempt}`, version: 1, deleted: false,
+      regions: value.regions.map(region => ({ ...region, block: blocks.find(block => block.id === region.block_id)! })) };
+  });
+  await mount(); await click(button("选题"));
+  const surface = markdownSurface();
+  await pointer(surface, "pointerdown", 30, 20); await pointer(surface, "pointerup", 550, 80);
+  await pointer(surface, "pointerdown", 30, 120); await pointer(surface, "pointerup", 550, 180);
+  await click(button("全部保存"));
+  expect(container.textContent).toContain("第二题保存失败");
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(1);
+  await click(button("保存题目"));
+  expect(api.saveStudyQuestion).toHaveBeenCalledTimes(3);
+  const calls = vi.mocked(api.saveStudyQuestion).mock.calls;
+  expect(calls.map(([value]) => value.regions[0].block_id)).toEqual(["b1", "b2", "b2"]);
+  expect(calls.every(([, id]) => id === undefined)).toBe(true);
+});
+
+it("keeps a titled question without regions accessible when switching drafts so batch saving can recover", async () => {
+  let serial = 0;
+  vi.mocked(api.saveStudyQuestion).mockImplementation(async value => ({ ...value, id: `saved${++serial}`,
+    version: 1, deleted: false,
+    regions: value.regions.map(region => ({ ...region, block: blocks.find(block => block.id === region.block_id)! })) }));
+  await mount(); await click(button("选题"));
+  const title = container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(title, "尚未框选的题目");
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(button("新建题目"));
+  const surface = markdownSurface();
+  await pointer(surface, "pointerdown", 30, 120); await pointer(surface, "pointerup", 550, 180);
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(2);
+  await click(button("全部保存"));
+  expect(api.saveStudyQuestion).not.toHaveBeenCalled();
+  await click(button("阅读"));
+  await click(container.querySelectorAll(".study-question-draft-row .study-question-open")[0]);
+  expect(container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!.value).toBe("尚未框选的题目");
+  await click(button("选题"));
+  await pointer(surface, "pointerdown", 30, 20); await pointer(surface, "pointerup", 550, 80);
+  await click(button("全部保存"));
+  expect(api.saveStudyQuestion).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(api.saveStudyQuestion).mock.calls[0][0].title).toBe("尚未框选的题目");
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(0);
+});
+
+it("guards all drafts when leaving even if the current question was discarded", async () => {
+  vi.mocked(api.getStudyDocuments).mockResolvedValue([document, { ...document, id: "d2", name: "第二份.md" }]);
+  await act(async () => root.render(<QueryClientProvider client={client}><UnsavedChangesProvider>
+    <StudyMaterialsPage scope="test" /></UnsavedChangesProvider></QueryClientProvider>));
+  await settle(); await settle(); await click(button("选题"));
+  const surface = markdownSurface();
+  await pointer(surface, "pointerdown", 30, 20); await pointer(surface, "pointerup", 550, 80);
+  await pointer(surface, "pointerdown", 30, 120); await pointer(surface, "pointerup", 550, 180);
+  await click(button("取消"));
+  await click(container.querySelectorAll(".study-file-open")[1]);
+  expect(window.document.querySelector(".unsaved-dialog")?.textContent).toContain("题目草稿");
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(1);
+  await click(window.document.querySelector(".unsaved-actions button:last-child")!);
+});
+
+it("keeps restored and newly saved questions separately selectable after removing the current question", async () => {
+  const questionButton = (title: string) => [...container.querySelectorAll(".study-question-open")]
+    .find(node => node.querySelector("strong")?.textContent === title)!;
+  const original: api.StudyQuestion = { id: "original", document_id: "d1", title: "原题A", number: "",
+    version: 1, deleted: false,
+    regions: [{ block_id: "b1", start: 0, end: blocks[0].text!.length, block: blocks[0] }] };
+  let records = [original];
+  vi.mocked(api.getStudyDocuments).mockResolvedValue([{ ...document, reading: { question_id: original.id } }]);
+  vi.mocked(api.getStudyQuestions).mockImplementation(async () => records);
+  vi.mocked(api.saveStudyQuestion).mockImplementation(async (value, id) => {
+    const result = { ...value, id: id || "new", title: value.title || "新题B", version: 1, deleted: false,
+      regions: value.regions.map(region => ({ ...region, block: blocks.find(block => block.id === region.block_id)! })) };
+    records = [...records.filter(question => question.id !== result.id), result];
+    return result;
+  });
+  await mount();
+  records = [{ ...original, deleted: true }];
+  await click(button("移除题目 1"));
+  await click(button("选题"));
+  await click(container.querySelectorAll(".study-block-check")[1]);
+  await click(button("保存题目")); await click(button("阅读"));
+  expect(container.querySelector(".study-question-title")?.textContent).toBe("新题B");
+  await click(container.querySelector(".study-recycle input")!);
+  records = records.map(question => ({ ...question, deleted: false }));
+  await click(button("恢复题目 1"));
+  await click(container.querySelector(".study-recycle input")!);
+  await click(questionButton("原题A"));
+  expect(container.querySelector(".study-question-title")?.textContent).toBe("原题A");
+  await click(questionButton("新题B"));
+  expect(container.querySelector(".study-question-title")?.textContent).toBe("新题B");
+  await click(button("编辑题目"));
+  const title = container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(title, "新题B修改");
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(questionButton("原题A")); await click(questionButton("新题B修改 · 未保存"));
+  expect(container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')!.value).toBe("新题B修改");
+  await click(button("保存题目"));
+  expect(vi.mocked(api.saveStudyQuestion).mock.calls.at(-1)?.[1]).toBe("new");
 });
 
 it("keeps the draft after a failed save", async () => {
@@ -230,7 +373,7 @@ it("keeps source ranges and inserted images in their selected order when composi
   expect(parts[2].querySelector(".katex")).not.toBeNull();
 });
 
-it("keeps the latest PDF box editable until the next valid box finishes", async () => {
+it("keeps PDF selection editable and appends a region only after an explicit add action", async () => {
   vi.mocked(api.getStudyDocuments).mockResolvedValue([{ ...document, format: "pdf", name: "模拟卷.pdf", page_count: 1 }]);
   vi.mocked(api.getStudyBlocks).mockResolvedValue([{ id: "page1", document_id: "d1", ordinal: 0, kind: "pdf_page",
     page: 1, width: 600, height: 800 }]);
@@ -247,49 +390,53 @@ it("keeps the latest PDF box editable until the next valid box finishes", async 
   expect(first.classList.contains("locked")).toBe(false);
   expect(first.tabIndex).toBe(0);
   expect(canvas.querySelectorAll("[data-handle]")).toHaveLength(4);
-  await pointer(first, "pointerdown", 120, 100);
-  await pointer(canvas, "pointermove", 180, 180);
-  await pointer(canvas, "pointerup", 180, 180);
-  expect(first.getAttribute("style")).not.toBe(initial);
-  expect(first.classList.contains("locked")).toBe(false);
-  expect(canvas.querySelectorAll("[data-handle]")).toHaveLength(4);
-  const moved = first.getAttribute("style");
-  await pointer(first.querySelector('[data-handle="se"]')!, "pointerdown", 600, 400);
-  await pointer(canvas, "pointermove", 550, 450);
-  await pointer(canvas, "pointerup", 550, 450);
-  expect(first.getAttribute("style")).not.toBe(moved);
-  const adjusted = first.getAttribute("style");
-  // Cancelling or making a tiny second box must not lock the first.
-  await pointer(canvas, "pointerdown", 60, 500);
-  await pointer(canvas, "pointermove", 500, 650);
-  expect(first.classList.contains("locked")).toBe(false);
-  await pointer(canvas, "pointercancel", 500, 650);
-  expect(first.classList.contains("locked")).toBe(false);
-  await pointer(canvas, "pointerdown", 60, 500);
-  await pointer(canvas, "pointerup", 61, 501);
-  expect(first.classList.contains("locked")).toBe(false);
-  await pointer(canvas, "pointerdown", 60, 500);
-  await pointer(canvas, "pointermove", 500, 650);
-  expect(first.classList.contains("locked")).toBe(false);
-  await pointer(canvas, "pointerup", 500, 650);
-  expect(canvas.querySelectorAll(".study-selection-box")).toHaveLength(2);
-  expect(first.getAttribute("style")).toBe(adjusted);
-  expect(first.classList.contains("locked")).toBe(true);
-  expect(first.querySelector("[data-handle]")).toBeNull();
-  const second = canvas.querySelectorAll(".study-selection-box")[1];
+  const editable = container.querySelector<HTMLDivElement>(".study-page-canvas")!;
+  const editableFirst = editable.querySelector<HTMLElement>(".study-selection-box")!;
+  expect(editableFirst.classList.contains("locked")).toBe(false);
+  expect(editable.querySelectorAll("[data-handle]")).toHaveLength(4);
+  await pointer(editableFirst, "pointerdown", 120, 100);
+  await pointer(editable, "pointermove", 180, 180);
+  await pointer(editable, "pointerup", 180, 180);
+  expect(editableFirst.getAttribute("style")).not.toBe(initial);
+  expect(editableFirst.classList.contains("locked")).toBe(false);
+  expect(editable.querySelectorAll("[data-handle]")).toHaveLength(4);
+  const moved = editableFirst.getAttribute("style");
+  await pointer(editableFirst.querySelector('[data-handle="se"]')!, "pointerdown", 600, 400);
+  await pointer(editable, "pointermove", 550, 450);
+  await pointer(editable, "pointerup", 550, 450);
+  expect(editableFirst.getAttribute("style")).not.toBe(moved);
+  const adjusted = editableFirst.getAttribute("style");
+  await click(button("添加另一区域"));
+  const drawingCanvas = container.querySelector<HTMLDivElement>(".study-page-canvas")!;
+  const drawingFirst = drawingCanvas.querySelector<HTMLElement>(".study-selection-box")!;
+  // Cancelling or making a tiny second box leaves the first region unchanged.
+  await pointer(drawingCanvas, "pointerdown", 60, 500);
+  await pointer(drawingCanvas, "pointermove", 500, 650);
+  expect(drawingFirst.classList.contains("locked")).toBe(true);
+  await pointer(drawingCanvas, "pointercancel", 500, 650);
+  await pointer(drawingCanvas, "pointerdown", 60, 500);
+  await pointer(drawingCanvas, "pointerup", 61, 501);
+  await pointer(drawingCanvas, "pointerdown", 60, 500);
+  await pointer(drawingCanvas, "pointermove", 500, 650);
+  await pointer(drawingCanvas, "pointerup", 500, 650);
+  expect(drawingCanvas.querySelectorAll(".study-selection-box")).toHaveLength(2);
+  expect(drawingCanvas.querySelector(".study-selection-box")?.getAttribute("style")).toBe(adjusted);
+  expect(drawingCanvas.querySelector(".study-selection-box")?.classList.contains("locked")).toBe(false);
+  expect(drawingCanvas.querySelector(".study-selection-box [data-handle]")).not.toBeNull();
+  const second = drawingCanvas.querySelectorAll(".study-selection-box")[1];
   expect(second.classList.contains("locked")).toBe(false);
   await click(button("撤销选区操作"));
-  expect(canvas.querySelectorAll(".study-selection-box")).toHaveLength(1);
-  expect(first.classList.contains("locked")).toBe(false);
-  expect(first.getAttribute("style")).toBe(adjusted);
+  expect(container.querySelectorAll(".study-selection-box")).toHaveLength(1);
+  expect(container.querySelector(".study-selection-box")?.classList.contains("locked")).toBe(false);
+  expect(container.querySelector(".study-selection-box")?.getAttribute("style")).toBe(adjusted);
   await click(button("撤销选区操作"));
-  expect(first.getAttribute("style")).toBe(moved);
+  expect(container.querySelector(".study-selection-box")?.getAttribute("style")).toBe(moved);
   await click(button("撤销选区操作"));
-  expect(first.getAttribute("style")).toBe(initial);
+  expect(container.querySelector(".study-selection-box")?.getAttribute("style")).toBe(initial);
   expect(api.saveStudyQuestion).not.toHaveBeenCalled();
 });
 
-it("selects across PDF pages, expands to each page's maximum text width and keeps the group editable", async () => {
+it("selects across PDF pages as one completed question and expands to each page's text width", async () => {
   const pages: api.StudyBlock[] = [0, 1, 2].map(index => ({ id: `page${index}`, document_id: "d1",
     ordinal: index, kind: "pdf_page", page: index + 1, width: 600, height: 800 }));
   vi.mocked(api.getStudyDocuments).mockResolvedValue([{ ...document, format: "pdf", page_count: 3 }]);
@@ -311,25 +458,14 @@ it("selects across PDF pages, expands to each page's maximum text width and keep
   expect(container.querySelectorAll(".study-selection-box.is-drawing")).toHaveLength(2);
   await pointer(surface, "pointerup", 450, 1040);
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(2);
-  expect(container.querySelectorAll(".study-selection-box:not(.locked)")).toHaveLength(2);
+  expect(container.querySelectorAll(".study-selection-box")).toHaveLength(2);
   expect(container.querySelectorAll("[data-handle]")).toHaveLength(8);
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(1);
   const boxes = [...container.querySelectorAll<HTMLElement>(".study-selection-box")];
   expect(parseFloat(boxes[0].style.left)).toBeCloseTo(9);
   expect(parseFloat(boxes[0].style.width)).toBeCloseTo(82);
   expect(parseFloat(boxes[1].style.left)).toBeCloseTo(4);
   expect(parseFloat(boxes[1].style.width)).toBeCloseTo(95);
-  // A cancelled next selection must leave the entire previous group editable.
-  await pointer(canvases[2], "pointerdown", 100, 1750);
-  await pointer(surface, "pointermove", 500, 2000);
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await pointer(surface, "pointerup", 500, 2000);
-  expect(container.querySelectorAll(".study-selection-box:not(.locked)")).toHaveLength(2);
-  // Finish a new group, then undo it as one operation.
-  await pointer(canvases[2], "pointerdown", 100, 1750);
-  await pointer(surface, "pointerup", 500, 2000);
-  expect(container.querySelectorAll(".study-selection-box.locked")).toHaveLength(2);
-  await click(button("撤销选区操作"));
-  expect(container.querySelectorAll(".study-selection-box:not(.locked)")).toHaveLength(2);
   await click(button("保存题目"));
   const values = vi.mocked(api.saveStudyQuestion).mock.calls[0][0].regions;
   expect(values).toHaveLength(2);
@@ -337,6 +473,34 @@ it("selects across PDF pages, expands to each page's maximum text width and keep
   expect(values[0].selection_group).toBe(values[1].selection_group);
   expect(values[0].bbox).toEqual([expect.closeTo(.09), .75, expect.closeTo(.91), 1]);
   expect(values[1].bbox).toEqual([expect.closeTo(.04), 0, expect.closeTo(.99), .25]);
+});
+
+it("creates separate PDF questions on consecutive gestures and restores all boxes after reading", async () => {
+  vi.mocked(api.getStudyDocuments).mockResolvedValue([{ ...document, format: "pdf", page_count: 1 }]);
+  vi.mocked(api.getStudyBlocks).mockResolvedValue([{ id: "page1", document_id: "d1", ordinal: 0, kind: "pdf_page",
+    page: 1, width: 600, height: 800 }]);
+  await mount(); await click(button("选题"));
+  const canvas = container.querySelector<HTMLDivElement>(".study-page-canvas")!;
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 600, bottom: 800, width: 600, height: 800, x: 0, y: 0, toJSON: () => ({}) });
+  canvas.setPointerCapture = vi.fn(); canvas.hasPointerCapture = () => false;
+  await act(async () => canvas.querySelector("img")!.dispatchEvent(new Event("load")));
+  await pointer(canvas, "pointerdown", 60, 80); await pointer(canvas, "pointerup", 540, 320);
+  await pointer(canvas, "pointerdown", 60, 400); await pointer(canvas, "pointerup", 540, 600);
+  expect(button("选题").getAttribute("aria-pressed")).toBe("true");
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(2);
+  expect(canvas.querySelectorAll(".study-selection-box")).toHaveLength(1);
+  expect(canvas.querySelectorAll(".study-saved-box")).toHaveLength(1);
+  expect(canvas.querySelector(".study-selection-number")!.textContent).toContain("题目 1");
+  await click(button("阅读"));
+  expect(canvas.querySelectorAll(".study-selection-box,.study-saved-box,[data-handle]")).toHaveLength(0);
+  await click(button("选题"));
+  expect(canvas.querySelectorAll(".study-selection-box,.study-saved-box")).toHaveLength(2);
+  await pointer(canvas.querySelector(".study-saved-box")!, "pointerdown", 80, 100);
+  expect(container.querySelectorAll(".study-region-preview")).toHaveLength(1);
+  expect(canvas.querySelector(".study-selection-box .study-selection-number")!.textContent).toBe("题目 1");
+  await pointer(canvas, "pointerdown", 60, 650); await pointer(canvas, "pointerup", 540, 750);
+  expect(container.querySelectorAll(".study-question-draft-row")).toHaveLength(3);
+  expect(api.saveStudyQuestion).not.toHaveBeenCalled();
 });
 
 it("allows reverse cross-page PDF selection without text and undoes all pages together", async () => {
@@ -379,22 +543,24 @@ it("extends an existing PDF selection into the previous page by dragging its top
   await pointer(canvases[1], "pointerdown", 120, 1000);
   await pointer(surface, "pointerup", 480, 1160);
   const original = canvases[1].querySelector<HTMLElement>(".study-selection-box")!.getAttribute("style");
-  const corner = () => canvases[1].querySelector('[data-handle="nw"]')!;
+  await click(button("调整选框 1"));
+  const currentCanvases = () => [...container.querySelectorAll<HTMLDivElement>(".study-page-canvas")];
+  const corner = () => currentCanvases()[1].querySelector('[data-handle="nw"]')!;
   // A cancelled cross-page resize keeps the original rectangle and adds no undo step.
   await pointer(corner(), "pointerdown", 120, 1000);
-  await pointer(canvases[1], "pointermove", 60, 790);
+  await pointer(currentCanvases()[1], "pointermove", 60, 790);
   await pointer(surface, "pointercancel", 60, 790);
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(1);
-  expect(canvases[1].querySelector(".study-selection-box")!.getAttribute("style")).toBe(original);
+  expect(currentCanvases()[1].querySelector(".study-selection-box")!.getAttribute("style")).toBe(original);
   await pointer(corner(), "pointerdown", 120, 1000);
-  await pointer(canvases[1], "pointermove", 60, 790);
+  await pointer(currentCanvases()[1], "pointermove", 60, 790);
   await pointer(surface, "pointermove", 60, 600);
   await pointer(surface, "pointerup", 60, 600);
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(2);
-  expect(container.querySelectorAll(".study-selection-box:not(.locked)")).toHaveLength(2);
+  expect(container.querySelectorAll(".study-selection-box")).toHaveLength(2);
   await click(button("撤销选区操作"));
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(1);
-  expect(canvases[1].querySelector(".study-selection-box")!.getAttribute("style")).toBe(original);
+  expect(currentCanvases()[1].querySelector(".study-selection-box")!.getAttribute("style")).toBe(original);
   await click(button("撤销选区操作"));
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(0);
 });

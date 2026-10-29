@@ -225,6 +225,7 @@ class DshBridge:
                             status["instance_id"], encode(request), None))
         receipt = client.call("prepare", request)
         self.records.save_receipt(request["request_id"], receipt)
+        self.records.wake()
         return receipt
 
     def resume(self, request_id, *, open_session=False):
@@ -240,4 +241,6 @@ class DshBridge:
             # The previous timeout may have happened before Host admission.
             receipt = client.call("prepare", json.loads(row["snapshot"]))
         self.records.save_receipt(request_id, receipt)
+        if open_session:
+            self.records.wake()
         return receipt

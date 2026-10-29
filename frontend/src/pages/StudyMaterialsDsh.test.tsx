@@ -15,7 +15,7 @@ vi.mock("../api/studyMaterials", async original => ({
 vi.mock("../api/dshBridge", () => ({
   getDshStatus: vi.fn(async () => ({ client_connected: true })),
   getDshDiscussions: vi.fn(async () => []),
-  prepareDshQuestion: vi.fn(), openDshDiscussion: vi.fn(), getDshRequest: vi.fn(), connectDsh: vi.fn(),
+  prepareDshQuestion: vi.fn(), openDshDiscussion: vi.fn(), getDshRequest: vi.fn(), connectDsh: vi.fn(), connectDshAuto: vi.fn(),
 }));
 
 const block: study.StudyBlock = { id: "b", document_id: "doc", ordinal: 0, kind: "markdown",
@@ -94,6 +94,7 @@ it("uses the saved content version after changing selected regions", async () =>
   await act(async () => host.querySelectorAll<HTMLElement>(".study-block-check")[1].click());
   await click("保存题目");
   expect(study.saveStudyQuestion).toHaveBeenCalled();
+  await click("阅读");
   await vi.waitFor(() => expect(button("在 DSH 中讨论")).toBeTruthy());
   expect(host.textContent).toContain("题目版本 1");
 });

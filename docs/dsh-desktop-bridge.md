@@ -48,6 +48,8 @@ Session Controller 精确版本，不能作为独立网页插件运行。
 安装器调用该桌面安装附带的 `dsh plugin --profile desktop add file:...`，
 不使用系统中可能过旧的全局 CLI。只操作显式选定的 Harness home，
 不终止任何已有进程；运行中的 profile 会被拒绝。插件更新也需重启该 profile。
+修改插件清单中的 `dsh.client.inject` 后，需要先关闭目标 DSH profile，
+重新运行安装脚本，再启动该 profile；仅刷新 ClassCue 或重新打开对话不会重新组合 DSH 原生组件。
 
 开启对应 DSH 桌面版并完成其首次使用引导后，在 ClassCue 题目控件的“DSH 桌面连接”选择
 `classcue-bridge` 文件夹或填写其中的 `connection.json` 路径，点击连接。
@@ -60,9 +62,8 @@ Session Controller 精确版本，不能作为独立网页插件运行。
 
 ## 资料阅读模块的接入点
 
-已接入主开发目录完成的手动资料阅读模块。该模块目前尚未提交到 `main`；
-本 worktree 使用其相关源码快照，不修改主开发目录。后续合并应保留资料模块已有实现，
-只叠加桥接注册、发行文件和以下题目侧栏接入：
+已接入手动资料阅读模块：题目保存后切换到阅读模式，可以打开原生 DSH 草稿
+或返回已绑定的讨论。题目侧栏通过以下组件接入桥接：
 
 ```tsx
 import { DshQuestionActions } from "../components/DshQuestionActions";

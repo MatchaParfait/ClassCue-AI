@@ -16,6 +16,7 @@ import { expandToTextWidth, useStudyPageBoxSelection } from "../hooks/useStudyPa
 import "./StudyMaterialsPage.css";
 
 type Draft = { id?: string; title: string; number: string; regions: StudyRegion[] };
+type DraftEntry = { key: string; order: number; value: Draft; baseline: Draft; history: Draft[] };
 type View = "files" | "reader" | "questions";
 const emptyDraft = (): Draft => ({ title: "", number: "", regions: [] });
 const snapshot = (value: Draft) => JSON.parse(JSON.stringify(value)) as Draft;
@@ -31,12 +32,17 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   const [leftOpen, setLeftOpen] = useState(true), [rightOpen, setRightOpen] = useState(true);
   const [recycle, setRecycle] = useState(false), [query, setQuery] = useState("");
   const [selecting, setSelecting] = useState(false), [selectedIndex, setSelectedIndex] = useState(-1);
+  const [appendRegionMode, setAppendRegionMode] = useState(false);
   const [editableIndex, setEditableIndex] = useState(-1);
   const [snapText, setSnapText] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft), [baseline, setBaseline] = useState<Draft>(emptyDraft);
   const draftRef = useRef(draft), committed = useRef(draft);
   const [history, setHistory] = useState<Draft[]>([]);
+  const [parked, setParked] = useState<DraftEntry[]>([]);
+  const parkedRef = useRef<DraftEntry[]>([]);
+  const currentKey = useRef("initial");
+  const currentOrder = useRef(0), nextOrder = useRef(0);
   const [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false);
   const [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [uploadProgress, setUploadProgress] = useState<{ name: string; index: number; count: number } | null>(null);
@@ -63,8 +69,10 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   const blocks = useQuery({ queryKey: ["study", scope, documentId, "blocks"], queryFn: () => getStudyBlocks(documentId), enabled: active && readable });
   const questions = useQuery({ queryKey: ["study", scope, documentId, "questions"], queryFn: () => getStudyQuestions(documentId), enabled: active && readable });
   const isDirty = !same(draft, baseline);
+  const dirtyCount = parked.filter(entry => !same(entry.value, entry.baseline)).length + Number(isDirty);
   const pageBox = useStudyPageBoxSelection({
-    enabled: active && selecting && !busy, sourceKey: documentId, surface: markdownSurface, snap: snapText,
+    enabled: active && selecting && !busy,
+    sourceKey: documentId, surface: markdownSurface, snap: snapText,
     onError: setError,
     onSelect: async (regions, snap, replaceIndex) => {
       const sourceDocument = documentId;
@@ -85,6 +93,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
           values.push({ ...region, bbox, selection_group: group });
         }
         if (selectedDocument.current !== sourceDocument) return;
+        if (replaceIndex === undefined && !appendRegionMode && draftRef.current.regions.length) startFreshDraft();
         const existing = draftRef.current.regions;
         let next = [...existing, ...values], index = next.length - 1;
         if (replaceIndex !== undefined && original) {
@@ -107,6 +116,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
         if (next.length > 100) { setError("一道题最多保存 100 个区域，请缩小选择范围"); return; }
         updateDraft({ ...draftRef.current, regions: next });
         setSelectedIndex(index); setEditableIndex(index); setRightOpen(true);
+        setAppendRegionMode(false);
       } catch (failure) { setError((failure as Error).message); }
       finally { setBusy(false); }
     },
@@ -115,6 +125,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     enabled: active && selecting && !busy && document?.format === "markdown", sourceKey: documentId, surface: markdownSurface,
     onSelect: ids => {
       const selected = (blocks.data || []).filter(block => block.kind === "markdown" && ids.includes(block.id));
+      if (!appendRegionMode && draftRef.current.regions.length) startFreshDraft();
       const existing = draftRef.current;
       const selectedIds = new Set(selected.map(block => block.id));
       const regions = [...existing.regions.filter(region => !selectedIds.has(region.block_id)),
@@ -123,6 +134,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
         - (blocks.data?.find(block => block.id === b.block_id)?.ordinal || 0));
       updateDraft({ ...existing, regions }); setRightOpen(true);
       markdownAnchor.current = (blocks.data || []).filter(block => block.kind === "markdown").findIndex(block => block.id === selected.at(-1)?.id);
+      setAppendRegionMode(false);
     },
   });
 
@@ -143,7 +155,38 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   function replaceDraft(next: Draft) {
     draftRef.current = next; committed.current = snapshot(next);
     setDraft(next); setBaseline(snapshot(next)); setHistory([]); setSelectedIndex(-1); setEditableIndex(-1); setPreviewOpen(false);
+    setAppendRegionMode(false);
     markdownAnchor.current = -1;
+  }
+  function storeEntries(entries: DraftEntry[]) {
+    const ordered = [...entries].sort((a, b) => a.order - b.order);
+    parkedRef.current = ordered; setParked(ordered);
+  }
+  function parkCurrent() {
+    const others = parkedRef.current.filter(entry => entry.key !== currentKey.current);
+    if (draftRef.current.regions.length || !same(draftRef.current, baseline)) {
+      others.push({ key: currentKey.current, order: currentOrder.current, value: snapshot(draftRef.current), baseline: snapshot(baseline), history });
+    }
+    storeEntries(others);
+  }
+  function startFreshDraft() {
+    parkCurrent(); currentKey.current = crypto.randomUUID(); currentOrder.current = ++nextOrder.current; replaceDraft(emptyDraft());
+  }
+  function activateEntry(key: string) {
+    if (key === currentKey.current || busy) return;
+    const entry = parkedRef.current.find(item => item.key === key);
+    if (!entry) return;
+    parkCurrent();
+    storeEntries(parkedRef.current.filter(item => item.key !== key));
+    currentKey.current = key; currentOrder.current = entry.order; replaceDraft(snapshot(entry.value));
+    setBaseline(snapshot(entry.baseline)); setHistory(entry.history);
+    setRightOpen(true); setNotice("");
+  }
+  function resetDrafts() {
+    storeEntries([]); currentKey.current = crypto.randomUUID(); currentOrder.current = 0; nextOrder.current = 0; replaceDraft(emptyDraft());
+  }
+  function discardAll() {
+    storeEntries([]); replaceDraft(snapshot(baseline)); setSelecting(false);
   }
   function undo() {
     if (!history.length) return;
@@ -154,26 +197,37 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     setEditableIndex(previous.regions[index]?.bbox ? index : -1);
   }
   async function refresh() { await client.invalidateQueries({ queryKey: ["study", scope] }); }
-  async function save() {
-    const values = draftRef.current;
-    if (!documentId || !values.regions.length) { setError("请先选择题目的原文范围"); throw new Error("请先选择题目的原文范围"); }
+  async function save(all = false) {
+    const entries: DraftEntry[] = [...(all ? parkedRef.current : []),
+      { key: currentKey.current, order: currentOrder.current, value: snapshot(draftRef.current), baseline, history }];
+    const pending = entries.filter(entry => !same(entry.value, entry.baseline)).sort((a, b) => a.order - b.order);
+    if (!documentId || !pending.length || pending.some(entry => !entry.value.regions.length)) {
+      setError("请先选择题目的原文范围"); throw new Error("请先选择题目的原文范围");
+    }
     setBusy(true); setError("");
     try {
-      const result = await saveStudyQuestion({ document_id: documentId, title: values.title, number: values.number, regions: values.regions }, values.id);
+      for (const entry of pending) {
+        const values = entry.value;
+        const result = await saveStudyQuestion({ document_id: documentId, title: values.title, number: values.number, regions: values.regions }, values.id);
+        const saved: Draft = { id: result.id, title: result.title, number: result.number,
+          regions: result.regions.map(({ block_id, bbox, start, end, selection_group }) => ({ block_id, ...(selection_group ? { selection_group } : {}), ...(bbox ? { bbox } : { start, end }) })) };
+        // Publish each success before the next request so retry never recreates a saved question.
+        if (entry.key === currentKey.current) replaceDraft(saved);
+        else storeEntries(parkedRef.current.map(item => item.key === entry.key
+          ? { ...item, value: saved, baseline: snapshot(saved), history: [] } : item));
+      }
       await refresh();
-      replaceDraft({ id: result.id, title: result.title, number: result.number,
-        regions: result.regions.map(({ block_id, bbox, start, end, selection_group }) => ({ block_id, ...(selection_group ? { selection_group } : {}), ...(bbox ? { bbox } : { start, end }) })) });
-      setSelecting(false); setNotice("题目已保存"); return true;
-    } catch (failure) { setError((failure as Error).message); throw failure; }
+      setAppendRegionMode(false); setNotice(all ? "全部题目已保存" : "题目已保存"); return true;
+    } catch (failure) { setError((failure as Error).message); await refresh(); throw failure; }
     finally { setBusy(false); }
   }
-  const clearUnsaved = useUnsavedDraft({ label: "题目选区", dirty: isDirty, busy: busy || uploading,
-    save, discard: () => { replaceDraft(snapshot(baseline)); setSelecting(false); } });
+  const clearUnsaved = useUnsavedDraft({ label: "题目草稿", dirty: dirtyCount > 0, busy: busy || uploading,
+    save: () => save(true), discard: discardAll });
   function guarded(action: () => void) { leave(action); }
   function selectDocument(id: string) {
     if (id === documentId) { setView("reader"); return; }
     guarded(() => {
-      clearUnsaved(); replaceDraft(emptyDraft()); setDocumentId(id); remember(selectionKey, id);
+      clearUnsaved(); resetDrafts(); setDocumentId(id); remember(selectionKey, id);
       setView("reader"); setSelecting(false); setError(""); setNotice(""); restoring.current = "";
     });
   }
@@ -191,22 +245,27 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     });
   }
   function openQuestion(question: StudyQuestion, index: number) {
-    guarded(() => {
-      const next: Draft = { id: question.id, title: question.title, number: question.number,
-        regions: question.regions.map(({ block_id, bbox, start, end, selection_group }) => ({ block_id, ...(selection_group ? { selection_group } : {}), ...(bbox ? { bbox } : { start, end }) })) };
-      clearUnsaved(); replaceDraft(next); setSelecting(false); setRightOpen(true);
-      setNotice(question.title || `题目 ${index + 1}`);
-      if (next.regions[0]) locate(next.regions[0]);
-    });
+    if (busy) return;
+    if (question.id === draftRef.current.id) return;
+    const existing = parkedRef.current.find(entry => entry.value.id === question.id);
+    if (existing) { activateEntry(existing.key); if (existing.value.regions[0]) locate(existing.value.regions[0]); return; }
+    parkCurrent();
+    currentKey.current = question.id;
+    currentOrder.current = ++nextOrder.current;
+    const next: Draft = { id: question.id, title: question.title, number: question.number,
+      regions: question.regions.map(({ block_id, bbox, start, end, selection_group }) => ({ block_id, ...(selection_group ? { selection_group } : {}), ...(bbox ? { bbox } : { start, end }) })) };
+    replaceDraft(next); setRightOpen(true);
+    setNotice(question.title || `题目 ${index + 1}`);
+    if (next.regions[0]) locate(next.regions[0]);
   }
   function newQuestion() {
-    guarded(() => { clearUnsaved(); replaceDraft(emptyDraft()); setSelecting(true); setRightOpen(true); setView("reader"); setNotice(""); });
+    startFreshDraft(); setSelecting(true); setRightOpen(true); setView("reader"); setNotice("");
   }
   useEffect(() => {
     if (documents.data && !documents.data.some(item => item.id === documentId && !item.deleted)) {
       const first = documents.data.find(item => !item.deleted);
       if (first) { setDocumentId(first.id); remember(selectionKey, first.id); setView("reader"); }
-      else { setDocumentId(""); replaceDraft(emptyDraft()); }
+      else { setDocumentId(""); resetDrafts(); }
     }
   }, [documents.data, documentId]);
   useLayoutEffect(() => {
@@ -216,6 +275,8 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     setZoom(reading.zoom || 1); setPage(reading.page || 1); setPageInput(String(reading.page || 1));
     setLeftOpen(reading.left_open !== false); setRightOpen(reading.right_open ?? questions.data.some(item => !item.deleted));
     const question = questions.data.find(item => item.id === reading.question_id && !item.deleted);
+    storeEntries([]); currentOrder.current = 0; nextOrder.current = 0;
+    currentKey.current = question?.id || crypto.randomUUID();
     if (question) replaceDraft({ id: question.id, title: question.title, number: question.number,
       regions: question.regions.map(({ block_id, bbox, start, end, selection_group }) => ({ block_id, ...(selection_group ? { selection_group } : {}), ...(bbox ? { bbox } : { start, end }) })) });
     else replaceDraft(emptyDraft());
@@ -303,7 +364,13 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     setBusy(true); setError("");
     try {
       await studyWrite(`/api/${type}/${id}${deleted ? "/restore" : ""}`, deleted ? "POST" : "DELETE");
-      if (type === "study-questions" && id === draft.id) { clearUnsaved(); replaceDraft(emptyDraft()); }
+      if (type === "study-questions") {
+        storeEntries(parkedRef.current.filter(entry => entry.value.id !== id));
+        if (id === draft.id) {
+          currentKey.current = crypto.randomUUID(); currentOrder.current = ++nextOrder.current;
+          replaceDraft(emptyDraft());
+        }
+      }
       if (type === "study-documents") {
         await client.invalidateQueries({ queryKey: ["study", scope, "documents"] });
       } else await refresh();
@@ -318,12 +385,13 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   const questionList = (questions.data || []).filter(item => item.deleted === recycle);
   const blockError = documents.error || blocks.error || questions.error;
   const activeQuestions = (questions.data || []).filter(item => !item.deleted);
-  const nextNumber = activeQuestions.length + 1;
-  const draftNumber = draft.id ? Math.max(1, activeQuestions.findIndex(item => item.id === draft.id) + 1) : nextNumber;
-  const focusedRegion = draft.regions[selectedIndex];
-  const editableGroup = draft.regions[editableIndex]?.selection_group;
-  const editableIndices = draft.regions.flatMap((region, index) =>
-    index === editableIndex || (editableGroup && region.selection_group === editableGroup) ? [index] : []);
+  const localEntries = [...parked, { key: currentKey.current, order: currentOrder.current, value: draft, baseline, history }]
+    .sort((a, b) => a.order - b.order);
+  const unsavedEntries = localEntries.filter(entry => !entry.value.id
+    && (entry.value.regions.length || !same(entry.value, entry.baseline)));
+  const draftNumber = draft.id ? Math.max(1, activeQuestions.findIndex(item => item.id === draft.id) + 1)
+    : activeQuestions.length + Math.max(0, unsavedEntries.findIndex(entry => entry.key === currentKey.current)) + 1;
+  const editableIndices = selecting && !appendRegionMode ? draft.regions.map((_, index) => index) : [];
   const editing = selecting || isDirty;
   const savedQuestion = activeQuestions.find(item => item.id === draft.id && item.document_id === documentId);
   const questionTitle = draft.title || `题目 ${draftNumber}`;
@@ -333,12 +401,13 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     const block = blocks.data?.find(item => item.id === region.block_id);
     if (!block) return null;
     return <div className={`study-region-preview${continuousPreview ? " source-only" : ""}${selectedIndex === index ? " selected" : ""}`} key={`${region.block_id}:${index}`}>
-      <header><button className="text-button" title={studySourceLabel(block)} aria-label={`定位选区 ${index + 1}`}
-        onClick={() => { setSelectedIndex(index); locate(region); }}><MapPin size={13} />{block.kind === "markdown" ? `片段 ${index + 1}` : studySourceLabel(block)}</button>
+      <header><div className="study-region-heading"><strong>区域 {index + 1}</strong><button className="text-button" title={studySourceLabel(block)} aria-label={`定位选区 ${index + 1}`}
+        onClick={() => { setSelectedIndex(index); locate(region); }}><MapPin size={13} />{block.kind === "markdown" ? `片段 ${index + 1}` : studySourceLabel(block)}</button></div>
         {editing && block.kind !== "markdown" && <>
           <button className="icon-button" title="调整选框" aria-label={`调整选框 ${index + 1}`} disabled={busy}
             aria-pressed={editableIndex === index} onClick={() => {
-              setSelectedIndex(index); setEditableIndex(value => value === index ? -1 : index); setSelecting(true); locate(region);
+              setSelectedIndex(index); setEditableIndex(value => value === index ? -1 : index);
+              setAppendRegionMode(false); setSelecting(true); locate(region);
             }}><Crop size={13} /></button>
           <button className="icon-button" title="上移区域" aria-label={`上移区域 ${index + 1}`} disabled={!index || busy} onClick={() => {
             const next = [...draft.regions]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateDraft({ ...draft, regions: next }); setEditableIndex(-1);
@@ -353,10 +422,35 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
         <img src={studyRegionUrl(documentId, region)} alt={`题目选区 ${index + 1}`} /></button>}
     </div>;
   });
+  const otherRegions = [
+    ...activeQuestions.filter(question => question.id !== draft.id && !parked.some(entry => entry.value.id === question.id))
+      .map((question, index) => ({ key: question.id, value: question, label: `题目 ${activeQuestions.indexOf(question) + 1}`, index })),
+    ...parked.map(entry => ({ ...entry, label: entry.value.id
+      ? `题目 ${activeQuestions.findIndex(question => question.id === entry.value.id) + 1}`
+      : `题目 ${activeQuestions.length + unsavedEntries.findIndex(item => item.key === entry.key) + 1}` })),
+  ];
+  function openOtherRegion(key: string) {
+    if (parkedRef.current.some(entry => entry.key === key)) activateEntry(key);
+    else {
+      const question = activeQuestions.find(item => item.id === key);
+      if (question) openQuestion(question, activeQuestions.indexOf(question));
+    }
+  }
   const questionIndex = <div className="study-question-index">
+    {!!unsavedEntries.length && !recycle && <>
+      <div className="study-question-list-heading"><strong>题目草稿</strong><span>{unsavedEntries.length}</span></div>
+      <div className="study-question-index-list">{unsavedEntries.map((entry, index) =>
+        <div key={entry.key} className={`study-question-row study-question-draft-row${entry.key === currentKey.current ? " selected" : ""}`}>
+          <button className="study-question-open" disabled={busy} onClick={() => { activateEntry(entry.key); setRightOpen(true); }}>
+            <strong>{entry.value.title || `题目 ${activeQuestions.length + index + 1}`}</strong>
+            <small>{entry.value.regions.length} 个区域 · 未保存</small>
+          </button>
+        </div>)}</div>
+    </>}
     <div className="study-question-list-heading"><strong>{recycle ? "已移除题目" : "已保存题目"}</strong><span>{questionList.length}</span></div>
     <div className="study-question-index-list">{questionList.map((question, index) => <div key={question.id} className={`study-question-row${draft.id === question.id ? " selected" : ""}`}>
-      <button className="study-question-open" disabled={question.deleted || busy} onClick={() => openQuestion(question, index)}><strong>{question.number && `${question.number} · `}{question.title || `题目 ${index + 1}`}</strong>
+      <button className="study-question-open" disabled={question.deleted || busy} onClick={() => openQuestion(question, index)}><strong>{question.number && `${question.number} · `}{localEntries.find(entry => entry.value.id === question.id)?.value.title || question.title || `题目 ${index + 1}`}
+        {localEntries.some(entry => entry.value.id === question.id && !same(entry.value, entry.baseline)) && " · 未保存"}</strong>
         <small>{question.regions.map(region => region.block.kind === "markdown" ? "Markdown" : studySourceLabel(region.block))
           .filter((label, pos, labels) => labels.indexOf(label) === pos).join("、")}</small></button>
       <button className="icon-button" title={question.deleted ? "恢复题目" : "移除题目"} aria-label={`${question.deleted ? "恢复" : "移除"}题目 ${index + 1}`}
@@ -411,7 +505,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
           <button className="icon-button study-mobile-only" title="返回资料" aria-label="返回资料" onClick={() => setView("files")}><ArrowLeft size={16} /></button>
           {!leftOpen && <button className="icon-button study-desktop-toggle" title="展开文件列表" aria-label="展开文件列表" onClick={() => setLeftOpen(true)}><PanelLeftOpen size={16} /></button>}
           <strong className="study-current-name" title={document?.name}>{document?.name || "资料原文"}</strong>
-          <div className="study-mode" aria-label="阅读模式"><button aria-pressed={!selecting} disabled={!readable} onClick={() => { setSelecting(false); setEditableIndex(-1); }}><BookOpen size={15} />阅读</button>
+          <div className="study-mode" aria-label="阅读模式"><button aria-pressed={!selecting} disabled={!readable || busy} onClick={() => { setSelecting(false); setEditableIndex(-1); setAppendRegionMode(false); }}><BookOpen size={15} />阅读</button>
             <button aria-pressed={selecting} disabled={!readable || busy} onClick={() => { setSelecting(true); setRightOpen(true); }}><Crop size={15} />选题</button></div>
           <button className="icon-button" title={rightOpen ? "收起题目侧栏" : "展开题目侧栏"} aria-label="题目侧栏" onClick={() => {
             setRightOpen(value => window.innerWidth <= 950 || !value); setView("questions");
@@ -448,7 +542,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
               if (event.target === event.currentTarget) { markdownBox.onLostPointerCapture(); pageBox.onLostPointerCapture(); }
             }}>
             {blocks.data?.map(block => block.kind === "markdown" ? <section key={block.id} data-study-block={block.id}
-              className={`study-markdown-block${draft.regions.some(region => region.block_id === block.id) || markdownBox.targetIds.includes(block.id) ? " is-selected" : ""}${questions.data?.some(question => !question.deleted && question.regions.some(region => region.block_id === block.id)) ? " has-question" : ""}`}>
+              className={`study-markdown-block${selecting && (draft.regions.some(region => region.block_id === block.id) || markdownBox.targetIds.includes(block.id)) ? " is-selected" : ""}${selecting && otherRegions.some(entry => entry.value.regions.some(region => region.block_id === block.id)) ? " has-question" : ""}`}>
               {selecting && <div className="study-block-check" title={studySourceLabel(block)} onClick={event => toggleMarkdown(block, event)}>
                 <input type="checkbox" aria-label={`选择${studySourceLabel(block)}`} checked={draft.regions.some(region => region.block_id === block.id) || markdownBox.targetIds.includes(block.id)}
                   onChange={() => {}} onKeyDown={event => {
@@ -457,14 +551,20 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
                 <span>{studySourceLabel(block)}</span></div>}
               <StudyMarkdown text={block.text || ""} />
             </section> : <StudyPageCanvas key={block.id} documentId={documentId} block={block} zoom={zoom} selecting={selecting && !busy}
+              questionLabel={`题目 ${draftNumber}`}
               regions={draft.regions.map((region, index) => ({ ...region, index })).filter(region => region.block_id === block.id)}
-              savedRegions={(questions.data || []).filter(question => !question.deleted && question.id !== draft.id).flatMap(question => question.regions.filter(region => region.block_id === block.id))}
+              savedRegions={otherRegions.flatMap(entry => entry.value.regions.filter(region => region.block_id === block.id)
+                .map(region => ({ ...region, questionKey: entry.key, label: entry.label })))}
+              onOpenRegion={openOtherRegion}
               selectedIndex={selectedIndex} editableIndex={editableIndex} editableIndices={editableIndices} scope={scope} snap={snapText}
               drawing={pageBox.regions.find(region => region.block_id === block.id)?.bbox} onDrawStart={pageBox.start}
-              onSelect={setSelectedIndex} onCommit={commitGesture} onError={setError}
-              onAdd={bbox => { updateDraft({ ...draftRef.current, regions: [...draftRef.current.regions, { block_id: block.id, bbox }] });
+              onSelect={index => { setSelectedIndex(index); setEditableIndex(index); }} onCommit={commitGesture} onError={setError}
+              onAdd={bbox => {
+                if (!appendRegionMode && draftRef.current.regions.length) startFreshDraft();
+                updateDraft({ ...draftRef.current, regions: [...draftRef.current.regions, { block_id: block.id, bbox }] });
                 const index = draftRef.current.regions.length - 1;
-                setSelectedIndex(index); setEditableIndex(index); setRightOpen(true); }}
+                setSelectedIndex(index); setEditableIndex(index); setRightOpen(true);
+                setAppendRegionMode(false); }}
               onChange={(index, bbox) => updateDraft({ ...draftRef.current, regions: draftRef.current.regions.map((region, position) => position === index ? { ...region, bbox } : region) }, false)} />)}
             {!blocks.data?.length && <div className="study-empty">资料没有可读内容</div>}
             {markdownBox.box && <div className="study-markdown-selection-box" style={markdownBox.box} aria-hidden="true" />}
@@ -480,31 +580,22 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
           <strong>{selecting || isDirty ? "题目草稿" : "题目"}</strong><button className="icon-button" title="新建题目" aria-label="新建题目" disabled={!readable || busy} onClick={newQuestion}><Plus size={17} /></button></div>
         {questionIndex}
         <div className="study-question-scroll">
-          {(draft.regions.length > 0 || selecting) && <div className="study-draft">
+          {(draft.regions.length > 0 || editing) && <div className="study-draft">
             <div className="study-draft-heading"><span>{editing ? draft.id ? "编辑题目" : `题目 ${draftNumber}` : "当前题目"}{isDirty && " · 未保存"}</span>
-              {!selecting && <button className="icon-button" title="编辑题目" aria-label="编辑题目" onClick={() => setSelecting(true)}><Pencil size={15} /></button>}</div>
+              {!selecting && <button className="icon-button" title="编辑题目" aria-label="编辑题目" onClick={() => {
+                setAppendRegionMode(false); setSelecting(true);
+              }}><Pencil size={15} /></button>}</div>
             {!editing && <div className="study-question-summary"><h2 className="study-question-title">{questionTitle}</h2>
               <span>{draft.number && `原题号 ${draft.number} · `}{draft.regions.length} 个区域</span></div>}
             {editing && <><input aria-label="题目标题" placeholder={`题目 ${draftNumber}`} value={draft.title} maxLength={180} disabled={busy}
               onChange={event => updateDraft({ ...draft, title: event.target.value })} />
             <input aria-label="原题号" placeholder="题号（选填）" value={draft.number} maxLength={120} disabled={busy}
               onChange={event => updateDraft({ ...draft, number: event.target.value })} />
-            <div className="study-draft-tools"><button className="text-button" disabled={busy} onClick={() => { setSelecting(true); setView("reader"); }}><Plus size={15} />添加区域</button>
+            <div className="study-draft-tools"><button className="text-button" disabled={busy || !draft.regions.length} aria-pressed={appendRegionMode} onClick={() => {
+              setEditableIndex(-1); setAppendRegionMode(value => !value); setSelecting(true); setView("reader");
+            }}><Plus size={15} />{appendRegionMode ? "取消添加区域" : "添加另一区域"}</button>
               <button className="icon-button" title="撤销选区操作" aria-label="撤销选区操作" disabled={!history.length || busy} onClick={undo}><Undo2 size={15} /></button></div>
-            {document?.format !== "markdown" && <button className="text-button" disabled={busy} onClick={() => {
-              const block = blocks.data?.find(item => item.page === page && !item.supplement);
-              if (block) { updateDraft({ ...draft, regions: [...draft.regions, { block_id: block.id, bbox: [.1, .1, .9, .4] }] });
-                setSelectedIndex(draft.regions.length); setEditableIndex(draft.regions.length); setSelecting(true); }
-            }}><Crop size={15} />添加本页选框</button>}
-            {focusedRegion?.bbox && <fieldset className="study-coordinate-editor"><legend>选区 {selectedIndex + 1}（%）</legend>
-              {(["左", "上", "右", "下"] as const).map((label, coordinate) => <label key={label}>{label}<input type="number" min={0} max={100} step={.1}
-                aria-label={`选区${label}边界`} value={Number((focusedRegion.bbox![coordinate] * 100).toFixed(1))} disabled={busy || !editableIndices.includes(selectedIndex)}
-                onChange={event => {
-                  const box = [...focusedRegion.bbox!] as [number, number, number, number]; box[coordinate] = Number(event.target.value) / 100;
-                  if (box[0] < box[2] && box[1] < box[3] && box.every(value => value >= 0 && value <= 1)) updateDraft({ ...draft,
-                    regions: draft.regions.map((region, index) => index === selectedIndex ? { ...region, bbox: box } : region) });
-                }} /></label>)}
-            </fieldset>}</>}
+            </>}
             {!!draft.regions.length && <button className="text-button study-open-preview" onClick={() => setPreviewOpen(true)}><Maximize2 size={15} />完整预览</button>}
             {!draft.regions.length && <p className="study-muted study-no-region">尚未选择原文范围</p>}
             {continuousPreview ? <>
@@ -527,6 +618,8 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
         {readable && savedQuestion && !editing && !busy && !uploading && <DshQuestionActions
           questionId={savedQuestion.id} contentVersion={savedQuestion.version} scope={scope}
           active={active && rightOpen} />}
+        {dirtyCount > 1 && <div className="study-batch-actions"><span>{dirtyCount} 道题未保存</span>
+          <button className="text-button" disabled={busy} onClick={() => { void save(true).catch(() => {}); }}><Save size={15} />全部保存</button></div>}
         {editing && <div className="study-draft-actions"><span className="study-muted">{draft.regions.length} 个区域</span>
           <button className="primary-button" disabled={busy || !draft.regions.length || !isDirty}
             onClick={() => { void save().catch(() => {}); }}>{busy ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存题目</button>
