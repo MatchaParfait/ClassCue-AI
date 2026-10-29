@@ -527,7 +527,11 @@ GitHub Actions 的 `Tests` 工作流在分支推送和 PR 时运行 Windows 后�
 
 ## 学习资料与手动选题
 
-首页“学习资料”打开独立 `/study-materials` 页面，支持多选或拖入 PDF、
+首页“学习资料”打开 `/study-materials` 课程资料夹列表，一门课程绑定一个视频文件夹，
+默认涵盖子目录；视频文件夹内可进入“本课程资料”。课程内分为上传资料与视频例题，
+共用课程身份、按课程记忆 DSH 工作区，每道题仍有独立讨论。
+原有未绑定文件可从“待归属资料”手动移入课程。
+上传支持多选或拖入 PDF、
 Markdown、JPEG/PNG/WebP。导入只复制原文件；同名和重复内容各自保留。
 PDF 可连续拖拽跨页并按每页全部文字的最大宽度向外吸附，扫描页和照片支持自由框选；
 跨页裁片按一次操作保存和撤销。连续框选默认每次生成一道独立草稿，
@@ -535,6 +539,7 @@ PDF 可连续拖拽跨页并按每页全部文字的最大宽度向外吸附，�
 Markdown 支持拖框自动选择原文结构块。
 保存后可预览、修改、定位原文及移除恢复，阅读位置和缩放随资料持久保存。
 
+`classcue/study_courses.py` 管理课程目录绑定与视频/资料题统一读取，
 `classcue/study_materials.py` 管理独立 SQLite 表和库作用域内的相对资源引用，
 `classcue/study_material_parser.py` 提供本地结构解析与 PDF 按需渲染；
 `api/study_materials.py` 提供 `/api/study-documents` 和 `/api/study-questions`。

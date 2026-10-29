@@ -8,6 +8,7 @@ import { useModalFocus } from "../hooks/useModalFocus";
 import type { Marker } from "../types";
 import { formatTime } from "../utils";
 import "./QuestionVisualButton.css";
+import { VideoQuestionDiscussion } from "./DshQuestionActions";
 
 interface Props {
   marker: Marker;
@@ -81,6 +82,7 @@ function QuestionImageDialog({ marker, busy, onCapture, onRemove, onClose }: Omi
             {binding && onRemove && <button className="icon-button" title="取消题图" aria-label="取消题图"
               disabled={pending} onClick={() => void onRemove()}><Unlink size={17} /></button>}
           </div>
+          {binding && !binding.missing && <VideoQuestionDiscussion markerId={marker.id} captureId={binding.capture_id} />}
         </>}
       </div>
     </div>

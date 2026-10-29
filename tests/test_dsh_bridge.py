@@ -34,7 +34,8 @@ class FakeClient:
 
     def call(self, method, params=None):
         if method == "status":
-            return {"instance_id": self.instance, "protocol": 1, "desktop_version": "0.2.1-rc.3"}
+            return {"instance_id": self.instance, "protocol": 1, "desktop_version": "0.2.1-rc.3",
+                    "capabilities": ["course_workspace"]}
         if method == "workspaces":
             return []
         if method == "prepare":
@@ -226,6 +227,9 @@ def test_saved_question_adapter_keeps_whole_question_and_ordered_image_regions(m
                 yield image
 
     monkeypatch.setitem(sys.modules, "classcue.study_materials", SimpleNamespace(StudyMaterialStore=Materials))
+    monkeypatch.setattr("classcue.study_courses.StudyCourseStore.question",
+                        lambda self, question_id: {**Materials(None).question(question_id),
+                            "source_kind": "document", "course_id": "course", "course_name": "合成课程"})
     result = study_snapshot(None, "library", "question")
     assert result["content_version"] == 3
     assert "（1）" in result["content"][1]["text"] and "（2）" in result["content"][1]["text"]
@@ -253,6 +257,9 @@ def test_reader_markdown_and_supplement_transfer_then_reopen_without_rerender(re
     materials, service = real_materials
     raw = "# Q3\n\nShared scenario R(A,B).\n\n(1) Draw the diagram.\n(2) Explain it.\n\n![diagram](missing.png)\n"
     document = materials.register("paper.md", raw.encode())
+    from classcue.study_courses import StudyCourseStore
+    courses = StudyCourseStore(materials.store)
+    courses.move_document(document["id"], courses.create(name="合成课程")["id"])
     blocks = materials.blocks(document["id"])
     regions = [{"block_id": block["id"]} for block in blocks]
     question = materials.save_question(document["id"], {"title": "Whole question", "regions": regions})
@@ -292,6 +299,9 @@ def test_reader_cross_page_pdf_preserves_crop_order_version_and_removed_restore(
         pdf.showPage()
     pdf.save()
     document = materials.register("cross-page.pdf", stream.getvalue())
+    from classcue.study_courses import StudyCourseStore
+    courses = StudyCourseStore(materials.store)
+    courses.move_document(document["id"], courses.create(name="合成课程")["id"])
     blocks = materials.blocks(document["id"])
     regions = [{"block_id": block["id"], "bbox": [0, 0, 1, 1],
                 "selection_group": "synthetic-continuous-question"} for block in reversed(blocks)]
@@ -329,7 +339,8 @@ def test_application_import_save_prepare_and_restore_use_registered_routes(real_
     monkeypatch.setattr(PipeClient, "call", lambda self, method, params=None:
                         FakeClient(tmp_path).call(method, params))
     with TestClient(create_app(materials.store)) as client:
-        document = client.post("/api/study-documents", params={"name": "whole-question.md"},
+        course = client.post("/api/study-courses", json={"name": "合成课程"}).json()
+        document = client.post("/api/study-documents", params={"name": "whole-question.md", "course_id": course["id"]},
                                content=b"# Q3\n\nShared scenario.\n\n(1) Draw.\n(2) Explain.\n").json()
         blocks = client.get(f"/api/study-documents/{document['id']}/blocks").json()
         question = client.post("/api/study-questions", json={

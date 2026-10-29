@@ -24,6 +24,8 @@ def encode(value):
 
 
 def initialize_study_materials(db):
+    from classcue.study_courses import initialize_courses
+    initialize_courses(db)
     db.execute("""CREATE TABLE IF NOT EXISTS study_documents (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, format TEXT NOT NULL, resource TEXT NOT NULL,
         sha256 TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'ready', reason TEXT NOT NULL DEFAULT '',
@@ -43,6 +45,9 @@ def initialize_study_materials(db):
         payload TEXT NOT NULL, PRIMARY KEY(question_id,ordinal))""")
     db.execute("CREATE INDEX IF NOT EXISTS study_documents_order ON study_documents(deleted,created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS study_questions_document ON study_questions(document_id,deleted,created_at)")
+    if "course_id" not in {row[1] for row in db.execute("PRAGMA table_info(study_documents)")}:
+        db.execute("ALTER TABLE study_documents ADD COLUMN course_id TEXT REFERENCES study_courses(id)")
+    db.execute("CREATE INDEX IF NOT EXISTS study_documents_course ON study_documents(course_id,deleted)")
 
 
 def _id():
@@ -70,12 +75,14 @@ class StudyMaterialStore:
                 raise KeyError("学习资料记录不存在")
             return dict(row)
 
-    def documents(self, *, include_deleted=False):
+    def documents(self, *, include_deleted=False, course_id=None, unassigned=False):
         with self.store.connect() as db:
             rows = db.execute("""SELECT d.*,
                 (SELECT COUNT(*) FROM study_questions q WHERE q.document_id=d.id AND q.deleted=0) question_count
                 FROM study_documents d WHERE (? OR d.deleted=0)
-                ORDER BY d.created_at,d.rowid""", (int(include_deleted),)).fetchall()
+                AND (? IS NULL OR d.course_id=?) AND (?=0 OR d.course_id IS NULL)
+                ORDER BY d.created_at,d.rowid""",
+                              (int(include_deleted), course_id, course_id, int(unassigned))).fetchall()
             return [self._document_value(row) for row in rows]
 
     def document(self, document_id, *, include_deleted=False):
@@ -94,8 +101,11 @@ class StudyMaterialStore:
         value["deleted"] = bool(value["deleted"])
         return value
 
-    def register(self, name, data):
+    def register(self, name, data, course_id=None):
         from classcue.study_material_parser import parse_document_bytes
+        if course_id is not None:
+            from classcue.study_courses import StudyCourseStore
+            StudyCourseStore(self.store).course(course_id)
 
         filename = Path(name).name[:240]
         suffix = Path(filename).suffix.lower()
@@ -116,10 +126,10 @@ class StudyMaterialStore:
             )
             with self.store.connect() as db:
                 db.execute("""INSERT INTO study_documents
-                    (id,name,format,resource,sha256,page_count) VALUES (?,?,?,?,?,?)""",
+                    (id,name,format,resource,sha256,page_count,course_id) VALUES (?,?,?,?,?,?,?)""",
                            (document_id, filename, FORMATS[suffix],
                             target.relative_to(self.root).as_posix(),
-                            hashlib.sha256(data).hexdigest(), page_count))
+                            hashlib.sha256(data).hexdigest(), page_count, course_id))
                 for ordinal, block in enumerate(blocks):
                     db.execute("""INSERT INTO study_document_blocks
                         (id,document_id,ordinal,payload) VALUES (?,?,?,?)""",

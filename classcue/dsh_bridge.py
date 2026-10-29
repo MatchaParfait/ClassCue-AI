@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import time
@@ -27,10 +28,28 @@ def study_snapshot(store, library_id: str, question_id: str) -> dict:
     except ImportError:
         raise BridgeFailure("study_unavailable", "请先合入资料阅读模块，再使用已保存的题目") from None
     materials = StudyMaterialStore(store)
-    question = materials.question(question_id)
+    from classcue.study_courses import StudyCourseStore
+    question = StudyCourseStore(store).question(question_id)
+    if question["source_kind"] == "video":
+        from classcue.question_captures import QuestionCaptures
+        captures = QuestionCaptures(store)
+        image = captures.path(question["capture_id"]).read_bytes()
+        capture = captures.get(question["marker_id"], question["capture_id"])
+        if hashlib.sha256(image).hexdigest() != capture["image_hash"]:
+            raise ValueError("视频题图内容已变化，请重新保存题图")
+        content = [
+            {"type": "text", "text": f"课程：{question['course_name']}\n出处：{question['source_name']}\n题目：{question['title']}"},
+            {"type": "image", "media_type": question["mime_type"],
+             "data": base64.b64encode(image).decode("ascii")},
+        ]
+        return {"library_id": library_id, "course_id": question["course_id"],
+                "course_name": question["course_name"], "question_id": question_id,
+                "document_id": f"video-{question['video_id']}", "source_kind": "video",
+                "content_version": question["version"], "title": question["title"],
+                "source": question["source_name"], "content": content}
     document = materials.document(question["document_id"])
     content = [{"type": "text", "text": (
-        f"出处：{document['name']}\n题号：{question.get('number') or '未填写'}\n"
+        f"课程：{question['course_name']}\n出处：{document['name']}\n题号：{question.get('number') or '未填写'}\n"
         f"题目：{question.get('title') or '所选题目'}"
     )}]
     for region in question["regions"]:
@@ -57,6 +76,7 @@ def study_snapshot(store, library_id: str, question_id: str) -> dict:
                               len(p.get("data", "")) * 3 // 4 for p in content) > MAX_CONTENT_BYTES:
         raise BridgeFailure("content_too_large", "单题内容不能超过 20 MB 或 24 个片段，请缩小题图范围")
     return {"library_id": library_id, "question_id": question_id,
+            "course_id": question["course_id"], "course_name": question["course_name"], "source_kind": "document",
             "document_id": question["document_id"], "content_version": question["version"],
             "title": question.get("title", ""), "source": document["name"], "content": content}
 
@@ -201,8 +221,8 @@ class DshBridge:
         # Existing discussion opens from its immutable snapshot. First read the current version
         # without re-rendering PDF crops; changing the content still requires a new discussion.
         if prior and not new_discussion and self.snapshot_provider is study_snapshot:
-            from classcue.study_materials import StudyMaterialStore
-            version = StudyMaterialStore(self.store).question(question_id)["version"]
+            from classcue.study_courses import StudyCourseStore
+            version = StudyCourseStore(self.store).question(question_id)["version"]
             snapshot = {"content_version": version}
         else:
             snapshot = self.snapshot_provider(self.store, self.library_id, question_id)
@@ -215,6 +235,8 @@ class DshBridge:
                     raise BridgeFailure("instance_mismatch", "该题绑定到另一个 DSH 实例，请连接原实例或明确新建讨论")
                 request = json.loads(row["snapshot"])
             else:
+                if snapshot.get("course_id") and "course_workspace" not in status.get("capabilities", []):
+                    raise BridgeFailure("plugin_outdated", "DSH 插件尚未加载课程分组，请完全退出并重新启动 DSH")
                 request = {**snapshot, "request_id": uuid4().hex,
                            "new_discussion": new_discussion}
                 if workspace_id:

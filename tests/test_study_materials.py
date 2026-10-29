@@ -129,7 +129,8 @@ def test_invalid_import_and_reading_and_relocation(repo, tmp_path, monkeypatch):
 def test_api_flow_and_attachment(repo):
     from api.main import create_app
     with TestClient(create_app(repo.store)) as client:
-        result = client.post("/api/study-documents", params={"name": "paper.pdf"}, content=pdf_bytes(2))
+        course = client.post("/api/study-courses", json={"name": "合成课程"}).json()
+        result = client.post("/api/study-documents", params={"name": "paper.pdf", "course_id": course["id"]}, content=pdf_bytes(2))
         assert result.status_code == 201, result.text
         doc = result.json()
         blocks = client.get(f"/api/study-documents/{doc['id']}/blocks").json()

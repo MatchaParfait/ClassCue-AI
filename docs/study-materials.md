@@ -2,9 +2,27 @@
 
 ## 使用流程
 
-首页“学习资料”进入 `/study-materials`。点击“导入资料”多选文件，或把文件拖入页面，
+首页“学习资料”进入 `/study-materials`，先显示与课程视频文件夹对应的课程资料夹。
+新建资料夹时选择已有视频文件夹，或输入课程名称同时创建同名视频文件夹。
+新建和更改关联的下拉列表默认只列第一级文件夹；已有子文件夹绑定保留当前选项，
+不自动改动原绑定。课程仍默认包含其下各级视频子文件夹。
+视频文件夹内的“本课程资料”直接进入已绑定课程；从子文件夹进入时优先沿父级查找已有课程。
+课程按稳定 ID 绑定文件夹，改名同步显示；同名文件夹不会合并。
+同一门课程包含子文件夹；显式为子文件夹另建课程时，该子树归最近的课程。
+课程页的“更改关联”可纠正视频文件夹绑定，默认选中当前目录，
+点击“保存关联”后生效；取消或保存失败保留原绑定。
+其他课程已占用的文件夹不可选，变更不删除原文件夹，也不改变资料题身份。
+
+进入课程的“上传资料”后，点击“导入资料”多选文件，或把文件拖入页面，
 按所选顺序逐个导入；一份失败不会撤销其他成功文件。完成后打开第一份成功资料。
-支持 PDF、Markdown、JPEG/PNG/WebP，不要求先建立资料集。
+支持 PDF、Markdown、JPEG/PNG/WebP。新导入文件必须指定课程。
+原有开发资料进入“待归属资料”，可勾选后移入课程；保留文件、题目和讨论身份。
+
+课程的“视频例题”显示对应视频目录中已经保存题图的例题，复用原有截图和题目提取结果，
+不重新截图、不调用模型。可阅读题图、跳回视频原时间，或用相同的单题入口进入 DSH。
+视频题图替换保留题目 ID 并递增内容版本；题图缺失会明确提示回到视频修正。
+视频例题归属随视频目录变化更新，已有讨论仍回到原会话。
+删除视频文件夹保留课程资料夹、上传资料和讨论，允许重新绑定课程视频文件夹。
 
 - PDF 和照片：切换到“选题”后可连续框选，每次有效拖框生成一道独立题目草稿，
   完成后仍保持选题模式。侧栏可切换草稿，保留各题的标题、题号、选区与撤销记录。
@@ -41,7 +59,11 @@
   内容范围变化递增题目版本，单纯修改标题和题号保持版本。
 
 每份资料保存缩放、页码、滚动位置、当前题目和侧栏开关；重新打开恢复。
+同课程切换上传资料与视频例题保留阅读器，离开时的阅读状态同时更新本地缓存，
+避免保存请求尚未完成就重进时恢复旧位置。资料操作同步刷新课程列表数量。
 桌面使用文件、原文、题目三栏，窄窗口通过“返回资料”“题目”“返回原文”逐层阅读。
+课程阅读区占用剩余窗口高度，各栏独立滚动；资料页内切换不增加外层返回步骤，
+外层返回保留进入资料前的工作台来源。
 未保存的全部题目草稿沿用应用现有离开确认；切换题目本身不要求保存或丢弃其他草稿。
 
 阅读工具栏的“专注阅读”可临时收起两侧栏，再次点击恢复原来的侧栏组合。
@@ -62,7 +84,9 @@
 
 | 表 | 用途 |
 | --- | --- |
-| `study_documents` | 稳定文件身份、显示名称、格式、哈希、阅读位置、移除状态 |
+| `study_courses` | 稳定课程身份、课程名称、唯一视频文件夹绑定 |
+| `course_questions` | 视频来源的稳定单题身份、题图指纹与内容版本；对外与资料题共用读取接口 |
+| `study_documents` | 稳定文件身份、所属课程、显示名称、格式、哈希、阅读位置、移除状态 |
 | `study_document_blocks` | PDF 页面尺寸、照片资源、Markdown 原文块与行范围 |
 | `study_questions` | 稳定题目身份、所属资料、可选题号和标题、内容版本 |
 | `study_question_regions` | 有序来源块引用、页面归一化矩形或完整文字块范围 |
@@ -88,7 +112,15 @@ Markdown 使用 UTF-8，保存原始文字和行范围，安全渲染标题、�
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET/POST /api/study-documents` | 列表、逐文件导入；请求体为原始文件字节，文件名通过 `name` 参数传入 |
+| `GET/POST /api/study-courses` | 课程资料夹列表、新建课程并绑定或创建视频文件夹 |
+| `GET /api/study-courses/folders` | 可选视频文件夹及绑定关系 |
+| `GET /api/study-courses/for-folder/{id}` | 获取最近的所属课程，包含父级查找 |
+| `PUT /api/study-courses/{id}/folder` | 绑定课程的视频文件夹 |
+| `GET /api/study-courses/{id}/video-questions` | 本课程带题图的视频例题 |
+| `GET /api/course-questions/video/{marker}` | 将原视频例题转换为统一单题引用 |
+| `GET /api/course-questions/{id}` | 读取资料题或视频例题的课程、来源、内容版本 |
+| `GET/POST /api/study-documents` | 列表、逐文件导入；导入必须传 `name`、`course_id`，请求体为原始文件字节 |
+| `PUT /api/study-documents/{id}/course` | 手动调整资料所属课程，保持题目身份与讨论历史 |
 | `GET/PUT/DELETE /api/study-documents/{id}` | 读取资料、修改显示名称、可恢复移除 |
 | `POST /api/study-documents/{id}/restore` | 恢复资料及其未单独移除的题目 |
 | `GET /api/study-documents/{id}/blocks` | 按原文顺序读取结构块 |
@@ -102,6 +134,7 @@ Markdown 使用 UTF-8，保存原始文字和行范围，安全渲染标题、�
 | `POST /api/study-questions/{id}/restore` | 恢复题目 |
 
 列表默认不含移除记录，`include_deleted=true` 可读取回收内容。
+`course_id` 筛选课程资料；`unassigned=true` 仅返回待归属文件。
 来源块必须属于当前资料，图像矩形必须位于页面内，Markdown 首版只接受完整内容块。
 文档移除使所属题目不可用于普通阅读；恢复文档不复活用户单独移除的题目。
 
@@ -112,7 +145,7 @@ Markdown 使用 UTF-8，保存原始文字和行范围，安全渲染标题、�
 前端测试覆盖手动选择、连续选择、撤销、取消、保存失败与安全阅读。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_study_materials.py tests/test_application_data_migration.py tests/test_release_manifest.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_study_courses.py tests/test_study_materials.py tests/test_application_data_migration.py tests/test_release_manifest.py -q
 Push-Location frontend
 npm test -- --maxWorkers=2 --minWorkers=1
 npm run build

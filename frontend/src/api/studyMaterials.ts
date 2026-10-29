@@ -7,6 +7,15 @@ export interface StudyReading {
 export interface StudyDocument {
   id: string; name: string; format: "pdf" | "markdown" | "image"; state: string; reason: string;
   page_count: number; question_count: number; deleted: boolean; reading: Partial<StudyReading>;
+  course_id?: string | null;
+}
+export interface StudyCourse {
+  id: string; name: string; folder_id: number | null; document_count: number; question_count: number;
+}
+export interface StudyCourseFolder { id: number; name: string; parent_id: number | null; course_id: string | null }
+export interface CourseVideoQuestion {
+  id?: string; course_id: string; version: number; title: string; source_name: string;
+  marker_id: number; video_id: number; start_ms: number; capture_id: string; unavailable?: boolean;
 }
 export interface StudyBlock {
   id: string; document_id: string; ordinal: number; kind: "pdf_page" | "image" | "markdown";
@@ -25,7 +34,14 @@ export const studyWrite = <T,>(path: string, method: string, payload?: unknown) 
   method, headers: { "Content-Type": "application/json" },
   body: payload === undefined ? undefined : JSON.stringify(payload),
 });
-export const getStudyDocuments = () => request<StudyDocument[]>("/api/study-documents?include_deleted=true");
+export const getStudyCourses = () => request<StudyCourse[]>("/api/study-courses");
+export const getStudyCourseFolders = () => request<StudyCourseFolder[]>("/api/study-courses/folders");
+export const getCourseForFolder = (folder: number) => request<StudyCourse | null>(`/api/study-courses/for-folder/${folder}`);
+export const createStudyCourse = (values: { folder_id?: number; name?: string }) => studyWrite<StudyCourse>("/api/study-courses", "POST", values);
+export const getCourseVideoQuestions = (course: string) => request<CourseVideoQuestion[]>(`/api/study-courses/${course}/video-questions`);
+export const getCourseVideoQuestion = (marker: number) => request<CourseVideoQuestion>(`/api/course-questions/video/${marker}`);
+export const getStudyDocuments = (courseId?: string, unassigned = false) => request<StudyDocument[]>(
+  `/api/study-documents?include_deleted=true${courseId ? `&course_id=${encodeURIComponent(courseId)}` : ""}${unassigned ? "&unassigned=true" : ""}`);
 export const getStudyBlocks = (id: string) => request<StudyBlock[]>(`/api/study-documents/${id}/blocks`);
 export const getStudyTextBounds = (id: string, block: string) =>
   request<StudyTextBounds>(`/api/study-documents/${id}/blocks/${block}/text-bounds`);
@@ -35,8 +51,8 @@ export const saveStudyQuestion = (values: StudyQuestionInput, id?: string) =>
   studyWrite<StudyQuestion>(`/api/study-questions${id ? `/${id}` : ""}`, id ? "PUT" : "POST", values);
 export const saveStudyReading = (id: string, value: StudyReading) =>
   studyWrite(`/api/study-documents/${id}/reading`, "PUT", value);
-export const uploadStudyDocument = (file: File) =>
-  request<StudyDocument>(`/api/study-documents?name=${encodeURIComponent(file.name)}`, {
+export const uploadStudyDocument = (file: File, courseId?: string) =>
+  request<StudyDocument>(`/api/study-documents?name=${encodeURIComponent(file.name)}&course_id=${encodeURIComponent(courseId || "")}`, {
     method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
   });
 export const uploadStudyAttachment = (id: string, file: File) =>

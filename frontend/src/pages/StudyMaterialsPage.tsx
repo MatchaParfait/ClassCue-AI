@@ -24,9 +24,11 @@ const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
 function savedDocument(key: string) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 function remember(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Optional browser storage. */ } }
 
-export function StudyMaterialsPage({ active = true, scope = "default" }: { active?: boolean; scope?: string }) {
+export function StudyMaterialsPage({ active = true, scope = "default", courseId }: {
+  active?: boolean; scope?: string; courseId?: string;
+}) {
   const client = useQueryClient();
-  const selectionKey = `classcue-study-document:${scope}`;
+  const selectionKey = `classcue-study-document:${scope}${courseId ? `:${courseId}` : ""}`;
   const [documentId, setDocumentId] = useState(() => savedDocument(selectionKey));
   const [view, setView] = useState<View>("files");
   const [leftOpen, setLeftOpen] = useState(true), [rightOpen, setRightOpen] = useState(true);
@@ -62,7 +64,8 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   const selectedDocument = useRef(documentId);
   selectedDocument.current = documentId;
   const leave = useUnsavedLeave();
-  const documents = useQuery({ queryKey: ["study", scope, "documents"], queryFn: getStudyDocuments, enabled: active });
+  const documentsKey = ["study", scope, "documents", courseId];
+  const documents = useQuery({ queryKey: documentsKey, queryFn: () => getStudyDocuments(courseId), enabled: active });
   const document = documents.data?.find(item => item.id === documentId);
   const available = (documents.data || []).filter(item => item.deleted === recycle && item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const readable = Boolean(document && !document.deleted);
@@ -196,7 +199,12 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     setHistory(values => values.slice(0, -1)); setSelectedIndex(index);
     setEditableIndex(previous.regions[index]?.bbox ? index : -1);
   }
-  async function refresh() { await client.invalidateQueries({ queryKey: ["study", scope] }); }
+  async function refresh() {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["study", scope] }),
+      client.invalidateQueries({ queryKey: ["study-courses", scope] }),
+    ]);
+  }
   async function save(all = false) {
     const entries: DraftEntry[] = [...(all ? parkedRef.current : []),
       { key: currentKey.current, order: currentOrder.current, value: snapshot(draftRef.current), baseline, history }];
@@ -297,8 +305,10 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     function persist() {
       const value = readingStates.current.get(documentId);
       if (!value) return;
-      const latestDocuments = client.getQueryData<typeof documents.data>(["study", scope, "documents"]);
+      const latestDocuments = client.getQueryData<typeof documents.data>(documentsKey);
       if (!latestDocuments?.some(item => item.id === documentId && !item.deleted)) return;
+      client.setQueryData<typeof documents.data>(documentsKey, items =>
+        items?.map(item => item.id === documentId && !item.deleted ? { ...item, reading: value } : item));
       const pending = readingWrites.current.get(documentId) || Promise.resolve();
       const next = pending.catch(() => {}).then(() => saveStudyReading(documentId, value));
       readingWrites.current.set(documentId, next);
@@ -337,7 +347,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
     const failures: string[] = []; let first = "";
     for (let index = 0; index < selected.length; index++) {
       setUploadProgress({ name: selected[index].name, index: index + 1, count: selected.length });
-      try { const result = await uploadStudyDocument(selected[index]); first ||= result.id; }
+      try { const result = await uploadStudyDocument(selected[index], courseId); first ||= result.id; }
       catch (failure) { failures.push(`${selected[index].name}：${(failure as Error).message}`); }
     }
     await refresh(); setUploading(false); setUploadProgress(null); setImportErrors(failures);
@@ -371,9 +381,7 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
           replaceDraft(emptyDraft());
         }
       }
-      if (type === "study-documents") {
-        await client.invalidateQueries({ queryKey: ["study", scope, "documents"] });
-      } else await refresh();
+      await refresh();
     } catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
   }
@@ -463,7 +471,8 @@ export function StudyMaterialsPage({ active = true, scope = "default" }: { activ
   }} onDrop={event => {
     if (event.dataTransfer.files.length) { event.preventDefault(); const selected = [...event.dataTransfer.files]; guarded(() => { void importFiles(selected); }); }
   }}>
-    <header className="study-heading"><div><h1 tabIndex={-1}>学习资料</h1><span className="study-muted">{documents.data?.filter(item => !item.deleted).length || 0} 份资料</span></div>
+    <header className="study-heading"><div>
+      {!courseId && <h1 tabIndex={-1}>学习资料</h1>}<span className="study-muted">{documents.data?.filter(item => !item.deleted).length || 0} 份资料</span></div>
       <button className="primary-button" disabled={uploading || busy} onClick={() => files.current?.click()}><Upload size={17} />导入资料</button>
       <input ref={files} hidden type="file" multiple accept=".pdf,.md,.markdown,.jpg,.jpeg,.png,.webp" onChange={chooseFiles} aria-label="选择学习资料" />
     </header>

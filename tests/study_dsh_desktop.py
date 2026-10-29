@@ -145,6 +145,10 @@ async def main(args):
                 JSON.stringify({dismissed:true}))""", status["library_scope"])
             await page.goto(base + "/study-materials")
             await page.get_by_role("heading", name="学习资料", exact=True).wait_for()
+            await page.get_by_role("button", name="新建课程资料夹", exact=True).click()
+            await page.get_by_label("课程名称", exact=True).fill("合成验收课程")
+            await page.get_by_role("button", name="创建", exact=True).click()
+            await page.get_by_role("button", name="导入资料", exact=True).first.wait_for()
             await page.get_by_label("选择学习资料", exact=True).set_input_files([
                 {"name": "synthetic-cross-page.pdf", "mimeType": "application/pdf", "buffer": pdf_content()},
                 {"name": "synthetic-scenario.md", "mimeType": "text/markdown",
@@ -152,20 +156,31 @@ async def main(args):
             ])
             await page.locator(".study-file-row").filter(has_text="synthetic-scenario.md").wait_for()
             await page.get_by_role("button", name="选题", exact=True).click()
-            await page.get_by_role("button", name="添加本页选框", exact=True).click()
-            await page.get_by_role("button", name="下一页", exact=True).click()
-            await page.get_by_role("button", name="添加本页选框", exact=True).click()
+            async def draw_page(index):
+                canvas = page.locator(".study-page-canvas").nth(index)
+                await canvas.scroll_into_view_if_needed()
+                await canvas.locator("img").evaluate("image => image.decode()")
+                bounds = await canvas.bounding_box()
+                await page.mouse.move(bounds["x"] + bounds["width"] * .08, bounds["y"] + bounds["height"] * .1)
+                await page.mouse.down()
+                await page.mouse.move(bounds["x"] + bounds["width"] * .92, bounds["y"] + bounds["height"] * .55, steps=8)
+                await page.mouse.up()
+
+            await draw_page(0)
+            await page.get_by_role("button", name="添加另一区域", exact=True).click()
+            await draw_page(1)
             await page.get_by_label("题目标题", exact=True).fill("Synthetic whole question")
             await page.get_by_label("原题号", exact=True).fill("3 (1)(2)")
             assert await page.locator(".dsh-question-actions").count() == 0
             await page.get_by_role("button", name="保存题目", exact=True).click()
             await page.get_by_text("题目已保存", exact=True).wait_for()
+            await page.get_by_role("button", name="阅读", exact=True).click()
             await page.get_by_role("button", name="DSH 桌面连接", exact=True).click()
             await page.get_by_label("插件连接文件", exact=True).fill(str(harness_home / "classcue-bridge/connection.json"))
             await page.get_by_role("button", name="连接", exact=True).click()
             await page.get_by_role("dialog", name="DSH 桌面连接", exact=True).wait_for(state="detached")
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
-            await dsh.get_by_role("dialog", name="选择题目讨论的工作区", exact=True).wait_for()
+            await dsh.get_by_role("dialog", name="合成验收课程 · 选择课程工作区", exact=True).wait_for()
             select = dsh.get_by_label("工作区", exact=True)
             options = await select.locator("option").evaluate_all("rows=>rows.map(row=>row.value).filter(Boolean)")
             assert options, "The isolated desktop profile needs one native workspace"
@@ -209,15 +224,14 @@ async def main(args):
                 await checkbox.check()
             await page.get_by_role("button", name="保存题目", exact=True).click()
             await page.get_by_text("题目已保存", exact=True).wait_for()
+            await page.get_by_role("button", name="阅读", exact=True).click()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
-            await dsh.get_by_role("dialog", name="选择题目讨论的工作区", exact=True).wait_for()
-            await dsh.get_by_label("工作区", exact=True).select_option(options[0])
-            await dsh.get_by_role("button", name="开始讨论", exact=True).click()
             md_question = (await api(f"/api/study-questions?document_id={markdown['id']}"))[0]
             md_request = (await history(md_question["id"]))[0]["request_id"]
             md_receipt = await until(lambda: api(f"/api/dsh-bridge/requests/{md_request}"),
                                      lambda value: value["status"] == "draft_ready")
             assert md_receipt["session_id"] != receipt["session_id"]
+            assert md_receipt["workspace_id"] == receipt["workspace_id"]
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 0)
             text = "\n".join(await dsh.locator('[contenteditable="true"]').all_text_contents())
             assert "(1) Find candidate keys." in text and "(2) Explain the normal form." in text

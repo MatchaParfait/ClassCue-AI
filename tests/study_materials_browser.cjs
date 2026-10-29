@@ -31,6 +31,12 @@ async function main() {
     assert.equal(await page.locator('a[href="/materials"]').count(), 0);
     await page.getByRole("link", { name: "学习资料", exact: true }).click();
     await page.getByRole("heading", { name: "学习资料", exact: true }).waitFor();
+    await page.getByRole("button", { name: "新建课程资料夹", exact: true }).click();
+    await page.getByLabel("课程名称", { exact: true }).fill("合成验收课程");
+    await page.getByRole("button", { name: "创建", exact: true }).click();
+    await page.getByRole("button", { name: "导入资料", exact: true }).first().waitFor();
+    const courseId = new URL(page.url()).searchParams.get("course");
+    assert.ok(courseId);
     await page.getByLabel("选择学习资料", { exact: true }).setInputFiles([
       "broken.pdf", "synthetic-paper.pdf", "synthetic-notes.md", "synthetic-photo.png",
     ].map(name => path.join(fixtures, name)));
@@ -326,7 +332,7 @@ async function main() {
     await page.getByRole("button", { name: "取消", exact: true }).click();
     // Exercise a single box spanning content outside the initial viewport.
     const longMarkdown = Array.from({ length: 30 }, (_, index) => `Question ${index + 1}: retain the original condition and all subquestions.\n\n`).join("");
-    const longUpload = await page.request.post(`${base}/api/study-documents?name=long-box-selection.md`, {
+    const longUpload = await page.request.post(`${base}/api/study-documents?name=long-box-selection.md&course_id=${courseId}`, {
       data: Buffer.from(longMarkdown), headers: { "Content-Type": "application/octet-stream" },
     });
     assert.equal(longUpload.status(), 201);

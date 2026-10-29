@@ -89,7 +89,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage").then(module => ({
 const BatchProcessPage = lazy(() => import("./pages/BatchProcessPage").then(module => ({ default: module.BatchProcessPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 const MaterialsPage = lazy(() => import("./pages/MaterialsPage").then(module => ({ default: module.MaterialsPage })));
-const StudyMaterialsPage = lazy(() => import("./pages/StudyMaterialsPage").then(module => ({ default: module.StudyMaterialsPage })));
+const StudyMaterialsPage = lazy(() => import("./pages/StudyCoursesPage").then(module => ({ default: module.StudyCoursesPage })));
 
 function PageLoading() {
   return <div className="library-state" role="status"><LoaderCircle className="spin" size={18} />正在打开页面…</div>;
@@ -286,7 +286,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
                 if (active) navigate(`/process?videoId=${video.id}`, { replace: true, state: { ...location.state, draftKey: panelKey(screen) } });
               }} />} />
             <Route path="/batch-process" element={<BatchProcessPage active={active} onClose={close} onJob={onJob} />} />
-            <Route path="/study-materials" element={<StudyMaterialsPage key={scope} scope={scope} active={active} />} />
+            <Route path="/study-materials" element={<StudyMaterialsPage key={scope} scope={scope} libraryId={libraryId} active={active} />} />
             <Route path="/materials" element={MATERIALS_ENABLED
               ? <MaterialsPage key={scope} scope={scope} active={active} onJob={onJob} />
               : <Navigate to="/" replace />} />

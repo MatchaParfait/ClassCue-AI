@@ -59,6 +59,7 @@ files = [
     "integrations/dsh-desktop/client.js",
     "integrations/dsh-desktop/install.ps1",
     "classcue/study_materials.py",
+    "classcue/study_courses.py",
     "classcue/study_material_parser.py",
     "api/study_materials.py",
     "classcue/citation_matching.py",

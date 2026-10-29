@@ -58,7 +58,7 @@ window.__ModuleLoader__.load({
         try { await operation(); } catch (e) { setError(explain(e)); } finally { setBusy(false); }
       };
       return h(Modal, {
-        open: true, title: "选择题目讨论的工作区", closeLabel: "取消",
+        open: true, title: state.course_name ? `${state.course_name} · 选择课程工作区` : "选择题目讨论的工作区", closeLabel: "取消",
         onClose: () => { if (!busy) cancel(); },
         footer: h(React.Fragment, null,
           h(Button, { variant: "outline", disabled: busy, onClick: cancel }, "取消"),
@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
       },
       h("div", { style: { display: "grid", gap: 12, minWidth: 0 } },
         h("div", { style: { overflowWrap: "anywhere" } }, state.title || "所选题目"),
-        h("label", { style: { display: "grid", gap: 8 } }, "工作区",
+        h("label", { style: { display: "grid", gap: 8 } }, "课程文件夹",
           h("select", { "aria-label": "工作区", value: selected, disabled: busy,
             onChange: e => setSelected(e.target.value),
             style: { width: "100%", minWidth: 0, padding: 8, borderRadius: 6,

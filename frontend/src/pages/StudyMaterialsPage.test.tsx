@@ -75,6 +75,8 @@ it("opens imported Markdown without collections, categories, model requests or a
 });
 
 it("combines manually selected blocks, supports shift selection and only saves on command", async () => {
+  client.setQueryDefaults(["study-courses", "test"], { gcTime: Infinity });
+  client.setQueryData(["study-courses", "test"], [{ id: "course", document_count: 1, question_count: 0 }]);
   await mount(); await click(button("选题"));
   const choices = [...container.querySelectorAll(".study-block-check")];
   await click(choices[0]);
@@ -85,6 +87,7 @@ it("combines manually selected blocks, supports shift selection and only saves o
   await click(button("保存题目"));
   expect(api.saveStudyQuestion).toHaveBeenCalledWith({ document_id: "d1", title: "", number: "", regions: blocks.map(block => ({ block_id: block.id, start: 0, end: block.text!.length })) }, undefined);
   expect(container.textContent).toContain("题目已保存");
+  expect(client.getQueryState(["study-courses", "test"])?.isInvalidated).toBe(true);
 });
 
 it("undoes block selection and cancelling does not save", async () => {
@@ -587,6 +590,24 @@ it("does not count removed questions in the visible default question number", as
     number: "", version: 1, deleted: true, regions: [] }]);
   await mount(); await click(button("选题"));
   expect(container.querySelector<HTMLInputElement>('[aria-label="题目标题"]')?.placeholder).toBe("题目 1");
+});
+
+it("restores the latest reading state while its server save is still pending", async () => {
+  client.setQueryDefaults(["study", "test", "documents"], { gcTime: Infinity });
+  let release: () => void = () => {};
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  vi.mocked(api.saveStudyReading).mockImplementation(async (_id, value) => {
+    if (value.zoom === 1.1) await pending;
+    return { ok: true };
+  });
+  try {
+    await mount(); await click(button("放大"));
+    expect(container.querySelector(".study-zoom")?.textContent).toBe("110%");
+    await act(async () => root.render(null));
+    expect(api.saveStudyReading).toHaveBeenCalledWith("d1", expect.objectContaining({ zoom: 1.1 }));
+    await mount();
+    expect(container.querySelector(".study-zoom")?.textContent).toBe("110%");
+  } finally { release(); await settle(); }
 });
 
 it("preserves visible content while refusing external images, links and HTML", async () => {

@@ -6,7 +6,18 @@ import { createPicker, pollPicker } from "../api/client";
 import { connectDsh, connectDshAuto, getDshDiscussions, getDshRequest, getDshStatus, openDshDiscussion, prepareDshQuestion } from "../api/dshBridge";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { useModalFocus } from "../hooks/useModalFocus";
+import { getCourseVideoQuestion } from "../api/studyMaterials";
 import "./DshQuestionActions.css";
+
+export function VideoQuestionDiscussion({ markerId, captureId }: { markerId: number; captureId: string }) {
+  const desktop = useDesktopAPI();
+  const question = useQuery({ queryKey: ["course-video-question", markerId, captureId],
+    queryFn: () => getCourseVideoQuestion(markerId), enabled: Boolean(desktop), retry: false, staleTime: 0 });
+  if (!desktop) return null;
+  return question.data?.id ? <DshQuestionActions key={`${question.data.id}:${question.data.version}`}
+    questionId={question.data.id} contentVersion={question.data.version} />
+    : question.error ? <p className="field-error" role="alert">{question.error.message}</p> : null;
+}
 
 export function DshQuestionActions({ questionId, contentVersion, scope = "default", active = true }: {
   questionId: string; contentVersion: number; scope?: string; active?: boolean;

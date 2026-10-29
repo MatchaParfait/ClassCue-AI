@@ -60,6 +60,7 @@ export class Bridge {
     };
     if (this.state.protocol !== PROTOCOL || !this.state.requests || !this.state.documents)
       throw new BridgeError("state_incompatible", "桥接记录版本不兼容");
+    this.state.courses ??= {};
     this.tail = Promise.resolve();
     this.leases = new Map();
     this.client = null;
@@ -97,6 +98,7 @@ export class Bridge {
   receipt(row) {
     return {
       request_id: row.request_id, library_id: row.library_id, document_id: row.document_id,
+      course_id: row.course_id ?? null, course_name: row.course_name ?? null,
       question_id: row.question_id, content_version: row.content_version,
       instance_id: this.state.instance_id, workspace_id: row.workspace_id ?? null,
       cwd: row.cwd ?? null, session_id: row.session_id, status: row.status,
@@ -106,7 +108,7 @@ export class Bridge {
   status() {
     return { protocol: PROTOCOL, desktop_version: "0.2.1-rc.3",
       instance_id: this.state.instance_id, client_connected: this.client !== null && Date.now() - this.client.time < 5000,
-      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory"] };
+      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory", "course_workspace"] };
   }
   workspaces() { return this.native.workspaces(); }
   get(requestId) {
@@ -118,8 +120,9 @@ export class Bridge {
 
   prepare(input) {
     return this.serial(async () => {
-      const { request_id, library_id, document_id, question_id, content_version } = input;
+      const { request_id, library_id, document_id, question_id, content_version, course_id } = input;
       for (const id of [request_id, library_id, document_id, question_id]) requireId(id);
+      if (course_id !== undefined) requireId(course_id);
       if (!Number.isInteger(content_version) || content_version < 1)
         throw new BridgeError("invalid_version", "题目版本无效");
       validateContent(input.content);
@@ -128,7 +131,8 @@ export class Bridge {
       let row = this.state.requests[request_id];
       if (row) {
         if (row.library_id !== library_id || row.question_id !== question_id
-          || row.document_id !== document_id || row.content_version !== content_version || row.snapshot_hash !== snapshotHash)
+          || row.document_id !== document_id || row.course_id !== course_id
+          || row.content_version !== content_version || row.snapshot_hash !== snapshotHash)
           throw new BridgeError("request_conflict", "相同请求编号不能传入不同内容");
       } else {
         const previous = Object.values(this.state.requests).filter(r => `${r.library_id}/${r.question_id}` === key);
@@ -137,9 +141,14 @@ export class Bridge {
           if (!row) throw new BridgeError("question_changed", "题目已修改，请明确新建讨论；旧版本对话仍保留");
           if (row.snapshot_hash !== snapshotHash) throw new BridgeError("version_conflict", "题目内容已变化但版本未更新");
         } else {
-          const docKey = `${library_id}/${document_id}`;
-          const workspaceId = input.workspace_id ?? this.state.documents[docKey];
-          row = { request_id, library_id, document_id, question_id, content_version,
+          if (!course_id) throw new BridgeError("course_required", "请先将题目归入课程资料夹");
+          const courseKey = `${library_id}/${course_id}`;
+          const workspaceId = this.state.courses[courseKey] ?? input.workspace_id;
+          if (workspaceId && Object.entries(this.state.courses).some(([other, workspace]) =>
+            other.startsWith(`${library_id}/`) && other !== courseKey && workspace === workspaceId))
+            throw new BridgeError("workspace_in_use", "此工作区已属于另一门课程，请选择本课程的独立文件夹");
+          row = { request_id, library_id, document_id, question_id, content_version, course_id,
+            course_name: String(input.course_name ?? "").slice(0, 240),
             title: String(input.title ?? "").slice(0, 200),
             source: String(input.source ?? "").slice(0, 1000),
             content: input.content, snapshot_hash: snapshotHash,
@@ -168,12 +177,21 @@ export class Bridge {
       await this.native.check(row.session_id, row.workspace_id);
       return;
     }
+    const key = row.course_id ? `${row.library_id}/${row.course_id}` : null;
+    const remembered = key ? this.state.courses[key] : null;
+    if (remembered && remembered !== row.workspace_id)
+      throw new BridgeError("course_workspace_conflict", "本课程已绑定另一工作区，请重新打开讨论");
+    if (key && Object.entries(this.state.courses).some(([other, workspace]) =>
+      other.startsWith(`${row.library_id}/`) && other !== key && workspace === row.workspace_id))
+      throw new BridgeError("workspace_in_use", "此工作区已属于另一门课程，请选择本课程的独立文件夹");
     row.cwd = workspace.path;
+    if (key) this.state.courses[key] = row.workspace_id;
     this.save();
     await this.native.ensureSession(row.session_id, row.workspace_id);
     await this.native.flush(row.session_id);
     row.status = "bound";
-    this.state.documents[`${row.library_id}/${row.document_id}`] = row.workspace_id;
+    if (key) this.state.courses[key] = row.workspace_id;
+    else this.state.documents[`${row.library_id}/${row.document_id}`] = row.workspace_id;
     this.save();
   }
 
@@ -181,8 +199,13 @@ export class Bridge {
     return this.serial(async () => {
       const row = this.get(requestId);
       if (row.status === "choose_workspace") {
+        const key = row.course_id ? `${row.library_id}/${row.course_id}` : null;
+        if (key) workspaceId = this.state.courses[key] ?? workspaceId;
         if (!this.workspaces().some(w => w.workspace_id === workspaceId))
           throw new BridgeError("workspace_missing", "工作区已移除，请重新选择");
+        if (key && Object.entries(this.state.courses).some(([other, workspace]) =>
+          other.startsWith(`${row.library_id}/`) && other !== key && workspace === workspaceId))
+          throw new BridgeError("workspace_in_use", "此工作区已属于另一门课程，请选择本课程的独立文件夹");
         row.workspace_id = requireId(workspaceId);
         row.status = "reserved";
         this.save();

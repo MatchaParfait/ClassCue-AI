@@ -12,7 +12,7 @@ vi.mock("./pages/MaterialsPage", () => ({ MaterialsPage: () => {
   materialFeature.render();
   return <div data-materials-page>Materials fixture</div>;
 } }));
-vi.mock("./pages/StudyMaterialsPage", () => ({ StudyMaterialsPage: () => <div data-study-materials-page>Study materials fixture</div> }));
+vi.mock("./pages/StudyCoursesPage", () => ({ StudyCoursesPage: () => <div data-study-materials-page>Study materials fixture</div> }));
 
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),

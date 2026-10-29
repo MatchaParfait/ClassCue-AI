@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from classcue.study_materials import StudyMaterialStore
+from classcue.study_courses import StudyCourseStore
 
 
 class StrictPayload(BaseModel):
@@ -37,6 +38,19 @@ class NamePayload(StrictPayload):
     name: str = Field(min_length=1, max_length=240)
 
 
+class CoursePayload(StrictPayload):
+    folder_id: int | None = Field(default=None, strict=True, gt=0)
+    name: str = Field(default="", max_length=240)
+
+
+class CourseBindingPayload(StrictPayload):
+    folder_id: int = Field(strict=True, gt=0)
+
+
+class DocumentCoursePayload(StrictPayload):
+    course_id: str = Field(min_length=1, max_length=100)
+
+
 def boundary(method):
     @wraps(method)
     def wrapped(*args, **kwargs):
@@ -55,6 +69,53 @@ def router(provider, jobs=None):
     def repository():
         return StudyMaterialStore(provider.get())
 
+    def courses():
+        return StudyCourseStore(provider.get())
+
+    @routes.get("/api/study-courses")
+    @boundary
+    def list_courses():
+        return courses().courses()
+
+    @routes.get("/api/study-courses/folders")
+    def course_folders():
+        return courses().folders()
+
+    @routes.get("/api/study-courses/for-folder/{folder_id}")
+    @boundary
+    def folder_course(folder_id: int):
+        return courses().for_folder(folder_id)
+
+    @routes.post("/api/study-courses", status_code=201)
+    @boundary
+    def create_course(payload: CoursePayload):
+        return courses().create(**payload.model_dump())
+
+    @routes.put("/api/study-courses/{course_id}/folder")
+    @boundary
+    def bind_course(course_id: str, payload: CourseBindingPayload):
+        return courses().bind(course_id, payload.folder_id)
+
+    @routes.get("/api/study-courses/{course_id}/video-questions")
+    @boundary
+    def video_questions(course_id: str):
+        return courses().video_questions(course_id)
+
+    @routes.get("/api/course-questions/video/{marker_id}")
+    @boundary
+    def video_question(marker_id: int):
+        return courses().video_question(marker_id)
+
+    @routes.get("/api/course-questions/{question_id}")
+    @boundary
+    def course_question(question_id: str):
+        return courses().question(question_id)
+
+    @routes.put("/api/study-documents/{document_id}/course")
+    @boundary
+    def move_document(document_id: str, payload: DocumentCoursePayload):
+        return courses().move_document(document_id, payload.course_id)
+
     async def body(request: Request, maximum: int):
         data = bytearray()
         async for chunk in request.stream():
@@ -64,15 +125,18 @@ def router(provider, jobs=None):
         return bytes(data)
 
     @routes.get("/api/study-documents")
-    def documents(include_deleted: bool = False):
-        return repository().documents(include_deleted=include_deleted)
+    def documents(include_deleted: bool = False, course_id: str | None = None, unassigned: bool = False):
+        return repository().documents(include_deleted=include_deleted, course_id=course_id, unassigned=unassigned)
 
     @routes.post("/api/study-documents", status_code=201)
-    async def upload(request: Request, name: str = Query(min_length=1, max_length=240)):
+    async def upload(request: Request, name: str = Query(min_length=1, max_length=240),
+                     course_id: str = Query(min_length=1, max_length=100)):
         data = await body(request, 100 * 1024 * 1024)
         repo = repository()
         try:
-            return await run_in_threadpool(repo.register, name, data)
+            return await run_in_threadpool(repo.register, name, data, course_id)
+        except KeyError:
+            raise HTTPException(404, "课程资料夹不存在") from None
         except (ValueError, TypeError) as error:
             raise HTTPException(400, str(error)) from None
         except OSError:
