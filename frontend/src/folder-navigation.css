@@ -5,8 +5,41 @@
 }
 
 .folder-window-toolbar {
+  align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px 20px;
+}
+
+.folder-window-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin-left: auto;
+  gap: 8px 12px;
+}
+
+.folder-window-actions > .secondary-button {
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+.folder-window-actions .sort-control {
+  width: auto;
+}
+
+.folder-window-actions .sort-control select {
+  height: 36px;
+  min-height: 36px;
+}
+
+@media (max-width: 760px) {
+  .folder-window-actions {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
 }
 
 .folder-breadcrumbs {

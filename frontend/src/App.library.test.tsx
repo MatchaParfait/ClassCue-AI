@@ -1490,7 +1490,10 @@ describe("folder window", () => {
     click(container.querySelector(".folder-card-link"));
     await flushUpdates();
     const close = container.querySelector<HTMLButtonElement>(".folder-window-close")!;
-    const last = container.querySelector<HTMLButtonElement>(".folder-window-toolbar > button:last-child")!;
+    const materials = container.querySelector<HTMLAnchorElement>('.folder-window-actions a[href^="/study-materials?folder="]')!;
+    expect(materials).not.toBeNull();
+    expect(container.querySelector('.folder-window-content a[href^="/study-materials?folder="]')).toBeNull();
+    const last = container.querySelector<HTMLButtonElement>(".folder-window-actions > button:last-child")!;
     expect(keyDown("Tab", true).defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(last);
     expect(keyDown("Tab").defaultPrevented).toBe(true);
@@ -1926,7 +1929,7 @@ describe("nested library folders", () => {
     await mountTree();
     await openFolder(7);
     await openFolder(8);
-    click(container.querySelector(".folder-window-toolbar > button:last-child"));
+    click(container.querySelector(".folder-window-actions > button:last-child"));
     const input = container.querySelector<HTMLInputElement>(".folder-dialog input")!;
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "New section");

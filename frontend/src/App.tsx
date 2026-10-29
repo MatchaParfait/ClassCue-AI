@@ -1360,6 +1360,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           breadcrumbs={folderBreadcrumbs}
           onNavigate={(id) => { clearDragState(); if (id) setFolderId(id); else closeFolder(); }}
           onCreateFolder={() => { setCreateError(null); setIsCreatingFolder(true); }}
+          toolbarActions={activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}
           outsideDropLabel={activeFolder?.parentId ? "移至上一级文件夹" : "移至一级目录"}
           sortMode={folderSortMode} onSortChange={setFolderSortMode} onClose={closeFolder}
           canDropOutside={Boolean(draggedKey && dragSourceRef.current?.folderId === folderId)}

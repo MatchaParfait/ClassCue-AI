@@ -14,6 +14,7 @@ interface FolderWindowProps {
   breadcrumbs?: VideoLibraryFolder[];
   onNavigate?: (id: string | null) => void;
   onCreateFolder?: () => void;
+  toolbarActions?: ReactNode;
   outsideDropLabel?: string;
   sortMode: "manual" | "name" | "time";
   onSortChange: (mode: "manual" | "name" | "time") => void;
@@ -29,7 +30,7 @@ interface FolderWindowProps {
   onScroll?: (scroll: number) => void;
 }
 
-export function FolderWindow({ viewKey = "", folderId, name, count, folderCount = 0, breadcrumbs = [], onNavigate, onCreateFolder,
+export function FolderWindow({ viewKey = "", folderId, name, count, folderCount = 0, breadcrumbs = [], onNavigate, onCreateFolder, toolbarActions,
   outsideDropLabel = "移至一级目录", sortMode, onSortChange, onClose, canDropOutside, showDragTextHints = true, onDropOutside, onDropTo, backgroundRef, returnFocus, children, initialScroll = 0, onScroll }: FolderWindowProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -224,17 +225,20 @@ export function FolderWindow({ viewKey = "", folderId, name, count, folderCount 
                 : <button className="text-button" type="button" {...destinationProps(folder.id)} onClick={() => onNavigate(folder.id)} title={folder.name}>{folder.name}</button>}
             </span>)}
           </nav>}
-          {folderId !== undefined && <FolderSubtitleSearchButton folderId={folderId} name={name} />}
-          <label className="sort-control">
-            <span>排序</span>
-            <select value={sortMode} aria-label="文件夹内排序" onChange={(event) => onSortChange(event.target.value as FolderWindowProps["sortMode"])}>
-              <option value="manual">自定义位置</option>
-              <option value="time">最近更新</option>
-              <option value="name">名称 A-Z</option>
-            </select>
-            {sortMode === "name" ? <ArrowDownAZ size={15} /> : sortMode === "time" ? <Clock3 size={15} /> : <GripVertical size={15} />}
-          </label>
-          {onCreateFolder && <button className="secondary-button compact" type="button" onClick={onCreateFolder}><FolderPlus size={16} />新建文件夹</button>}
+          <div className="folder-window-actions">
+            {toolbarActions}
+            {folderId !== undefined && <FolderSubtitleSearchButton folderId={folderId} name={name} />}
+            <label className="sort-control">
+              <span>排序</span>
+              <select value={sortMode} aria-label="文件夹内排序" onChange={(event) => onSortChange(event.target.value as FolderWindowProps["sortMode"])}>
+                <option value="manual">自定义位置</option>
+                <option value="time">最近更新</option>
+                <option value="name">名称 A-Z</option>
+              </select>
+              {sortMode === "name" ? <ArrowDownAZ size={15} /> : sortMode === "time" ? <Clock3 size={15} /> : <GripVertical size={15} />}
+            </label>
+            {onCreateFolder && <button className="secondary-button compact" type="button" onClick={onCreateFolder}><FolderPlus size={16} />新建文件夹</button>}
+          </div>
         </div>
         <div className="folder-window-content" ref={contentRef} onScroll={(event) => onScroll?.(event.currentTarget.scrollTop)}>{children}</div>
         </motion.section>
