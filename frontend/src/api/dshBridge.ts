@@ -32,6 +32,7 @@ const post = <T,>(path: string, value?: unknown) => request<T>(`/api/dsh-bridge$
 });
 export const getDshStatus = () => request<DshStatus>("/api/dsh-bridge/status");
 export const connectDsh = (descriptorPath: string) => post<DshStatus>("/connection", { descriptor_path: descriptorPath });
+export const connectDshAuto = () => post<DshStatus>("/connection/auto");
 export const prepareDshQuestion = (questionId: string, newDiscussion = false) =>
   post<DshReceipt>("/discussions", { question_id: questionId, new_discussion: newDiscussion });
 export const getDshDiscussions = (questionId: string) =>

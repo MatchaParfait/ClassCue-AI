@@ -14,6 +14,7 @@ vi.mock("../api/dshBridge", () => ({
   openDshDiscussion: vi.fn(),
   getDshRequest: vi.fn(),
   connectDsh: vi.fn(),
+  connectDshAuto: vi.fn(),
 }));
 
 let root: Root | undefined;

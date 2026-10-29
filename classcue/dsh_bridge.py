@@ -13,6 +13,8 @@ from uuid import uuid4
 from classcue.dsh_pipe import BridgeFailure, PipeClient
 
 MAX_CONTENT_BYTES = 20 * 1024 * 1024
+DESKTOP_VERSION = "0.2.1-rc.3"
+DEFAULT_WAKE_TIMEOUT = 8.0
 
 
 def encode(value):
@@ -75,13 +77,63 @@ class BridgeStore:
     def connect(self, path: Path, factory=PipeClient):
         client = factory(path)
         status = client.call("status")
-        if status.get("protocol") != 1 or status.get("desktop_version") != "0.2.1-rc.3":
+        if status.get("protocol") != 1 or status.get("desktop_version") != DESKTOP_VERSION:
             raise BridgeFailure("version_incompatible", "桌面桥接版本不兼容")
         with self.store.connect() as db:
             db.execute("""INSERT INTO dsh_bridge_connection VALUES(1,?,?)
                 ON CONFLICT(id) DO UPDATE SET descriptor_path=excluded.descriptor_path,
                 instance_id=excluded.instance_id""", (str(path.resolve()), status["instance_id"]))
         return status
+
+    @staticmethod
+    def default_descriptor() -> Path:
+        dsh_home = os.getenv("DSH_HOME")
+        root = Path(dsh_home).expanduser() if dsh_home else Path.home() / ".dsh"
+        return (root / "classcue-bridge" / "connection.json").resolve()
+
+    def _saved_descriptor(self) -> Path | None:
+        with self.store.connect() as db:
+            row = db.execute("SELECT descriptor_path FROM dsh_bridge_connection WHERE id=1").fetchone()
+        if not row:
+            return None
+        return Path(row["descriptor_path"]).resolve()
+
+    def auto_connect(self, factory=PipeClient):
+        """Pair with the ordinary DSH profile without exposing its internal path."""
+        saved = self._saved_descriptor()
+        default = self.default_descriptor()
+        candidates = [saved] if saved else [default]
+        last_error = None
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                return self.connect(path, factory)
+            except BridgeFailure as error:
+                last_error = error
+
+        # The default DSH protocol is safe to wake. Custom profiles still require
+        # an explicit connection file and are never launched implicitly.
+        if (saved and saved != default) or os.name != "nt":
+            if last_error:
+                raise last_error
+            raise BridgeFailure("not_paired", "尚未找到 DSH 桌面插件")
+        try:
+            os.startfile("dsh://open")
+        except OSError:
+            raise BridgeFailure("launch_failed", "无法自动启动 DSH，请手动打开桌面版") from None
+
+        deadline = time.monotonic() + DEFAULT_WAKE_TIMEOUT
+        while time.monotonic() < deadline:
+            if default.is_file():
+                try:
+                    return self.connect(default, factory)
+                except BridgeFailure as error:
+                    last_error = error
+            time.sleep(0.15)
+        if last_error and last_error.code not in {"plugin_unavailable", "disconnected"}:
+            raise last_error
+        raise BridgeFailure("plugin_unavailable", "DSH 正在启动，请稍后重试")
 
     def client(self, factory=PipeClient):
         with self.store.connect() as db:
@@ -95,12 +147,10 @@ class BridgeStore:
         return client, status
 
     def wake(self):
-        with self.store.connect() as db:
-            row = db.execute("SELECT descriptor_path FROM dsh_bridge_connection WHERE id=1").fetchone()
+        path = self._saved_descriptor()
         # The OS protocol targets the ordinary desktop instance only. Custom test profiles
         # must be started explicitly, so a test can never wake the user's normal instance.
-        if (os.name != "nt" or not row or Path(row["descriptor_path"]).resolve()
-                != (Path.home() / ".dsh" / "classcue-bridge" / "connection.json").resolve()):
+        if os.name != "nt" or path != self.default_descriptor():
             return False
         try:
             os.startfile("dsh://open")
@@ -135,15 +185,13 @@ class DshBridge:
         self.client_factory = client_factory
 
     def active_client(self):
-        waking = self.records.wake()
-        deadline = time.monotonic() + 8
-        while True:
-            try:
-                return self.records.client(self.client_factory)
-            except BridgeFailure as error:
-                if not waking or error.code not in {"plugin_unavailable", "disconnected"} or time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.15)
+        try:
+            return self.records.client(self.client_factory)
+        except BridgeFailure as error:
+            if error.code not in {"not_paired", "plugin_unavailable", "disconnected"}:
+                raise
+        self.records.auto_connect(self.client_factory)
+        return self.records.client(self.client_factory)
 
     def prepare(self, question_id, *, workspace_id=None, new_discussion=False):
         client, status = self.active_client()

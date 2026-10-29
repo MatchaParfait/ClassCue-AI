@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FolderOpen, LoaderCircle, MessageSquare, Plus, Settings2, X } from "lucide-react";
 import { createPicker, pollPicker } from "../api/client";
-import { connectDsh, getDshDiscussions, getDshRequest, getDshStatus, openDshDiscussion, prepareDshQuestion } from "../api/dshBridge";
+import { connectDsh, connectDshAuto, getDshDiscussions, getDshRequest, getDshStatus, openDshDiscussion, prepareDshQuestion } from "../api/dshBridge";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { useModalFocus } from "../hooks/useModalFocus";
 import "./DshQuestionActions.css";
@@ -65,8 +65,13 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
     onSuccess: value => { cache.setQueryData(statusKey, value); setSettings(false); setError(""); },
     onError: reason => setError((reason as Error).message),
   });
+  const autoConnect = useMutation({
+    mutationFn: connectDshAuto,
+    onSuccess: value => { cache.setQueryData(statusKey, value); setSettings(false); setError(""); },
+    onError: reason => setError((reason as Error).message),
+  });
   const pending = start.isPending || open.isPending;
-  const busy = pending || connect.isPending || picking;
+  const busy = pending || connect.isPending || autoConnect.isPending || picking;
   useModalFocus(settings, modal, first, () => { if (!busy) setSettings(false); });
   const result = receipt.data;
   const notice = result?.outcome === "cancelled" ? "已取消工作区选择，可以再次打开讨论。"
@@ -109,6 +114,11 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
         <header><h2 id="dsh-connect-title">DSH 桌面连接</h2>
           <button className="icon-button" type="button" disabled={busy} aria-label="关闭 DSH 连接"
             onClick={() => setSettings(false)}><X size={18} /></button></header>
+        <button className="primary-button dsh-auto-connect" type="button" disabled={busy}
+          onClick={() => autoConnect.mutate()}>
+          {autoConnect.isPending && <LoaderCircle size={16} className="spin" />}自动连接 DSH
+        </button>
+        <p className="settings-help">默认插件无需选择文件。只有自定义 DSH profile 才需要手动指定连接文件。</p>
         <label className="settings-field"><span>插件连接文件</span>
           <input ref={first} value={path} onChange={event => setPath(event.target.value)}
             placeholder="connection.json" aria-label="插件连接文件" disabled={busy} spellCheck={false} /></label>

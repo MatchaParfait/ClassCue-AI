@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.dsh_bridge import router
-from classcue.dsh_bridge import DshBridge, study_snapshot
+from classcue.dsh_bridge import BridgeStore, DshBridge, study_snapshot
 from classcue.dsh_pipe import BridgeFailure, PipeClient
 from classcue.sqlite_connection import ClosingConnection
 
@@ -79,6 +79,22 @@ def test_timeout_reuses_committed_intent_and_persists_binding_across_restart(bri
     restarted = DshBridge(service.store, "library", service.snapshot_provider, FakeClient)
     assert restarted.resume(receipt["request_id"], open_session=True)["session_id"] == receipt["session_id"]
     assert restarted.records.history("question")[0]["receipt"] == receipt
+
+
+def test_first_use_discovers_the_default_desktop_connection(tmp_path, monkeypatch):
+    descriptor = tmp_path / "classcue-bridge" / "connection.json"
+    descriptor.parent.mkdir()
+    descriptor.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(BridgeStore, "default_descriptor", staticmethod(lambda: descriptor))
+    store = Store(tmp_path / "project.db")
+    service = DshBridge(store, "library", client_factory=FakeClient)
+
+    client, status = service.active_client()
+
+    assert client.path == descriptor
+    assert status["instance_id"] == FakeClient.instance
+    with store.connect() as db:
+        assert db.execute("SELECT descriptor_path FROM dsh_bridge_connection").fetchone()[0] == str(descriptor)
 
 
 def test_open_recovers_timeout_before_host_admission_using_the_saved_request(bridge):

@@ -46,6 +46,10 @@ def router(provider, *, bridge_factory=DshBridge, desktop=None):
     def connect(payload: ConnectionPayload):
         return use(lambda bridge: bridge.records.connect(Path(payload.descriptor_path), bridge.client_factory))
 
+    @routes.post("/connection/auto")
+    def auto_connect():
+        return use(lambda bridge: bridge.records.auto_connect(bridge.client_factory))
+
     @routes.get("/status")
     def status():
         return use(lambda bridge: bridge.records.client(bridge.client_factory)[1])
