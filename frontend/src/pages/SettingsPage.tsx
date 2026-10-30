@@ -4,6 +4,8 @@ import { WarmAtmosphere } from "../components/WarmAtmosphere";
 import { SettingsHerons } from "../components/SettingsHerons";
 import { ShortcutSettings } from "../components/ShortcutSettings";
 import { DesktopSettings } from "../components/DesktopSettings";
+import { DshSettingsSection } from "../components/DshConnectionSettings";
+import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { InteractionSettings } from "../components/InteractionSettings";
 import { RecallSchemeSettings } from "../components/RecallSchemeSettings";
 import { ExperimentalSettings } from "../components/ExperimentalSettings";
@@ -24,6 +26,7 @@ import {
   Gauge,
   Languages,
   Monitor,
+  MessageSquare,
   Keyboard,
   RefreshCw,
   Info,
@@ -93,17 +96,19 @@ function normalizeAiSettings(settings: AiSettings): AiSettings {
 
 export type GuidedSettingsSection = "storage" | "asr" | "ai" | "shortcuts";
 
-export function SettingsPage({ embedded = false, active = true, onClose, onConfigurationSaved, onJob, guidedSection }: {
+export function SettingsPage({ embedded = false, active = true, scope = "default", onClose, onConfigurationSaved, onJob, guidedSection }: {
   embedded?: boolean; active?: boolean; onClose?: () => void; onConfigurationSaved?: () => void;
+  scope?: string;
   onJob?: (id: string | number) => void;
   guidedSection?: GuidedSettingsSection;
 }) {
   const queryClient = useQueryClient();
+  const desktop = useDesktopAPI();
   const leave = useUnsavedLeave();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
+  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "dsh", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
   const asr = useQuery({ queryKey: ["settings", "asr"], queryFn: getAsrModels, enabled: active && section === "asr", staleTime: 60_000 });
   const ai = useQuery({ queryKey: ["settings", "ai"], queryFn: getAiSettings, enabled: active && section === "ai" });
   const directoriesKey = ["settings", "directories"];
@@ -158,7 +163,7 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
 
         <div className="settings-layout">
           {!guidedSection && <nav className="settings-navigation" aria-label="设置分类">
-            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).map(([key, label, Icon]) =>
+            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["dsh", "DSH 讨论", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => key !== "dsh" || desktop).map(([key, label, Icon]) =>
               <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => setSearchParams({ section: key }, { replace: true, state: location.state })}>
                 {section === key && <SelectionIndicator id={`${selectionScope}-settings`} />}<Icon size={18} /><span>{label}</span>
               </button>)}
@@ -172,6 +177,7 @@ export function SettingsPage({ embedded = false, active = true, onClose, onConfi
         {!guidedSection && <div hidden={section !== "recall"}><RecallSchemeSettings active={active && section === "recall"} onSaved={onConfigurationSaved} /></div>}
         {(!guidedSection || section === "shortcuts") && <div hidden={section !== "shortcuts"}><ShortcutSettings /></div>}
         {!guidedSection && <div hidden={section !== "desktop"}><DesktopSettings active={active && section === "desktop"} /><InteractionSettings /></div>}
+        {!guidedSection && desktop && section === "dsh" && <DshSettingsSection active={active} scope={scope} />}
         {!guidedSection && <div hidden={section !== "experimental"}><ExperimentalSettings active={active && section === "experimental"} /></div>}
         {(!guidedSection || section === "storage") && <div hidden={section !== "storage"}>
         <StorageDirectoriesSection

@@ -176,16 +176,17 @@ async def main(args):
             await page.get_by_text("题目已保存", exact=True).wait_for()
             await page.get_by_role("button", name="阅读", exact=True).click()
             await page.get_by_role("button", name="DSH 桌面连接", exact=True).click()
+            await page.get_by_text("自定义 DSH profile", exact=True).click()
             await page.get_by_label("插件连接文件", exact=True).fill(str(harness_home / "classcue-bridge/connection.json"))
             await page.get_by_role("button", name="连接", exact=True).click()
+            root = project / "discussion-workspaces"
+            root.mkdir()
+            response = await page.request.put(base + "/api/dsh-bridge/workspace-root", data={
+                "path": str(root), "instance_id": client.call("status")["instance_id"]})
+            assert response.ok, await response.text()
+            await page.get_by_role("button", name="关闭 DSH 连接", exact=True).click()
             await page.get_by_role("dialog", name="DSH 桌面连接", exact=True).wait_for(state="detached")
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
-            await dsh.get_by_role("dialog", name="合成验收课程 · 选择课程工作区", exact=True).wait_for()
-            select = dsh.get_by_label("工作区", exact=True)
-            options = await select.locator("option").evaluate_all("rows=>rows.map(row=>row.value).filter(Boolean)")
-            assert options, "The isolated desktop profile needs one native workspace"
-            await select.select_option(options[0])
-            await dsh.get_by_role("button", name="开始讨论", exact=True).click()
 
             documents = await api("/api/study-documents")
             pdf = next(document for document in documents if document["format"] == "pdf")
@@ -206,8 +207,8 @@ async def main(args):
             await dsh.locator('[contenteditable="true"]').hover(trial=True)
             await page.screenshot(path=str(output / "classcue-saved-pdf.png"))
             await dsh.screenshot(path=str(output / "dsh-two-crops.png"))
-            assert "Synthetic whole question" in "\n".join(await dsh.locator('[contenteditable="true"]').all_text_contents())
-            await page.get_by_role("button", name="继续 DSH 讨论", exact=True).click()
+            assert not "\n".join(await dsh.locator('[contenteditable="true"]').all_text_contents()).strip()
+            await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             assert len(await history(question["id"])) == 1
             assert (await api(f"/api/dsh-bridge/requests/{request_id}"))["session_id"] == receipt["session_id"]
             assert await dsh.locator('img[src^="blob:"]').count() == 2
@@ -231,7 +232,8 @@ async def main(args):
             md_receipt = await until(lambda: api(f"/api/dsh-bridge/requests/{md_request}"),
                                      lambda value: value["status"] == "draft_ready")
             assert md_receipt["session_id"] != receipt["session_id"]
-            assert md_receipt["workspace_id"] == receipt["workspace_id"]
+            assert md_receipt["workspace_id"] != receipt["workspace_id"]
+            assert Path(md_receipt["cwd"]).parent == Path(receipt["cwd"]).parent
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 0)
             text = "\n".join(await dsh.locator('[contenteditable="true"]').all_text_contents())
             assert "(1) Find candidate keys." in text and "(2) Explain the normal form." in text
@@ -239,11 +241,11 @@ async def main(args):
             await page.screenshot(path=str(output / "classcue-saved-markdown.png"))
             await dsh.screenshot(path=str(output / "dsh-whole-markdown.png"))
             await page.reload()
-            await page.get_by_role("button", name="继续 DSH 讨论", exact=True).wait_for()
-            await page.get_by_role("button", name="继续 DSH 讨论", exact=True).click()
+            await page.get_by_role("button", name="在 DSH 中讨论", exact=True).wait_for()
+            await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             assert len(await history(md_question["id"])) == 1
             await page.locator(".study-file-open").filter(has_text="synthetic-cross-page.pdf").click()
-            await page.get_by_role("button", name="继续 DSH 讨论", exact=True).click()
+            await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 2)
             for image in await dsh.locator('img[src^="blob:"]').all():
                 await image.hover(trial=True)
@@ -267,7 +269,7 @@ async def main(args):
             dsh = next(page for context in dsh_browser.contexts for page in context.pages
                        if page.url.startswith("dsh-app:"))
             dsh.on("pageerror", lambda error: errors.append(str(error)))
-            await page.get_by_role("button", name="继续 DSH 讨论", exact=True).click()
+            await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 2)
             restored = await api(f"/api/dsh-bridge/requests/{request_id}")
             assert restored["session_id"] == receipt["session_id"] and restored["status"] == "draft_ready"

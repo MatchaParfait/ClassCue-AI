@@ -71,3 +71,38 @@ test("missing desktop preload retains the DSH service cancellation contract", as
   assert.equal(harness.calls.some(call => call.method === "create"), false);
   await harness.dispose();
 });
+
+test("an image-only question prepares attachments with an empty prompt and preserves later user edits", async () => {
+  let plugin;
+  vm.runInNewContext(source, {
+    window: { __ModuleLoader__: { load: module => {
+      plugin = module.factory(() => ({}));
+    } } },
+    atob, File,
+  });
+  let prompt, attachments = [], draft = "", created = 0;
+  const conversation = {
+    createDrafts: (_session, files) => {
+      created++;
+      assert.equal(files.length, 1);
+      assert.equal(files[0].type, "image/png");
+      return [{ id: "image-1" }];
+    },
+    resolveDraftAttachments: ids => ids.filter(id => attachments.includes(id)),
+  };
+  const shell = {
+    get snapshot() { return { draft, attachmentIds: attachments }; },
+    requestDraftInitialization: options => { prompt = options.prompt; return "initialized"; },
+    addAttachments: ids => { attachments = [...ids]; return true; },
+  };
+  const command = { status: "bound", instance_id: "instance", session_id: "session",
+    content: [{ type: "image", media_type: "image/png", data: "iVBORw0KGgo=" }] };
+  const controller = new plugin.DraftController(conversation, new Map());
+  assert.equal(await controller.prepare(command, shell, true), "draft_ready");
+  assert.equal(prompt, "");
+  assert.deepEqual([...attachments], ["image-1"]);
+  draft = "User's own question";
+  assert.equal(await controller.prepare(command, shell, true), "opened");
+  assert.equal(draft, "User's own question");
+  assert.equal(created, 1);
+});

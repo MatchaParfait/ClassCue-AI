@@ -290,7 +290,7 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
             <Route path="/materials" element={MATERIALS_ENABLED
               ? <MaterialsPage key={scope} scope={scope} active={active} onJob={onJob} />
               : <Navigate to="/" replace />} />
-            <Route path="/settings" element={<SettingsPage active={active} onClose={close} onJob={onJob}
+            <Route path="/settings" element={<SettingsPage active={active} scope={scope} onClose={close} onJob={onJob}
               onConfigurationSaved={!onboardingActive && active && /^\/(process|batch-process|tasks)/.test(screen.state?.returnTo ?? "") ? close : undefined} />} />
           </Routes></Suspense>
         </PageSession>;

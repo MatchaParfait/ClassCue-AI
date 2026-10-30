@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $bridgeCli -PathType Leaf)) {
 }
 $bridgeVersion = (Get-Item -LiteralPath $bridgeExecutable).VersionInfo.ProductVersion
 if ($bridgeVersion -ne "0.2.1.0") {
-    throw "This bridge requires desktop 0.2.1-rc.3 (ProductVersion 0.2.1.0)."
+    throw "This bridge requires desktop 0.2.1-rc.5 (ProductVersion 0.2.1.0)."
 }
 $bridgeLock = Join-Path $bridgeHome "profiles\desktop\lock"
 $bridgeProfile = Join-Path $bridgeHome "profiles\desktop"

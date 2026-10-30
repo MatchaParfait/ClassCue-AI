@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FolderOpen, LoaderCircle, MessageSquare, Plus, Settings2, X } from "lucide-react";
-import { createPicker, pollPicker } from "../api/client";
-import { connectDsh, connectDshAuto, getDshDiscussions, getDshRequest, getDshStatus, openDshDiscussion, prepareDshQuestion } from "../api/dshBridge";
+import { ExternalLink, LoaderCircle, MessageSquare, Plus, Settings2, X } from "lucide-react";
+import { getDshDiscussions, getDshRequest, getDshStatus, openDshDiscussion, prepareDshQuestion } from "../api/dshBridge";
+import { DshConnectionSettings } from "./DshConnectionSettings";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { getCourseVideoQuestion } from "../api/studyMaterials";
@@ -33,12 +33,11 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
 }) {
   const cache = useQueryClient();
   const [settings, setSettings] = useState(false);
-  const [path, setPath] = useState("");
   const [error, setError] = useState("");
   const [requestId, setRequestId] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [configBusy, setConfigBusy] = useState(false);
   const modal = useRef<HTMLDivElement>(null);
-  const first = useRef<HTMLInputElement>(null);
+  const first = useRef<HTMLButtonElement>(null);
   const historyKey = ["dsh-discussions", scope, questionId];
   const statusKey = ["dsh-status", scope];
   const requestKey = (id: string | null) => ["dsh-request", scope, id];
@@ -71,39 +70,29 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
     },
     onError: reason => setError((reason as Error).message),
   });
-  const connect = useMutation({
-    mutationFn: () => connectDsh(path.trim()),
-    onSuccess: value => { cache.setQueryData(statusKey, value); setSettings(false); setError(""); },
-    onError: reason => setError((reason as Error).message),
-  });
-  const autoConnect = useMutation({
-    mutationFn: connectDshAuto,
-    onSuccess: value => { cache.setQueryData(statusKey, value); setSettings(false); setError(""); },
-    onError: reason => setError((reason as Error).message),
-  });
   const pending = start.isPending || open.isPending;
-  const busy = pending || connect.isPending || autoConnect.isPending || picking;
+  const busy = pending || configBusy;
   useModalFocus(settings, modal, first, () => { if (!busy) setSettings(false); });
   const result = receipt.data;
   const notice = result?.outcome === "cancelled" ? "已取消工作区选择，可以再次打开讨论。"
     : result?.error === "draft_conflict" ? "DSH 中已有草稿，已保留。请在原对话中查看。"
     : result?.error ? "无法准备 DSH 草稿，请检查桌面连接后重试。"
-    : result?.status === "choose_workspace" ? "请在 DSH 中选择工作区。"
+    : result?.status === "choose_workspace" ? "这是旧版未完成的讨论，请在 DSH 完成原工作区选择；新建独立讨论会使用 ClassCue 的默认目录。"
     : result?.status === "draft_ready" ? "题目已放入 DSH 草稿，等待你发送。"
     : result?.status === "sent" ? "已打开原讨论。"
     : result ? "正在等待 DSH 准备对话…" : "";
   return <div className="dsh-question-actions">
     <div className="dsh-question-toolbar">
-      <button className="secondary-button compact" type="button" disabled={pending || status.isPending}
+      <button className="secondary-button compact" type="button" disabled={pending || status.isPending || history.isPending}
         onClick={() => {
           setError("");
           if (active) open.mutate(active.request_id); else start.mutate(false);
         }}>
         {pending ? <LoaderCircle className="spin" size={16} /> : <MessageSquare size={16} />}
-        {active ? "继续 DSH 讨论" : "在 DSH 中讨论"}
+        在 DSH 中讨论
       </button>
       <button className="icon-button" type="button" title="新建独立讨论" aria-label="新建独立讨论"
-        disabled={pending || status.isPending} onClick={() => { setError(""); start.mutate(true); }}>
+        disabled={pending || status.isPending || history.isPending} onClick={() => { setError(""); start.mutate(true); }}>
         <Plus size={16} />
       </button>
       <button className="icon-button" type="button" title="DSH 桌面连接" aria-label="DSH 桌面连接"
@@ -125,26 +114,7 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
         <header><h2 id="dsh-connect-title">DSH 桌面连接</h2>
           <button className="icon-button" type="button" disabled={busy} aria-label="关闭 DSH 连接"
             onClick={() => setSettings(false)}><X size={18} /></button></header>
-        <button className="primary-button dsh-auto-connect" type="button" disabled={busy}
-          onClick={() => autoConnect.mutate()}>
-          {autoConnect.isPending && <LoaderCircle size={16} className="spin" />}自动连接 DSH
-        </button>
-        <p className="settings-help">默认插件无需选择文件。只有自定义 DSH profile 才需要手动指定连接文件。</p>
-        <label className="settings-field"><span>插件连接文件</span>
-          <input ref={first} value={path} onChange={event => setPath(event.target.value)}
-            placeholder="connection.json" aria-label="插件连接文件" disabled={busy} spellCheck={false} /></label>
-        <div className="dsh-question-toolbar">
-          <button className="secondary-button" type="button" disabled={busy} onClick={async () => {
-            setPicking(true);
-            try {
-              const directory = await pollPicker(await createPicker("directory"));
-              if (directory) setPath(`${directory.replace(/[\\/]$/, "")}\\connection.json`);
-            } catch (reason) { setError((reason as Error).message); } finally { setPicking(false); }
-          }}><FolderOpen size={16} />选择 classcue-bridge 文件夹</button>
-          <button className="primary-button" type="button" disabled={busy || !path.trim()} onClick={() => connect.mutate()}>
-            {connect.isPending && <LoaderCircle size={16} className="spin" />}连接</button>
-        </div>
-        {(error || status.error) && <p role="alert" className="field-error">{error || (status.error as Error).message}</p>}
+        <DshConnectionSettings scope={scope} initialRef={first} onBusyChange={setConfigBusy} />
       </div>
     </div>, document.body)}
   </div>;

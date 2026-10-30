@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync,
+  statSync, lstatSync, openSync, closeSync, unlinkSync } from "node:fs";
+import { join, basename, dirname, extname, isAbsolute, parse } from "node:path";
 
 export const PROTOCOL = 1;
 export const MAX_FRAME = 32 * 1024 * 1024;
@@ -47,6 +48,26 @@ export function atomicJson(path, value) {
   renameSync(temp, path);
 }
 
+function folderName(value, fallback) {
+  let name = String(value ?? "").normalize("NFC").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .trim().replace(/[. ]+$/, "").slice(0, 64).replace(/[. ]+$/, "");
+  if (!name || /^\.+$/.test(name)) name = fallback;
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = `_${name}`;
+  return name;
+}
+
+function directory(path) {
+  try {
+    if (!isAbsolute(path) || (process.platform === "win32" && /^[\\/]+$/.test(parse(path).root)))
+      throw new Error();
+    const canonical = realpathSync(path);
+    if (!statSync(canonical).isDirectory()) throw new Error();
+    return canonical;
+  } catch {
+    throw new BridgeError("directory_unavailable", "工作区目录不存在或无法访问，请恢复原目录后重试");
+  }
+}
+
 /** One writer per desktop profile; every side effect follows a persisted intent. */
 export class Bridge {
   constructor(root, native) {
@@ -61,6 +82,9 @@ export class Bridge {
     if (this.state.protocol !== PROTOCOL || !this.state.requests || !this.state.documents)
       throw new BridgeError("state_incompatible", "桥接记录版本不兼容");
     this.state.courses ??= {};
+    this.state.roots ??= {};
+    this.state.tree_courses ??= {};
+    this.state.tree_documents ??= {};
     this.tail = Promise.resolve();
     this.leases = new Map();
     this.client = null;
@@ -101,14 +125,15 @@ export class Bridge {
       course_id: row.course_id ?? null, course_name: row.course_name ?? null,
       question_id: row.question_id, content_version: row.content_version,
       instance_id: this.state.instance_id, workspace_id: row.workspace_id ?? null,
+      layout: row.layout ?? "legacy", root_id: row.root_id ?? null,
       cwd: row.cwd ?? null, session_id: row.session_id, status: row.status,
       error: row.error ?? null, outcome: row.outcome ?? null,
     };
   }
   status() {
-    return { protocol: PROTOCOL, desktop_version: "0.2.1-rc.3",
+    return { protocol: PROTOCOL, desktop_version: this.native.desktopVersion ?? "0.2.1-rc.5",
       instance_id: this.state.instance_id, client_connected: this.client !== null && Date.now() - this.client.time < 5000,
-      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory", "course_workspace"] };
+      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory", "course_workspace", "workspace_tree"] };
   }
   workspaces() { return this.native.workspaces(); }
   get(requestId) {
@@ -117,6 +142,90 @@ export class Bridge {
     return row;
   }
   request(requestId) { return this.receipt(this.get(requestId)); }
+
+  configureRoot(input) {
+    return this.serial(async () => {
+      const { library_id, config_id, path } = input;
+      requireId(library_id);
+      requireId(config_id);
+      if (typeof path !== "string" || !path.trim() || path.length > 4096)
+        throw new BridgeError("invalid_root", "请选择默认 DSH 工作区目录");
+      const canonical = directory(path);
+      let root = this.state.roots[config_id];
+      if (root && (root.library_id !== library_id || root.path !== canonical))
+        throw new BridgeError("root_conflict", "相同目录配置编号不能用于不同位置");
+      if (!root) {
+        // Test actual write access before registering a user-selected directory.
+        const probe = join(canonical, `.classcue-${randomUUID()}.tmp`);
+        try { closeSync(openSync(probe, "wx")); unlinkSync(probe); }
+        catch { throw new BridgeError("root_not_writable", "所选目录不可写，请选择有写入权限的文件夹"); }
+        root = { config_id, library_id, path: canonical };
+        this.state.roots[config_id] = root;
+        this.save();
+      }
+      await this.registerNode(root);
+      return { config_id, instance_id: this.state.instance_id, path: root.path, workspace_id: root.workspace_id };
+    });
+  }
+
+  async registerNode(node) {
+    if (node.workspace_id) {
+      const workspace = this.workspaces().find(w => w.workspace_id === node.workspace_id);
+      if (!workspace) throw new BridgeError("workspace_missing", "原工作区节点已移除，请先在 DSH 中恢复");
+      if (directory(node.path) !== workspace.path)
+        throw new BridgeError("workspace_path_changed", "原工作区位置已变化，绑定已保留，请先恢复目录");
+      return;
+    }
+    const workspace = await this.native.createWorkspace(directory(node.path), node.title);
+    node.workspace_id = requireId(workspace.workspace_id);
+    node.path = workspace.path;
+    this.save();
+  }
+
+  async childNode(table, key, parent, name) {
+    let node = table[key];
+    if (!node) {
+      const stem = folderName(name, "未命名资料");
+      let path = join(parent.path, stem);
+      let suffix = 1;
+      const claimed = [...Object.values(this.state.tree_courses), ...Object.values(this.state.tree_documents)];
+      while (existsSync(path) || claimed.some(n => n.path.toLowerCase() === path.toLowerCase()))
+        path = join(parent.path, `${stem} (${suffix++})`);
+      node = { path, title: basename(path), root_id: parent.root_id ?? parent.config_id };
+      table[key] = node;
+      this.save();
+    }
+    if (!node.workspace_id) {
+      try { mkdirSync(node.path); }
+      catch (error) {
+        if (error.code !== "EEXIST")
+          throw new BridgeError("directory_create_failed", "无法创建课程或资料目录，请检查权限后重试");
+      }
+    }
+    const canonical = directory(node.path);
+    if (lstatSync(node.path).isSymbolicLink() || dirname(canonical) !== directory(parent.path))
+      throw new BridgeError("directory_path_changed", "受管理目录已被移动或替换，请先恢复原位置");
+    await this.registerNode(node);
+    return node;
+  }
+
+  async treeWorkspace(row) {
+    const documentKey = `${row.library_id}/${row.course_id}/${row.document_id}`;
+    const saved = this.state.tree_documents[documentKey];
+    const root = this.state.roots[saved?.root_id ?? row.root_id];
+    if (!root || root.library_id !== row.library_id)
+      throw new BridgeError("root_missing", "默认工作区配置不存在，请在 App 的 DSH 连接设置中重新选择");
+    await this.registerNode(root);
+    const courseKey = `${row.library_id}/${root.config_id}/${row.course_id}`;
+    const course = await this.childNode(this.state.tree_courses, courseKey, root, row.course_name);
+    const extension = extname(row.source);
+    const label = extension ? row.source.slice(0, -extension.length) : row.source;
+    const document = await this.childNode(this.state.tree_documents, documentKey, course, label);
+    row.root_id = document.root_id;
+    row.workspace_id = document.workspace_id;
+    row.cwd = document.path;
+    this.save();
+  }
 
   prepare(input) {
     return this.serial(async () => {
@@ -132,6 +241,7 @@ export class Bridge {
       if (row) {
         if (row.library_id !== library_id || row.question_id !== question_id
           || row.document_id !== document_id || row.course_id !== course_id
+          || row.layout !== input.layout || row.requested_root_id !== input.root_id
           || row.content_version !== content_version || row.snapshot_hash !== snapshotHash)
           throw new BridgeError("request_conflict", "相同请求编号不能传入不同内容");
       } else {
@@ -142,8 +252,15 @@ export class Bridge {
           if (row.snapshot_hash !== snapshotHash) throw new BridgeError("version_conflict", "题目内容已变化但版本未更新");
         } else {
           if (!course_id) throw new BridgeError("course_required", "请先将题目归入课程资料夹");
+          const tree = input.layout === "workspace_tree";
+          if (input.layout && !tree)
+            throw new BridgeError("layout_unsupported", "不支持的工作区组织方式");
+          if (tree) {
+            requireId(input.root_id);
+            if (input.workspace_id) throw new BridgeError("invalid_request", "自动目录不能指定旧课程工作区");
+          }
           const courseKey = `${library_id}/${course_id}`;
-          const workspaceId = this.state.courses[courseKey] ?? input.workspace_id;
+          const workspaceId = tree ? undefined : this.state.courses[courseKey] ?? input.workspace_id;
           if (workspaceId && Object.entries(this.state.courses).some(([other, workspace]) =>
             other.startsWith(`${library_id}/`) && other !== courseKey && workspace === workspaceId))
             throw new BridgeError("workspace_in_use", "此工作区已属于另一门课程，请选择本课程的独立文件夹");
@@ -152,14 +269,15 @@ export class Bridge {
             title: String(input.title ?? "").slice(0, 200),
             source: String(input.source ?? "").slice(0, 1000),
             content: input.content, snapshot_hash: snapshotHash,
-            session_id: `session-${randomUUID()}`, status: workspaceId ? "reserved" : "choose_workspace",
+            ...(tree ? { layout: "workspace_tree", root_id: input.root_id, requested_root_id: input.root_id } : {}),
+            session_id: `session-${randomUUID()}`, status: tree || workspaceId ? "reserved" : "choose_workspace",
             workspace_id: workspaceId, command: randomUUID(), action: "prepare",
           };
           this.state.requests[request_id] = row;
           this.save();
         }
       }
-      if (row.workspace_id) await this.ensureBound(row);
+      if (row.workspace_id || row.layout === "workspace_tree") await this.ensureBound(row);
       row.action = "prepare";
       row.command = randomUUID();
       row.error = null;
@@ -170,6 +288,18 @@ export class Bridge {
   }
 
   async ensureBound(row) {
+    if (row.layout === "workspace_tree") {
+      await this.treeWorkspace(row);
+      if (row.status !== "reserved") {
+        await this.native.check(row.session_id, row.workspace_id);
+        return;
+      }
+      await this.native.ensureSession(row.session_id, row.workspace_id, row.title);
+      await this.native.flush(row.session_id);
+      row.status = "bound";
+      this.save();
+      return;
+    }
     const workspace = this.workspaces().find(w => w.workspace_id === row.workspace_id);
     if (!workspace) throw new BridgeError("workspace_missing", "原工作区已移除，请先在 DSH 中恢复");
     // Only an unbound reserved request may create. A missing bound session is never recreated.
@@ -220,7 +350,7 @@ export class Bridge {
   open(requestId) {
     return this.serial(async () => {
       const row = this.get(requestId);
-      if (row.workspace_id) await this.ensureBound(row);
+      if (row.workspace_id || row.layout === "workspace_tree") await this.ensureBound(row);
       row.action = "prepare";
       row.command = randomUUID();
       row.error = null;

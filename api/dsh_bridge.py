@@ -25,6 +25,11 @@ class PreparePayload(StrictPayload):
     new_discussion: bool = False
 
 
+class WorkspaceRootPayload(StrictPayload):
+    path: str = Field(min_length=1, max_length=4096)
+    instance_id: str = Field(min_length=1, max_length=100)
+
+
 def router(provider, *, bridge_factory=DshBridge, desktop=None):
     routes = APIRouter(prefix="/api/dsh-bridge", tags=["dsh-bridge"])
     lock = RLock()
@@ -57,6 +62,14 @@ def router(provider, *, bridge_factory=DshBridge, desktop=None):
     @routes.get("/workspaces")
     def workspaces():
         return use(lambda bridge: bridge.records.client(bridge.client_factory)[0].call("workspaces"))
+
+    @routes.get("/workspace-root")
+    def workspace_root():
+        return use(lambda bridge: bridge.records.workspace_root())
+
+    @routes.put("/workspace-root")
+    def configure_root(payload: WorkspaceRootPayload):
+        return use(lambda bridge: bridge.configure_root(**payload.model_dump()))
 
     @routes.post("/discussions", status_code=202)
     def prepare(payload: PreparePayload):

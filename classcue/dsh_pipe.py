@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 MAX_FRAME = 32 * 1024 * 1024
+DESKTOP_VERSIONS = {"0.2.1-rc.3", "0.2.1-rc.5"}
 PIPE_PATTERN = re.compile(r"\\\\\.\\pipe\\classcue-dsh-[a-f0-9-]{36}")
 
 
@@ -24,7 +25,7 @@ def descriptor(path: Path) -> dict:
         if path.stat().st_size > 4096:
             raise ValueError()
         value = json.loads(path.read_text(encoding="utf-8"))
-        if (value.get("protocol") != 1 or value.get("desktop_version") != "0.2.1-rc.3"
+        if (value.get("protocol") != 1 or value.get("desktop_version") not in DESKTOP_VERSIONS
                 or not PIPE_PATTERN.fullmatch(value.get("pipe", ""))
                 or not re.fullmatch(r"[a-f0-9]{64}", value.get("token", ""))
                 or not re.fullmatch(r"[a-f0-9-]{36}", value.get("instance_id", ""))):

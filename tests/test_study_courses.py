@@ -114,7 +114,7 @@ def test_video_and_document_snapshots_share_course_and_only_send_question_image(
     snapshots = [study_snapshot(courses.store, "library", q["id"]) for q in [video, material]]
     assert {q["course_id"] for q in snapshots} == {course["id"]}
     assert snapshots[0]["source_kind"] == "video"
-    assert [p["type"] for p in snapshots[0]["content"]] == ["text", "image"]
+    assert [p["type"] for p in snapshots[0]["content"]] == ["image"]
     assert "字幕" not in str(snapshots[0]["content"])
     assert "(1)" in str(snapshots[1]["content"]) and "(2)" in str(snapshots[1]["content"])
     revised = replace_image(courses, marker, "red")
@@ -136,6 +136,7 @@ def test_video_changes_require_new_discussion_and_original_receipt_stays(courses
     FakeClient.fail_after_write = False
     bridge = DshBridge(courses.store, "library", client_factory=FakeClient)
     bridge.records.connect(tmp_path / "connection.json", FakeClient)
+    bridge.configure_root(str(tmp_path), FakeClient.instance)
     first = bridge.prepare(question["id"])
     replace_image(courses, marker, "red")
     with pytest.raises(BridgeFailure) as failure:

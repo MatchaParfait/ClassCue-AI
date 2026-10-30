@@ -28,16 +28,23 @@ class FakeClient:
     requests = {}
     instance = "test-instance"
     fail_after_write = False
+    roots = {}
 
     def __init__(self, path):
         self.path = path
 
     def call(self, method, params=None):
         if method == "status":
-            return {"instance_id": self.instance, "protocol": 1, "desktop_version": "0.2.1-rc.3",
-                    "capabilities": ["course_workspace"]}
+            return {"instance_id": self.instance, "protocol": 1, "desktop_version": "0.2.1-rc.5",
+                    "capabilities": ["course_workspace", "workspace_tree"]}
         if method == "workspaces":
             return []
+        if method == "configure_root":
+            result = {**params, "instance_id": self.instance, "workspace_id": f"workspace-{params['config_id']}"}
+            self.roots[params["config_id"]] = result
+            if self.fail_after_write:
+                raise BridgeFailure("timeout", "synthetic timeout")
+            return result
         if method == "prepare":
             request_id = params["request_id"]
             self.requests.setdefault(request_id, {
@@ -65,6 +72,7 @@ def bridge(tmp_path):
 
     bridge = DshBridge(store, "library", snapshot, FakeClient)
     bridge.records.connect(tmp_path / "connection.json", FakeClient)
+    bridge.configure_root(str(tmp_path), FakeClient.instance)
     return bridge, version
 
 
@@ -232,9 +240,9 @@ def test_saved_question_adapter_keeps_whole_question_and_ordered_image_regions(m
                             "source_kind": "document", "course_id": "course", "course_name": "合成课程"})
     result = study_snapshot(None, "library", "question")
     assert result["content_version"] == 3
-    assert "（1）" in result["content"][1]["text"] and "（2）" in result["content"][1]["text"]
-    assert len(result["content"]) == 4
-    for part in result["content"][2:]:
+    assert result["content"][0]["text"] == "共同题干\n（1）小问\n（2）小问"
+    assert len(result["content"]) == 3
+    for part in result["content"][1:]:
         assert base64.b64decode(part["data"]).startswith(b"\x89PNG")
 
 
@@ -248,6 +256,7 @@ def real_materials(tmp_path):
     materials = StudyMaterialStore(VideoStore(tmp_path / "library" / "project.db"))
     service = DshBridge(materials.store, "synthetic-library", client_factory=FakeClient)
     service.records.connect(tmp_path / "connection.json", FakeClient)
+    service.configure_root(str(tmp_path), FakeClient.instance)
     return materials, service
 
 
@@ -286,6 +295,31 @@ def test_reader_markdown_and_supplement_transfer_then_reopen_without_rerender(re
     assert len(FakeClient.requests) == 1
 
 
+def test_reader_single_image_transfers_only_the_original_crop(real_materials):
+    from io import BytesIO
+    from PIL import Image
+    from classcue.study_courses import StudyCourseStore
+    materials, service = real_materials
+    stream = BytesIO()
+    Image.new("RGB", (80, 40), "green").save(stream, "PNG")
+    document = materials.register("question.png", stream.getvalue())
+    courses = StudyCourseStore(materials.store)
+    courses.move_document(document["id"], courses.create(name="合成课程")["id"])
+    block = materials.blocks(document["id"])[0]
+    question = materials.save_question(document["id"], {
+        "title": "Synthetic image question", "number": "3",
+        "regions": [{"block_id": block["id"], "bbox": [0, 0, 1, 1]}],
+    })
+    receipt = service.prepare(question["id"])
+    record = json.loads(service.records.request(receipt["request_id"])["snapshot"])
+    assert [part["type"] for part in record["content"]] == ["image"]
+    with Image.open(BytesIO(base64.b64decode(record["content"][0]["data"]))) as image:
+        assert image.size == (80, 40)
+        assert image.getpixel((10, 10))[:3] == (0, 128, 0)
+    assert record["course_name"] == "合成课程"
+    assert record["source"] == "question.png"
+
+
 def test_reader_cross_page_pdf_preserves_crop_order_version_and_removed_restore(real_materials):
     from io import BytesIO
     from PIL import Image
@@ -309,9 +343,9 @@ def test_reader_cross_page_pdf_preserves_crop_order_version_and_removed_restore(
     assert all(region["selection_group"] == "synthetic-continuous-question" for region in question["regions"])
     receipt = service.prepare(question["id"])
     record = json.loads(service.records.request(receipt["request_id"])["snapshot"])
-    assert len(record["content"]) == 3
+    assert [part["type"] for part in record["content"]] == ["image", "image"]
     colors = []
-    for part in record["content"][1:]:
+    for part in record["content"]:
         with Image.open(BytesIO(base64.b64decode(part["data"]))) as image:
             colors.append(image.getpixel((10, 10))[:3])
     assert colors == [(0, 0, 255), (255, 0, 0)]
@@ -350,6 +384,9 @@ def test_application_import_save_prepare_and_restore_use_registered_routes(real_
         connected = client.post("/api/dsh-bridge/connection",
                                 json={"descriptor_path": str(tmp_path / "fake-connection.json")})
         assert connected.status_code == 200
+        configured = client.put("/api/dsh-bridge/workspace-root", json={
+            "path": str(tmp_path), "instance_id": FakeClient.instance})
+        assert configured.status_code == 200
         response = client.post("/api/dsh-bridge/discussions", json={"question_id": question["id"]})
         assert response.status_code == 202, response.text
         receipt = response.json()
@@ -363,3 +400,121 @@ def test_application_import_save_prepare_and_restore_use_registered_routes(real_
         assert client.post(f"/api/study-questions/{question['id']}/restore").status_code == 200
         assert client.post("/api/dsh-bridge/discussions", json={"question_id": question["id"]}).json()["request_id"] == request_id
         assert len(FakeClient.requests) == 1
+
+
+def test_root_selection_persists_offline_reuses_identity_and_changes_only_new_request_intents(bridge, tmp_path):
+    service, _ = bridge
+    original = service.records.workspace_root()
+    assert original and original["instance_id"] == FakeClient.instance
+    first = service.prepare("first")
+    second_path = tmp_path / "another-root"
+    second_path.mkdir()
+    second = service.configure_root(str(second_path), FakeClient.instance)
+    assert second["config_id"] != original["config_id"]
+    restarted = DshBridge(service.store, "library", service.snapshot_provider, FakeClient)
+    assert restarted.records.workspace_root() == second
+    new = restarted.prepare("second")
+    assert json.loads(restarted.records.request(new["request_id"])["snapshot"])["root_id"] == second["config_id"]
+    assert json.loads(restarted.records.request(first["request_id"])["snapshot"])["root_id"] == original["config_id"]
+    assert restarted.configure_root(str(tmp_path), FakeClient.instance)["config_id"] == original["config_id"]
+    assert restarted.records.workspace_root() == original
+
+
+def test_root_timeout_retries_one_saved_intent_and_keeps_previous_active_root(bridge, tmp_path):
+    service, _ = bridge
+    previous = service.records.workspace_root()
+    selected = tmp_path / "retry-root"
+    selected.mkdir()
+    FakeClient.fail_after_write = True
+    with pytest.raises(BridgeFailure):
+        service.configure_root(str(selected), FakeClient.instance)
+    assert service.records.workspace_root() == previous
+    with service.store.connect() as db:
+        pending = dict(db.execute("SELECT * FROM dsh_bridge_roots WHERE path=?", (str(selected),)).fetchone())
+    FakeClient.fail_after_write = False
+    confirmed = service.configure_root(str(selected), FakeClient.instance)
+    assert confirmed["config_id"] == pending["config_id"]
+    assert service.records.workspace_root() == confirmed
+    with service.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM dsh_bridge_roots WHERE path=?", (str(selected),)).fetchone()[0] == 1
+
+
+def test_new_tree_requires_root_and_updated_plugin_before_persisting_any_question(bridge, monkeypatch):
+    service, _ = bridge
+    with service.store.connect() as db:
+        db.execute("DELETE FROM dsh_bridge_root_selection")
+    with pytest.raises(BridgeFailure) as failure:
+        service.prepare("missing-root")
+    assert failure.value.code == "root_required"
+    original = FakeClient.call
+
+    def legacy(self, method, params=None):
+        value = original(self, method, params)
+        return {**value, "capabilities": ["course_workspace"]} if method == "status" else value
+
+    monkeypatch.setattr(FakeClient, "call", legacy)
+    with pytest.raises(BridgeFailure) as failure:
+        service.prepare("old-plugin")
+    assert failure.value.code == "plugin_outdated"
+    assert not service.records.history("missing-root") and not service.records.history("old-plugin")
+
+
+def test_instance_changes_keep_root_bindings_separate_and_reject_stale_selection(bridge, tmp_path):
+    service, _ = bridge
+    original = service.records.workspace_root()
+    with pytest.raises(BridgeFailure) as failure:
+        service.configure_root(str(tmp_path), "another-instance")
+    assert failure.value.code == "instance_mismatch"
+    FakeClient.instance = "another-instance"
+    service.records.connect(tmp_path / "another.json", FakeClient)
+    assert service.records.workspace_root() is None
+    other = service.configure_root(str(tmp_path), FakeClient.instance)
+    assert other["config_id"] != original["config_id"]
+    assert service.records.workspace_root("test-instance") == original
+
+
+def test_legacy_pending_request_reopens_without_root_and_tree_downgrade_is_rejected(bridge, monkeypatch):
+    service, _ = bridge
+    tree = service.prepare("tree")
+    legacy = {"request_id": "legacy", "question_id": "legacy", "library_id": "library", "document_id": "old",
+              "content_version": 1, "content": [{"type": "text", "text": "合成旧题目"}]}
+    with service.store.connect() as db:
+        db.execute("INSERT INTO dsh_bridge_requests VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+                   ("legacy", "legacy", 1, FakeClient.instance, json.dumps(legacy), None))
+        db.execute("DELETE FROM dsh_bridge_root_selection")
+    original = FakeClient.call
+
+    def old_plugin(self, method, params=None):
+        value = original(self, method, params)
+        if method == "status":
+            return {**value, "capabilities": ["course_workspace"]}
+        return value
+
+    monkeypatch.setattr(FakeClient, "call", old_plugin)
+    # Simulate a timeout before the Host admitted the old request.
+    def legacy_open(self, method, params=None):
+        if method == "open" and params["request_id"] == "legacy":
+            raise BridgeFailure("request_missing", "not admitted")
+        return old_plugin(self, method, params)
+    monkeypatch.setattr(FakeClient, "call", legacy_open)
+    assert service.resume("legacy", open_session=True)["request_id"] == "legacy"
+    with pytest.raises(BridgeFailure) as failure:
+        service.resume(tree["request_id"], open_session=True)
+    assert failure.value.code == "plugin_outdated"
+
+
+def test_root_api_preserves_selection_on_bad_path_and_excludes_web_mode(bridge, tmp_path):
+    service, _ = bridge
+    provider = type("Provider", (), {"get": lambda _: service.store, "library_id": lambda _: "library"})()
+    app = FastAPI()
+    app.include_router(router(provider, bridge_factory=lambda *_: service, desktop=lambda: True))
+    client = TestClient(app)
+    original = client.get("/api/dsh-bridge/workspace-root").json()
+    assert client.put("/api/dsh-bridge/workspace-root", json={
+        "path": str(tmp_path / "missing"), "instance_id": FakeClient.instance}).status_code == 400
+    assert client.get("/api/dsh-bridge/workspace-root").json() == original
+    assert client.put("/api/dsh-bridge/workspace-root", json={
+        "path": str(tmp_path), "instance_id": FakeClient.instance, "token": "not-allowed"}).status_code == 422
+    web = FastAPI()
+    web.include_router(router(provider, bridge_factory=lambda *_: service, desktop=lambda: False))
+    assert TestClient(web).get("/api/dsh-bridge/workspace-root").status_code == 404

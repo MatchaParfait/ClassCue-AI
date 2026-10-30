@@ -9,6 +9,13 @@
 .dsh-connection-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
 .dsh-connection-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dsh-connection-dialog h2 { font-size: 18px; margin: 0; }
-.dsh-connection-dialog .settings-field { min-width: 0; margin: 16px 0; }
-.dsh-connection-dialog input { width: 100%; min-width: 0; box-sizing: border-box; }
-.dsh-connection-dialog p { overflow-wrap: anywhere; }
+.dsh-connection-settings .settings-field { min-width: 0; margin: 16px 0; }
+.dsh-connection-settings input { width: 100%; min-width: 0; box-sizing: border-box; }
+.dsh-connection-settings p { overflow-wrap: anywhere; }
+.dsh-root-setting { display: grid; gap: 10px; margin: 20px 0; }
+.dsh-root-label { font-weight: 600; }
+.dsh-root-path { font-size: 13px; overflow-wrap: anywhere; color: var(--ui-muted); }
+.dsh-root-setting > button { justify-self: start; }
+.dsh-root-setting p { margin: 0; }
+.dsh-advanced-connection { margin-top: 20px; }
+.dsh-advanced-connection summary { cursor: pointer; }

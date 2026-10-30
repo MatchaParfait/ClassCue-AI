@@ -157,6 +157,11 @@ def managed_name(name):
         return name
     if parts[0] in {"classcue", "api", "scripts", "assets", "prompts", "pages", "docs"}:
         return name
+    if len(parts) == 3 and parts[:2] == ("integrations", "dsh-desktop") and parts[2] in {
+        "package.json", "cordis.patch.yml", "index.mjs", "bridge.mjs",
+        "pipe.mjs", "client.js", "install.ps1",
+    }:
+        return name
     if len(parts) > 2 and parts[:2] == ("frontend", "dist"):
         return name
     raise ValueError("包内文件不属于程序分发范围")

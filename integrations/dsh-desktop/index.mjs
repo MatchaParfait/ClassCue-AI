@@ -7,7 +7,7 @@ import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typer
 import { Bridge, BridgeError, atomicJson } from "./bridge.mjs";
 import { servePipe } from "./pipe.mjs";
 
-const VERSION = "0.2.1-rc.3";
+const VERSION = "0.2.1-rc.5";
 const initializers = [];
 
 export default class ClassCueBridge extends TypertRemoteService {
@@ -29,9 +29,14 @@ export default class ClassCueBridge extends TypertRemoteService {
     execFileSync("icacls.exe", [root, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`,
       "*S-1-5-18:(OI)(CI)F"], { windowsHide: true, stdio: "ignore" });
     const native = {
+      desktopVersion: VERSION,
       workspaces: () => ctx.workspaceRegistry.list().map(w => ({
         workspace_id: w.id, path: w.path, title: w.title,
       })),
+      createWorkspace: async (path, title) => {
+        const workspace = await ctx.workspaceRegistry.create(path, title);
+        return { workspace_id: workspace.id, path: workspace.path };
+      },
       check: async (id, workspaceId) => {
         if (ctx.workspaceRegistry.archivedSessionIds.includes(id))
           throw new BridgeError("session_archived", "原对话已归档，请先在 DSH 中取消归档");
@@ -42,7 +47,9 @@ export default class ClassCueBridge extends TypertRemoteService {
         if (!workspace.sessionIds.includes(id))
           throw new BridgeError("session_detached", "原对话不在绑定的工作区中，请在 DSH 中检查");
       },
-      ensureSession: async (id, workspaceId) => {
+      ensureSession: async (id, workspaceId, title) => {
+        if (ctx.workspaceRegistry.archivedSessionIds.includes(id))
+          throw new BridgeError("session_archived", "原对话已归档，请先在 DSH 中取消归档");
         const live = ctx.sessions.get(id);
         const stored = live ?? await ctx.sessionPersistence.stat(id);
         if (stored) {
@@ -52,6 +59,7 @@ export default class ClassCueBridge extends TypertRemoteService {
         try {
           const created = await ctx.sessionController.create({ workspaceId, sessionId: id });
           if (created.sessionId !== id) throw new BridgeError("session_conflict", "DSH 返回了不同会话，已停止传输");
+          if (title) await ctx.sessionController.rename({ sessionId: id, title });
         } catch (error) {
           if (error?.code === "session/workspace-attach-failed" && error.details?.sessionId === id)
             await ctx.workspaceRegistry.get(workspaceId).attachSession(id);
@@ -71,6 +79,7 @@ export default class ClassCueBridge extends TypertRemoteService {
       switch (method) {
         case "status": return this.bridge.status();
         case "workspaces": return this.bridge.workspaces();
+        case "configure_root": return this.bridge.configureRoot(params);
         case "prepare": return this.bridge.prepare(params);
         case "request": return this.bridge.request(params.request_id);
         case "open": return this.bridge.open(params.request_id);

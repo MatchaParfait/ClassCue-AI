@@ -26,6 +26,12 @@ export interface DshDiscussion {
   receipt: DshReceipt | null;
   created_at: string;
 }
+export interface DshWorkspaceRoot {
+  config_id: string;
+  instance_id: string;
+  path: string;
+  workspace_id: string;
+}
 const post = <T,>(path: string, value?: unknown) => request<T>(`/api/dsh-bridge${path}`, {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: value === undefined ? undefined : JSON.stringify(value),
@@ -33,6 +39,12 @@ const post = <T,>(path: string, value?: unknown) => request<T>(`/api/dsh-bridge$
 export const getDshStatus = () => request<DshStatus>("/api/dsh-bridge/status");
 export const connectDsh = (descriptorPath: string) => post<DshStatus>("/connection", { descriptor_path: descriptorPath });
 export const connectDshAuto = () => post<DshStatus>("/connection/auto");
+export const getDshWorkspaceRoot = () => request<DshWorkspaceRoot | null>("/api/dsh-bridge/workspace-root");
+export const setDshWorkspaceRoot = (path: string, instanceId: string) =>
+  request<DshWorkspaceRoot>("/api/dsh-bridge/workspace-root", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, instance_id: instanceId }),
+  });
 export const prepareDshQuestion = (questionId: string, newDiscussion = false) =>
   post<DshReceipt>("/discussions", { question_id: questionId, new_discussion: newDiscussion });
 export const getDshDiscussions = (questionId: string) =>

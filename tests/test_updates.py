@@ -150,6 +150,9 @@ def test_tampered_expired_and_replayed_feeds_are_not_accepted(distribution):
     "../secret.py", "/absolute.py", "C:/a.py", "api/../../data/x.py", "api\\x.py",
     ".runtime/secret.py", "models/x.py", "api/NUL.py", "api/x.py:evil", "api/x. /a.py",
     "api/CON", "frontend/src/x.ts", "api//x.py", "api/./x.py",
+    "integrations/unrelated/index.mjs", "integrations/dsh-desktop/test/bridge.test.mjs",
+    "integrations/dsh-desktop/connection.json", "integrations/dsh-desktop/state.json",
+    "integrations/dsh-desktop/.runtime/connection.json",
 ])
 def test_reserved_and_traversal_paths_are_rejected(name):
     with pytest.raises(ValueError):

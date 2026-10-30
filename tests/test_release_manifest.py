@@ -7,6 +7,7 @@ import tomllib
 import pytest
 
 from scripts.release import source_files
+from classcue.release_security import managed_name
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,3 +132,10 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
                 dependency = module.replace(".", "/") + ".py"
                 if (ROOT / dependency).is_file():
                     assert dependency in files, f"{name} imports unpackaged {dependency}"
+
+
+def test_application_manifest_is_accepted_by_update_path_validation():
+    files = source_files(ROOT)
+    assert "integrations/dsh-desktop/bridge.mjs" in files
+    for name in files:
+        assert managed_name(name) == name

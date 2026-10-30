@@ -11,10 +11,9 @@ from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
-from classcue.dsh_pipe import BridgeFailure, PipeClient
+from classcue.dsh_pipe import BridgeFailure, PipeClient, DESKTOP_VERSIONS
 
 MAX_CONTENT_BYTES = 20 * 1024 * 1024
-DESKTOP_VERSION = "0.2.1-rc.3"
 DEFAULT_WAKE_TIMEOUT = 8.0
 
 
@@ -38,7 +37,6 @@ def study_snapshot(store, library_id: str, question_id: str) -> dict:
         if hashlib.sha256(image).hexdigest() != capture["image_hash"]:
             raise ValueError("视频题图内容已变化，请重新保存题图")
         content = [
-            {"type": "text", "text": f"课程：{question['course_name']}\n出处：{question['source_name']}\n题目：{question['title']}"},
             {"type": "image", "media_type": question["mime_type"],
              "data": base64.b64encode(image).decode("ascii")},
         ]
@@ -48,10 +46,7 @@ def study_snapshot(store, library_id: str, question_id: str) -> dict:
                 "content_version": question["version"], "title": question["title"],
                 "source": question["source_name"], "content": content}
     document = materials.document(question["document_id"])
-    content = [{"type": "text", "text": (
-        f"课程：{question['course_name']}\n出处：{document['name']}\n题号：{question.get('number') or '未填写'}\n"
-        f"题目：{question.get('title') or '所选题目'}"
-    )}]
+    content = []
     for region in question["regions"]:
         block = region["block"]
         if block["kind"] in {"pdf_page", "image"}:
@@ -70,7 +65,7 @@ def study_snapshot(store, library_id: str, question_id: str) -> dict:
             content.append({"type": "text", "text": text})
         else:
             raise BridgeFailure("unsupported_block", "此题目来源暂不能发送")
-    if len(content) == 1:
+    if not content:
         raise BridgeFailure("empty_question", "请先在资料中选择一道完整题目")
     if len(content) > 24 or sum(len(p.get("text", "").encode("utf-8")) +
                               len(p.get("data", "")) * 3 // 4 for p in content) > MAX_CONTENT_BYTES:
@@ -93,11 +88,16 @@ class BridgeStore:
                 instance_id TEXT NOT NULL, snapshot TEXT NOT NULL, receipt TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
             db.execute("CREATE INDEX IF NOT EXISTS dsh_bridge_question ON dsh_bridge_requests(question_id,content_version)")
+            db.execute("""CREATE TABLE IF NOT EXISTS dsh_bridge_roots (
+                config_id TEXT PRIMARY KEY, instance_id TEXT NOT NULL, path TEXT NOT NULL,
+                receipt TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS dsh_bridge_root_selection (
+                instance_id TEXT PRIMARY KEY, config_id TEXT NOT NULL)""")
 
     def connect(self, path: Path, factory=PipeClient):
         client = factory(path)
         status = client.call("status")
-        if status.get("protocol") != 1 or status.get("desktop_version") != DESKTOP_VERSION:
+        if status.get("protocol") != 1 or status.get("desktop_version") not in DESKTOP_VERSIONS:
             raise BridgeFailure("version_incompatible", "桌面桥接版本不兼容")
         with self.store.connect() as db:
             db.execute("""INSERT INTO dsh_bridge_connection VALUES(1,?,?)
@@ -195,6 +195,19 @@ class BridgeStore:
         with self.store.connect() as db:
             db.execute("UPDATE dsh_bridge_requests SET receipt=? WHERE request_id=?", (encode(receipt), request_id))
 
+    def workspace_root(self, instance_id=None):
+        with self.store.connect() as db:
+            if instance_id is None:
+                connection = db.execute("SELECT instance_id FROM dsh_bridge_connection WHERE id=1").fetchone()
+                if not connection:
+                    return None
+                instance_id = connection["instance_id"]
+            row = db.execute("""SELECT r.receipt FROM dsh_bridge_roots r
+                JOIN dsh_bridge_root_selection s ON s.config_id=r.config_id
+                WHERE s.instance_id=? AND r.instance_id=? AND r.receipt IS NOT NULL""",
+                             (instance_id, instance_id)).fetchone()
+        return json.loads(row["receipt"]) if row else None
+
 
 class DshBridge:
     def __init__(self, store, library_id, snapshot_provider=study_snapshot, client_factory=PipeClient):
@@ -212,6 +225,36 @@ class DshBridge:
                 raise
         self.records.auto_connect(self.client_factory)
         return self.records.client(self.client_factory)
+
+    @staticmethod
+    def require_tree(status):
+        if "workspace_tree" not in status.get("capabilities", []):
+            raise BridgeFailure("plugin_outdated", "请更新 ClassCue 插件至 0.3.0，并完全退出后重新启动 DSH")
+
+    def configure_root(self, path, instance_id):
+        client, status = self.active_client()
+        self.require_tree(status)
+        if instance_id != status["instance_id"]:
+            raise BridgeFailure("instance_mismatch", "DSH 实例已变化，请刷新连接设置后重新选择目录")
+        selected = Path(path).expanduser()
+        if not selected.is_absolute() or not selected.is_dir():
+            raise ValueError("请选择已存在的绝对目录")
+        selected = str(selected.resolve())
+        with self.store.connect() as db:
+            latest = db.execute("""SELECT config_id FROM dsh_bridge_roots WHERE instance_id=? AND path=?
+                ORDER BY rowid DESC LIMIT 1""", (instance_id, selected)).fetchone()
+            config_id = latest["config_id"] if latest else uuid4().hex
+            db.execute("INSERT OR IGNORE INTO dsh_bridge_roots(config_id,instance_id,path) VALUES(?,?,?)",
+                       (config_id, instance_id, selected))
+        root = client.call("configure_root", {"config_id": config_id, "library_id": self.library_id, "path": selected})
+        if (root.get("config_id") != config_id or root.get("instance_id") != instance_id
+                or not root.get("workspace_id") or not root.get("path")):
+            raise BridgeFailure("invalid_response", "DSH 返回了无效的根目录绑定")
+        with self.store.connect() as db:
+            db.execute("UPDATE dsh_bridge_roots SET receipt=? WHERE config_id=?", (encode(root), config_id))
+            db.execute("""INSERT INTO dsh_bridge_root_selection VALUES(?,?)
+                ON CONFLICT(instance_id) DO UPDATE SET config_id=excluded.config_id""", (instance_id, config_id))
+        return root
 
     def prepare(self, question_id, *, workspace_id=None, new_discussion=False):
         client, status = self.active_client()
@@ -235,16 +278,20 @@ class DshBridge:
                     raise BridgeFailure("instance_mismatch", "该题绑定到另一个 DSH 实例，请连接原实例或明确新建讨论")
                 request = json.loads(row["snapshot"])
             else:
-                if snapshot.get("course_id") and "course_workspace" not in status.get("capabilities", []):
-                    raise BridgeFailure("plugin_outdated", "DSH 插件尚未加载课程分组，请完全退出并重新启动 DSH")
-                request = {**snapshot, "request_id": uuid4().hex,
-                           "new_discussion": new_discussion}
+                self.require_tree(status)
+                root = self.records.workspace_root(status["instance_id"])
+                if not root:
+                    raise BridgeFailure("root_required", "请先选择 DSH 默认工作区目录")
                 if workspace_id:
-                    request["workspace_id"] = workspace_id
+                    raise ValueError("自动目录不能指定旧课程工作区")
+                request = {**snapshot, "request_id": uuid4().hex,
+                           "new_discussion": new_discussion, "layout": "workspace_tree", "root_id": root["config_id"]}
                 # This is committed before crossing the pipe. Timeouts reuse this exact intent.
                 db.execute("INSERT INTO dsh_bridge_requests VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)",
                            (request["request_id"], question_id, snapshot["content_version"],
                             status["instance_id"], encode(request), None))
+        if request.get("layout") == "workspace_tree":
+            self.require_tree(status)
         receipt = client.call("prepare", request)
         self.records.save_receipt(request["request_id"], receipt)
         self.records.wake()
@@ -255,6 +302,8 @@ class DshBridge:
         client, status = self.active_client() if open_session else self.records.client(self.client_factory)
         if row["instance_id"] != status["instance_id"]:
             raise BridgeFailure("instance_mismatch", "请连接此讨论原先使用的 DSH 桌面实例")
+        if json.loads(row["snapshot"]).get("layout") == "workspace_tree":
+            self.require_tree(status)
         try:
             receipt = client.call("open" if open_session else "request", {"request_id": request_id})
         except BridgeFailure as error:
