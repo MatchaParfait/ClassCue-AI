@@ -126,7 +126,9 @@ def discover_videos(folder: str | Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES)
 
 
-def register_local_video(store: VideoStore, raw_path: str | Path, audio_dir: str | Path) -> tuple[int, Path, bool]:
+def register_local_video(
+    store: VideoStore, raw_path: str | Path, audio_dir: str | Path, *, secondary_only: bool = False,
+) -> tuple[int, Path, bool]:
     video_path = Path(raw_path).expanduser().resolve()
     if not video_path.is_file():
         raise ValueError("找不到该本机视频文件")
@@ -137,6 +139,8 @@ def register_local_video(store: VideoStore, raw_path: str | Path, audio_dir: str
         raise ValueError("视频超过 1GB，请压缩后再识别")
     existing_path = store.get_video_by_path(video_path)
     if existing_path and int(existing_path["source_size"] or 0) == stat.st_size and int(existing_path["source_mtime_ns"] or 0) == stat.st_mtime_ns:
+        if existing_path["is_secondary"] and not secondary_only:
+            store.promote_secondary_video(int(existing_path["id"]))
         return int(existing_path["id"]), video_path, True
 
     # The full hash is only needed for a new file or a file whose cheap identity changed.
@@ -144,6 +148,8 @@ def register_local_video(store: VideoStore, raw_path: str | Path, audio_dir: str
     existing = store.get_video_by_hash(digest)
     if existing:
         store.update_video_path(int(existing["id"]), str(video_path), stat.st_size, stat.st_mtime_ns)
+        if existing["is_secondary"] and not secondary_only:
+            store.promote_secondary_video(int(existing["id"]))
         return int(existing["id"]), video_path, True
     duration = video_duration_ms(video_path)
     if duration <= 0:
@@ -156,10 +162,13 @@ def register_local_video(store: VideoStore, raw_path: str | Path, audio_dir: str
             int(existing_path["id"]), digest, video_path.name, str(video_path), str(audio_path), duration,
             stat.st_size, stat.st_mtime_ns,
         )
+        if existing_path["is_secondary"] and not secondary_only:
+            store.promote_secondary_video(int(existing_path["id"]))
         return int(existing_path["id"]), video_path, False
     return store.create_video(
         digest, video_path.name, str(video_path), str(audio_path), duration,
         source_size=stat.st_size, source_mtime_ns=stat.st_mtime_ns,
+        secondary_only=secondary_only,
     ), video_path, False
 
 

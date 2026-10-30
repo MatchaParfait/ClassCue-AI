@@ -474,12 +474,14 @@ describe("secondary camera and primary timeline", () => {
     const click = vi.spyOn(picker, "click").mockImplementation(() => undefined);
     act(() => button("导入副视角").click());
     expect(click).toHaveBeenCalledOnce();
-    vi.spyOn(api, "uploadVideo").mockResolvedValue({ video: { ...video, id: 2 }, existed: false });
-    vi.spyOn(api, "setSecondaryView").mockResolvedValue(secondary);
+    vi.spyOn(api, "uploadSecondaryView").mockResolvedValue({ video: { ...video, id: 2 }, secondary_view: secondary });
+    vi.spyOn(api, "uploadVideo");
+    vi.spyOn(api, "setSecondaryView");
     Object.defineProperty(picker, "files", { configurable: true, value: [file] });
     await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
-    expect(api.uploadVideo).toHaveBeenCalledWith(file);
-    expect(api.setSecondaryView).toHaveBeenCalledWith(1, 2);
+    expect(api.uploadSecondaryView).toHaveBeenCalledWith(1, file);
+    expect(api.uploadVideo).not.toHaveBeenCalled();
+    expect(api.setSecondaryView).not.toHaveBeenCalled();
     expect(button("切换到副视角")).not.toBeNull();
   });
 });

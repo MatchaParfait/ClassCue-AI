@@ -44,6 +44,7 @@ def register_managed_video(
     on_registered: Callable[[int], None] | None = None,
     delete_source_after_import: bool = True,
     source_folder: str | None = None,
+    secondary_only: bool = False,
 ) -> tuple[int, Path, bool, str | None]:
     source = Path(raw_path).expanduser().absolute()
     if source.resolve() != source or source.is_symlink():
@@ -63,7 +64,9 @@ def register_managed_video(
     with FileLock(str(Path(store.path).parent / "video-library.lock"), timeout=30):
         current = store.get_video_by_path(source)
         if current and source.is_relative_to(library_dir) and name == source.name:
-            video_id, path, existed = video_pipeline.register_local_video(store, source, audio_dir)
+            video_id, path, existed = video_pipeline.register_local_video(
+                store, source, audio_dir, secondary_only=secondary_only,
+            )
             if on_registered:
                 on_registered(video_id)
             return video_id, path, existed, None
@@ -113,7 +116,9 @@ def register_managed_video(
 
         registered = False
         try:
-            video_id, path, existed = video_pipeline.register_local_video(store, destination, audio_dir)
+            video_id, path, existed = video_pipeline.register_local_video(
+                store, destination, audio_dir, secondary_only=secondary_only,
+            )
             registered = True
             original_folder = str(source.parent) if not source.is_relative_to(library_dir) else None
             if source_folder is not None:

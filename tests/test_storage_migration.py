@@ -92,6 +92,27 @@ def test_verified_move_keeps_video_identity_content_and_metadata(library):
     assert set(phases) >= {"copying", "verifying", "committing", "cleaning", "completed"}
 
 
+def test_hidden_secondary_video_is_migrated_and_remains_playable(library):
+    f = library
+    source = f.root / "videos" / "secondary-hash" / "secondary.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"secondary")
+    secondary = f.store.create_video("secondary-hash", source.name, str(source),
+                                    str(f.audio.parent / "secondary.wav"), 1000, secondary_only=True)
+    f.store.set_secondary_view(f.video_id, secondary, -500)
+    assert secondary not in {row["id"] for row in f.store.list_videos()}
+    plan = migration.plan_migration(f.project, f.store, f.values)
+    assert str(source) in {entry["source"] for entry in plan["entries"]}
+    assert migration.migrate(f.project, f.store, f.values, expected_plan=plan["plan_id"])["committed"]
+    moved = f.store.get_video(secondary)
+    assert moved["is_secondary"] == 1
+    assert Path(moved["video_path"]).is_relative_to(Path(f.values["video_library_dir"]))
+    assert Path(moved["video_path"]).read_bytes() == b"secondary"
+    assert f.store.get_secondary_view(f.video_id)["offset_ms"] == -500
+    assert f.client.get(f"/api/videos/{secondary}/stream").content == b"secondary"
+    assert not source.exists()
+
+
 def test_conflicting_target_does_not_overwrite_or_switch_anything(library):
     f = library
     destination = Path(f.values["video_library_dir"]) / "hash" / "lesson.mp4"

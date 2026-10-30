@@ -101,7 +101,7 @@ def search_subtitles(
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     parameters: list[object] = []
     index_join = ""
-    predicates = []
+    predicates = ["v.is_secondary = 0"]
     # FTS5 trigrams require three code points; shorter queries still work via LIKE.
     if len(query) >= 3:
         index_join = "JOIN video_subtitle_fts ON video_subtitle_fts.rowid = s.row_id"

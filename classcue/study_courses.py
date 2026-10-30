@@ -147,7 +147,8 @@ class StudyCourseStore:
                     WHERE NOT EXISTS(SELECT 1 FROM study_courses c WHERE c.folder_id=f.id))
                 SELECT m.id,m.video_id,m.start_ms FROM question_visuals q
                 JOIN video_markers m ON m.id=q.marker_id JOIN videos v ON v.id=m.video_id
-                WHERE m.review_status!='excluded' AND json_extract(q.payload_json,'$.binding.capture_id') IS NOT NULL
+                WHERE m.review_status!='excluded' AND v.is_secondary=0
+                AND json_extract(q.payload_json,'$.binding.capture_id') IS NOT NULL
                 AND v.library_folder_id IN (SELECT id FROM tree)
                 ORDER BY v.library_order,v.id,m.start_ms,m.id""", (course_id,)).fetchall()
         values = []

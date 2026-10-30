@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { searchSubtitles, getSearchPreviewUrl, getRecentJobs } from "./client";
+import { searchSubtitles, getSearchPreviewUrl, getRecentJobs, uploadSecondaryView } from "./client";
 import { getAiSettings, saveAiSettings } from "./client";
 import { createManualQuestion, renameManualQuestion, getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, updateQuestionEmphasis, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
 
@@ -97,6 +97,23 @@ it("uploads actual browser file bytes with an encoded filename and normalizes th
   expect(fetch).toHaveBeenCalledWith(`/api/videos/upload?filename=${encodeURIComponent(file.name)}`, {
     method: "POST", headers: { Accept: "application/json", "Content-Type": "application/octet-stream" }, body: file,
   });
+});
+
+it("uploads a secondary recording with its parent in one request", async () => {
+  const file = new File(["secondary"], "camera #2.mp4", { type: "video/mp4" });
+  const secondary = { video_id: 3, offset_ms: 0, filename: file.name, duration_ms: 1000 };
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    video: { id: 3, filename: file.name, duration_ms: "1000" }, secondary_view: secondary,
+  }) });
+  vi.stubGlobal("fetch", fetch);
+  expect(await uploadSecondaryView(7, file)).toMatchObject({
+    secondary_view: secondary, video: { id: 3, duration_ms: 1000 },
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith(
+    `/api/videos/upload?filename=${encodeURIComponent(file.name)}&secondary_for=7`,
+    expect.objectContaining({ method: "POST", body: file }),
+  );
 });
 
 it("versions thumbnail URLs by library and source, not processing state", () => {

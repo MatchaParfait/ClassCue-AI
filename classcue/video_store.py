@@ -52,6 +52,7 @@ class VideoStore:
                     status TEXT NOT NULL DEFAULT 'uploaded',
                     library_folder_id INTEGER REFERENCES video_folders(id) ON DELETE SET NULL,
                     library_order INTEGER NOT NULL DEFAULT 0,
+                    is_secondary INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS video_folders (
@@ -396,6 +397,17 @@ class VideoStore:
                 WHERE library_order = 0
                 """
             )
+        if "is_secondary" not in columns:
+            connection.execute("ALTER TABLE videos ADD COLUMN is_secondary INTEGER NOT NULL DEFAULT 0")
+            # Old secondary uploads used ordinary rows. Preserve sources with independent study data.
+            connection.execute("""
+                UPDATE videos SET is_secondary = 1
+                WHERE id IN (SELECT secondary_video_id FROM video_secondary_views)
+                    AND id NOT IN (SELECT video_id FROM video_secondary_views)
+                    AND status = 'uploaded'
+                    AND NOT EXISTS (SELECT 1 FROM video_transcript_segments s WHERE s.video_id = videos.id)
+                    AND NOT EXISTS (SELECT 1 FROM video_markers m WHERE m.video_id = videos.id)
+            """)
 
     @staticmethod
     def _migrate_video_metadata(connection: sqlite3.Connection) -> None:
@@ -573,15 +585,21 @@ class VideoStore:
         duration_ms: int,
         source_size: int = 0,
         source_mtime_ns: int = 0,
+        *,
+        secondary_only: bool = False,
     ) -> int:
         display_name = Path(filename).stem or filename
         source_folder = str(Path(video_path).expanduser().resolve().parent)
         with self.connect() as connection:
             cursor = connection.execute(
-                "INSERT INTO videos(content_hash, filename, display_name, video_path, source_folder, audio_path, duration_ms, source_size, source_mtime_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (content_hash, filename, display_name, video_path, source_folder, audio_path, duration_ms, source_size, source_mtime_ns),
+                "INSERT INTO videos(content_hash, filename, display_name, video_path, source_folder, audio_path, duration_ms, source_size, source_mtime_ns, is_secondary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (content_hash, filename, display_name, video_path, source_folder, audio_path, duration_ms, source_size, source_mtime_ns, int(secondary_only)),
             )
             return int(cursor.lastrowid)
+
+    def promote_secondary_video(self, video_id: int) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE videos SET is_secondary = 0 WHERE id = ?", (video_id,))
 
     def get_video_by_path(self, video_path: str | Path) -> sqlite3.Row | None:
         resolved = str(Path(video_path).expanduser().resolve())
@@ -675,13 +693,13 @@ class VideoStore:
                 (video_id,),
             ).fetchone()
 
-    def list_videos(self) -> list[sqlite3.Row]:
+    def list_videos(self, *, include_secondary: bool = False) -> list[sqlite3.Row]:
         with self.connect() as connection:
             return connection.execute(
                 "SELECT v.*, EXISTS(SELECT 1 FROM video_transcript_segments s "
                 "WHERE s.video_id = v.id) AS has_transcript, "
                 "(SELECT COUNT(1) FROM video_slides sl WHERE sl.video_id = v.id) AS slide_count "
-                "FROM videos v "
+                "FROM videos v " + ("" if include_secondary else "WHERE v.is_secondary = 0 ") +
                 "ORDER BY v.created_at DESC, v.id DESC"
             ).fetchall()
 
@@ -732,6 +750,7 @@ class VideoStore:
                 ), video_counts AS (
                     SELECT d.root_id, COUNT(*) AS video_count
                     FROM descendants d JOIN videos v ON v.library_folder_id = d.id
+                    WHERE v.is_secondary = 0
                     GROUP BY d.root_id
                 ), marker_counts AS (
                     SELECT d.root_id,
@@ -740,7 +759,7 @@ class VideoStore:
                         SUM(m.importance = 'critical') AS critical_count
                     FROM descendants d JOIN videos v ON v.library_folder_id = d.id
                     JOIN video_markers m ON m.video_id = v.id
-                    WHERE m.review_status != 'excluded'
+                    WHERE m.review_status != 'excluded' AND v.is_secondary = 0
                     GROUP BY d.root_id
                 )
                 SELECT f.*, COALESCE(v.video_count, 0) AS video_count,
@@ -1454,7 +1473,7 @@ class VideoStore:
     def _library_directory_order(connection: sqlite3.Connection, parent_id: int | None) -> list[dict[str, object]]:
         return [{"type": row["kind"], "id": row["id"]} for row in connection.execute(
             "SELECT 'folder' AS kind, id, library_order FROM video_folders WHERE parent_id IS ? "
-            "UNION ALL SELECT 'video' AS kind, id, library_order FROM videos WHERE library_folder_id IS ? "
+            "UNION ALL SELECT 'video' AS kind, id, library_order FROM videos WHERE library_folder_id IS ? AND is_secondary = 0 "
             "ORDER BY library_order, id",
             (parent_id, parent_id),
         )]
@@ -1596,14 +1615,14 @@ class VideoStore:
                     "UNION SELECT f.id FROM video_folders f JOIN tree t ON f.parent_id = t.id) "
                     "SELECT v.*, EXISTS(SELECT 1 FROM video_transcript_segments s "
                     "WHERE s.video_id = v.id) AS has_transcript FROM videos v "
-                    "WHERE v.library_folder_id IN (SELECT id FROM tree) "
+                    "WHERE v.library_folder_id IN (SELECT id FROM tree) AND v.is_secondary = 0 "
                     "ORDER BY v.library_folder_id, v.library_order, v.display_name COLLATE NOCASE, v.id",
                     (int(folder_id),),
                 ).fetchall()
             return connection.execute(
                 "SELECT v.*, EXISTS(SELECT 1 FROM video_transcript_segments s "
                 "WHERE s.video_id = v.id) AS has_transcript FROM videos v "
-                "WHERE v.library_folder_id IS ? "
+                "WHERE v.library_folder_id IS ? AND v.is_secondary = 0 "
                 "ORDER BY v.library_order, v.display_name COLLATE NOCASE, v.id",
                 (None if folder_id is None else int(folder_id),),
             ).fetchall()
@@ -1631,7 +1650,7 @@ class VideoStore:
             expected_videos = {
                 int(row["id"])
                 for row in connection.execute(
-                    "SELECT id FROM videos WHERE library_folder_id IS ?", (parent_id,)
+                    "SELECT id FROM videos WHERE library_folder_id IS ? AND is_secondary = 0", (parent_id,)
                 )
             }
             if set(ordered_folders) - expected_folders:
@@ -1673,7 +1692,7 @@ class VideoStore:
             expected_videos = {
                 int(row["id"])
                 for row in connection.execute(
-                    "SELECT id FROM videos WHERE library_folder_id IS ?", (parent_id,)
+                    "SELECT id FROM videos WHERE library_folder_id IS ? AND is_secondary = 0", (parent_id,)
                 )
             }
             seen: set[tuple[str, int]] = set()
@@ -1698,7 +1717,7 @@ class VideoStore:
                     FROM video_folders WHERE parent_id IS ?
                     UNION ALL
                     SELECT 'video' AS kind, id, library_order
-                    FROM videos WHERE library_folder_id IS ?
+                    FROM videos WHERE library_folder_id IS ? AND is_secondary = 0
                     ORDER BY library_order, id
                     """,
                     (parent_id, parent_id),

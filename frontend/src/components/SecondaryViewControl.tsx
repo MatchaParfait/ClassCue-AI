@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeftRight, Check, LoaderCircle, SlidersHorizontal, Trash2 } from "lucide-react";
-import { getSecondaryView, removeSecondaryView, setSecondaryView, setSecondaryViewOffset, uploadVideo } from "../api/client";
+import { getSecondaryView, removeSecondaryView, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
 import type { SecondaryView } from "../types";
 import { AnimatePresence, AnimatedPopup } from "./Motion";
 
@@ -79,11 +79,9 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
         event.currentTarget.value = "";
         if (!file) return;
         void run(async () => {
-          const uploaded = await uploadVideo(file);
-          if (uploaded.video.id === videoId) throw new Error("副视角不能使用主视频本身，请选择另一个视频");
-          const view = await setSecondaryView(videoId, uploaded.video.id);
+          const uploaded = await uploadSecondaryView(videoId, file);
           if (alive.current) {
-            onChangeRef.current(view);
+            onChangeRef.current(uploaded.secondary_view);
             setOpen(true);
             if (uploaded.video.storage_warning) setError(uploaded.video.storage_warning);
           }
@@ -119,7 +117,7 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
           </div>
         </form>
         <span className="secondary-view-mapping">副视角时间 = 主视频时间 {secondary.offset_ms < 0 ? "-" : "+"} {Math.abs(secondary.offset_ms) / 1000} 秒</span>
-        <button className="secondary-view-remove" type="button" aria-label="删除副视角" title="删除副视角关联，保留视频库文件"
+        <button className="secondary-view-remove" type="button" aria-label="删除副视角" title="删除副视角关联，保留视频文件"
           disabled={busy || switching} onClick={() => void run(async () => {
             await removeSecondaryView(videoId);
             if (alive.current) { onChangeRef.current(null); setOpen(false); }

@@ -796,6 +796,16 @@ export async function uploadVideo(file: File): Promise<{ video: Video; existed: 
   return { ...raw, video: normalizeVideo(raw.video) };
 }
 
+export async function uploadSecondaryView(videoId: number, file: File): Promise<{
+  secondary_view: SecondaryView; video: Video;
+}> {
+  const raw = await request<{ secondary_view: SecondaryView; video: Video }>(
+    `/api/videos/upload?filename=${encodeURIComponent(file.name)}&secondary_for=${videoId}`,
+    { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file },
+  );
+  return { ...raw, video: normalizeVideo(raw.video) };
+}
+
 export function getSecondaryView(videoId: number): Promise<SecondaryView | null> {
   return request(`/api/videos/${videoId}/secondary-view`);
 }

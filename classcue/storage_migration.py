@@ -143,7 +143,7 @@ def plan_migration(project: Path, store, values: dict) -> dict:
     asr_storage.validate_video_directory(new_videos, new_audio, new_logs,
                                         new_assets / "models" / "asr", new_assets / ".runtime",
                                         project / ".runtime")
-    registered = store.list_videos()
+    registered = store.list_videos(include_secondary=True)
     entries, sections, updates = [], [], []
     for label, source, target in pairs:
         if source == target:
