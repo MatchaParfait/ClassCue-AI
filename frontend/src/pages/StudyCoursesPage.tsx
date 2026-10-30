@@ -74,13 +74,19 @@ export function StudyCoursesPage({ active = true, scope = "default", libraryId =
   const home = () => leave(() => { setError(""); setRebinding(false); navigateWithin({}); });
   return <div className="study-courses-page" data-layout={course ? tab : "courses"}>
     <header className="study-courses-heading">
-      <div>{(courseId || unassigned) && <button className="icon-button" title="返回全部课程" aria-label="返回全部课程" onClick={home}><ArrowLeft size={18} /></button>}
+      <div className="study-course-identity">{(courseId || unassigned) && <button className="icon-button" title="返回全部课程" aria-label="返回全部课程" onClick={home}><ArrowLeft size={18} /></button>}
         <Folder size={22} /><h1>{course?.name || (unassigned ? "待归属资料" : "学习资料")}</h1></div>
-      {course && <button className="secondary-button" disabled={busy} onClick={() => {
-        setBindingFolder(course.folder_id === null ? "" : String(course.folder_id)); setRebinding(true); setError("");
-      }}><Folder size={16} />{course.folder_id === null ? "关联视频文件夹" : "更改关联"}</button>}
-      {course?.folder_id && <Link className="secondary-button" to={`/library/folder/folder-${course.folder_id}`}><Video size={16} />课程视频</Link>}
-      {!courseId && !unassigned && <button className="primary-button" disabled={busy} onClick={() => { setCreating(value => !value); setError(""); }}><FolderPlus size={17} />新建课程资料夹</button>}
+      {course && <nav className="study-course-tabs" aria-label="课程资料视图">
+        <button aria-pressed={tab === "documents"} onClick={() => leave(() => navigateWithin({ course: courseId }))}><BookOpen size={16} />上传资料</button>
+        <button aria-pressed={tab === "video"} onClick={() => leave(() => navigateWithin({ course: courseId, tab: "video" }))}><Video size={16} />视频例题</button>
+      </nav>}
+      <div className="study-course-actions">
+        {course && <button className="secondary-button" disabled={busy} onClick={() => {
+          setBindingFolder(course.folder_id === null ? "" : String(course.folder_id)); setRebinding(true); setError("");
+        }}><Folder size={16} />{course.folder_id === null ? "关联视频文件夹" : "更改关联"}</button>}
+        {course?.folder_id && <Link className="secondary-button" to={`/library/folder/folder-${course.folder_id}`}><Video size={16} />课程视频</Link>}
+        {!courseId && !unassigned && <button className="primary-button" disabled={busy} onClick={() => { setCreating(value => !value); setError(""); }}><FolderPlus size={17} />新建课程资料夹</button>}
+      </div>
     </header>
     {failure && <div className="study-error" role="alert">{failure}<button className="text-button" onClick={() => { void retry(); }}>重新读取</button></div>}
     {(courses.isPending || busy && incomingFolder) && <div className="study-empty" role="status"><LoaderCircle className="spin" size={20} />正在读取课程…</div>}
@@ -124,10 +130,6 @@ export function StudyCoursesPage({ active = true, scope = "default", libraryId =
       {!!legacy.data?.length && <button className="study-course-row" onClick={() => navigateWithin({ view: "unassigned" })}><FileText size={26} /><span><strong>待归属资料</strong><small>{legacy.data.length} 份</small></span></button>}
       {!courses.data?.length && !legacy.data?.length && <div className="study-empty"><FolderPlus size={32} /><span>暂无课程资料夹</span></div>}
     </div>}
-    {course && <nav className="study-course-tabs" aria-label="课程资料视图">
-      <button aria-pressed={tab === "documents"} onClick={() => leave(() => navigateWithin({ course: courseId }))}><BookOpen size={16} />上传资料</button>
-      <button aria-pressed={tab === "video"} onClick={() => leave(() => navigateWithin({ course: courseId, tab: "video" }))}><Video size={16} />视频例题</button>
-    </nav>}
     {course && <div className="study-course-reader" hidden={tab !== "documents"}>
       <StudyMaterialsPage key={`${scope}:${courseId}`} scope={scope} courseId={courseId} active={active && tab === "documents"} />
     </div>}

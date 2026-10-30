@@ -403,6 +403,8 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
   const editing = selecting || isDirty;
   const savedQuestion = activeQuestions.find(item => item.id === draft.id && item.document_id === documentId);
   const questionTitle = draft.title || `题目 ${draftNumber}`;
+  const hasQuestionImages = draft.regions.some(region => blocks.data?.some(block =>
+    block.id === region.block_id && (block.kind === "pdf_page" || block.kind === "image")));
   const continuousPreview = document?.format === "markdown" || draft.regions.some((region, index, values) =>
     region.selection_group && values.some((other, position) => position !== index && other.selection_group === region.selection_group));
   const regionPreviews = draft.regions.map((region, index) => {
@@ -591,9 +593,15 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
         <div className="study-question-scroll">
           {(draft.regions.length > 0 || editing) && <div className="study-draft">
             <div className="study-draft-heading"><span>{editing ? draft.id ? "编辑题目" : `题目 ${draftNumber}` : "当前题目"}{isDirty && " · 未保存"}</span>
-              {!selecting && <button className="icon-button" title="编辑题目" aria-label="编辑题目" onClick={() => {
-                setAppendRegionMode(false); setSelecting(true);
-              }}><Pencil size={15} /></button>}</div>
+              <div className="study-draft-heading-actions">
+                {!!draft.regions.length && !hasQuestionImages && <button className="icon-button" type="button"
+                  title="放大题目预览" aria-label="放大题目预览" aria-haspopup="dialog" onClick={() => setPreviewOpen(true)}>
+                  <Maximize2 size={15} /></button>}
+                {!selecting && <button className="icon-button" title="编辑题目" aria-label="编辑题目" onClick={() => {
+                  setAppendRegionMode(false); setSelecting(true);
+                }}><Pencil size={15} /></button>}
+              </div>
+            </div>
             {!editing && <div className="study-question-summary"><h2 className="study-question-title">{questionTitle}</h2>
               <span>{draft.number && `原题号 ${draft.number} · `}{draft.regions.length} 个区域</span></div>}
             {editing && <><input aria-label="题目标题" placeholder={`题目 ${draftNumber}`} value={draft.title} maxLength={180} disabled={busy}
@@ -605,10 +613,10 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
             }}><Plus size={15} />{appendRegionMode ? "取消添加区域" : "添加另一区域"}</button>
               <button className="icon-button" title="撤销选区操作" aria-label="撤销选区操作" disabled={!history.length || busy} onClick={undo}><Undo2 size={15} /></button></div>
             </>}
-            {!!draft.regions.length && <button className="text-button study-open-preview" onClick={() => setPreviewOpen(true)}><Maximize2 size={15} />完整预览</button>}
             {!draft.regions.length && <p className="study-muted study-no-region">尚未选择原文范围</p>}
             {continuousPreview ? <>
-              <StudyQuestionContent documentId={documentId} regions={draft.regions} blocks={blocks.data || []} />
+              <StudyQuestionContent documentId={documentId} regions={draft.regions} blocks={blocks.data || []}
+                onPreview={() => setPreviewOpen(true)} />
               {!!draft.regions.length && <details className="study-source-management"><summary>来源与选区</summary>{regionPreviews}</details>}
             </> : regionPreviews}
             {editing && <button className="text-button" disabled={!readable || busy} onClick={() => attachment.current?.click()}><ImagePlus size={15} />补充题图</button>}

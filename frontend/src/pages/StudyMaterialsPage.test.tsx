@@ -334,11 +334,42 @@ it("separates saved reading from editing and keeps the question index outside lo
 
 it("opens the entire selected question in a zoomable preview", async () => {
   await mount(); await click(button("选题")); await click(container.querySelector(".study-block-check")!);
-  await click(button("完整预览"));
+  expect(container.textContent).not.toContain("完整预览");
+  await click(container.querySelector('[aria-label="放大题目预览"]')!);
   expect(window.document.querySelector('[role="dialog"] .study-markdown')?.textContent).toContain("第三题");
   const enlarge = window.document.querySelector('[aria-label="放大预览"]')!;
   await click(enlarge);
   expect(window.document.querySelector(".study-preview-tools")?.textContent).toContain("125%");
+  await click(window.document.querySelector('[aria-label="关闭预览"]')!);
+  expect(window.document.querySelector(".study-preview-dialog")).toBeNull();
+  expect(api.saveStudyQuestion).not.toHaveBeenCalled();
+});
+
+it.each([1, 2])("opens a saved question with %i image regions by clicking its image", async count => {
+  const pages: api.StudyBlock[] = Array.from({ length: count }, (_, index) => ({
+    id: `page${index + 1}`, document_id: "d1", ordinal: index, kind: "pdf_page",
+    page: index + 1, width: 600, height: 800,
+  }));
+  const regions = pages.map(block => ({
+    block_id: block.id, block, bbox: [0, 0, 1, 1] as api.StudyRegion["bbox"],
+    ...(count > 1 ? { selection_group: "whole-question" } : {}),
+  }));
+  vi.mocked(api.getStudyDocuments).mockResolvedValue([{
+    ...document, format: "pdf", name: "paper.pdf", page_count: count, reading: { question_id: "q1" },
+  }]);
+  vi.mocked(api.getStudyBlocks).mockResolvedValue(pages);
+  vi.mocked(api.getStudyQuestions).mockResolvedValue([{
+    id: "q1", document_id: "d1", title: "整道情景题", number: "", version: 1, deleted: false, regions,
+  }]);
+  await mount();
+  expect(container.textContent).not.toContain("完整预览");
+  expect(container.querySelector('[aria-label="放大题目预览"]')).toBeNull();
+  const image = container.querySelector<HTMLButtonElement>('[aria-label="放大选区 1"]')!;
+  expect(image.tagName).toBe("BUTTON");
+  await click(image);
+  const dialog = window.document.querySelector('[role="dialog"]')!;
+  expect(dialog.querySelectorAll(".study-question-content > img")).toHaveLength(count);
+  expect(dialog.querySelector(".study-region-zoom")).toBeNull();
   await click(window.document.querySelector('[aria-label="关闭预览"]')!);
   expect(window.document.querySelector(".study-preview-dialog")).toBeNull();
   expect(api.saveStudyQuestion).not.toHaveBeenCalled();
@@ -358,7 +389,7 @@ it("renders selected Markdown as one continuous question with source controls fo
   expect(content.textContent).not.toMatch(/第.*行/);
   expect(content.querySelector("header,.study-region-preview")).toBeNull();
   expect(container.querySelector<HTMLDetailsElement>(".study-source-management")?.open).toBe(false);
-  await click(button("完整预览"));
+  await click(container.querySelector('[aria-label="放大题目预览"]')!);
   expect(window.document.querySelectorAll('[role="dialog"] .study-markdown')).toHaveLength(1);
   expect(window.document.querySelector('[role="dialog"] .study-preview-source')).toBeNull();
 });

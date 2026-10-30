@@ -5,8 +5,8 @@ import { studyRegionUrl, type StudyBlock, type StudyRegion } from "../api/studyM
 import { useModalFocus } from "../hooks/useModalFocus";
 import { StudyMarkdown } from "./StudyMarkdown";
 
-export function StudyQuestionContent({ documentId, regions, blocks }: {
-  documentId: string; regions: StudyRegion[]; blocks: StudyBlock[];
+export function StudyQuestionContent({ documentId, regions, blocks, onPreview }: {
+  documentId: string; regions: StudyRegion[]; blocks: StudyBlock[]; onPreview?: () => void;
 }) {
   const parts: { key: number; text?: string; region?: StudyRegion }[] = [];
   for (const [index, region] of regions.entries()) {
@@ -21,7 +21,10 @@ export function StudyQuestionContent({ documentId, regions, blocks }: {
   }
   return <div className="study-question-content">{parts.map(part => part.text !== undefined
     ? <StudyMarkdown key={part.key} text={part.text} />
-    : <img key={part.key} src={studyRegionUrl(documentId, part.region!)} alt={`题目选区 ${part.key + 1}`} />)}</div>;
+    : onPreview ? <button key={part.key} className="study-region-zoom" type="button" aria-label={`放大选区 ${part.key + 1}`}
+      aria-haspopup="dialog" onClick={onPreview}>
+      <img src={studyRegionUrl(documentId, part.region!)} alt={`题目选区 ${part.key + 1}`} />
+    </button> : <img key={part.key} src={studyRegionUrl(documentId, part.region!)} alt={`题目选区 ${part.key + 1}`} />)}</div>;
 }
 
 export function StudyQuestionPreview({ documentId, title, regions, blocks, onClose }: {
