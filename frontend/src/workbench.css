@@ -232,10 +232,10 @@
 .folder-window {
   position: relative;
   display: grid; grid-template-rows: auto auto minmax(0, 1fr);
-  height: min(720px, calc(100dvh - 64px)); min-height: 0; overflow: hidden; outline: none;
-  border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); width: min(1040px, calc(100vw - 96px)); animation: surface-enter var(--ui-panel) var(--ui-ease); border-color: var(--ui-border); box-shadow: 0 24px 80px color-mix(in srgb, var(--ui-shadow-ink) 18.8%, transparent); }
+  height: min(960px, calc(100dvh - 64px)); min-height: 0; overflow: hidden; outline: none;
+  border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); width: min(1440px, calc(100vw - 64px)); animation: surface-enter var(--ui-panel) var(--ui-ease); border-color: var(--ui-border); box-shadow: 0 24px 80px color-mix(in srgb, var(--ui-shadow-ink) 18.8%, transparent); }
 .folder-window-unfold {
-  display: grid; min-height: 0; width: min(1040px, calc(100vw - 96px));
+  display: grid; min-height: 0; width: min(1440px, calc(100vw - 64px));
   transform-style: preserve-3d; will-change: clip-path, transform;
 }
 .folder-window-unfold > .folder-window { width: 100%; }
@@ -247,7 +247,23 @@ body[data-modal-locked="true"] .library-scene { right: var(--modal-scrollbar-wid
 .folder-window-heading > svg { flex: 0 0 auto; color: var(--ui-amber); }
 .folder-window-toolbar { display: flex; justify-content: flex-end; padding: 12px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
 .folder-window-content { min-height: 0; padding: 20px 24px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: var(--ui-bg); }
-.folder-window-list.library-grid-list { overflow: visible; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding: 0; }
+.folder-window-list.library-grid-list { overflow: visible; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; padding: 0; }
+.folder-window-list > .video-card + .folder-card,
+.folder-window-list > .folder-card + .video-card { grid-column-start: 1; }
+body[data-library-pointer-drag="true"],
+body[data-library-pointer-drag="true"] * { cursor: grabbing !important; user-select: none; }
+.library-drag-preview {
+  position: fixed; z-index: 1000; top: 0; left: 0; display: flex; align-items: center; gap: 12px;
+  width: 260px; max-width: calc(100vw - 24px); padding: 10px 12px; pointer-events: none;
+  border: 1px solid var(--ui-accent-strong); border-radius: 8px; background: var(--ui-surface-raised);
+  color: var(--ui-text); box-shadow: var(--ui-shadow-overlay); opacity: .94;
+}
+.library-drag-preview > img { flex: 0 0 64px; width: 64px; height: 40px; border-radius: 4px; object-fit: cover; }
+.library-drag-preview > .folder-icon { flex-shrink: 0; }
+.library-drag-preview > span:last-child {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600;
+}
 .folder-drop-destinations {
   position: absolute; z-index: 8; left: 16px; right: 72px; top: 10px; bottom: 10px;
   display: flex; gap: 12px; padding: 0; border-radius: 8px;
@@ -327,6 +343,7 @@ body[data-modal-locked="true"] .library-scene { right: var(--modal-scrollbar-wid
 .recycle-confirm-dialog .recycle-confirm-submit { min-width: 142px; background: var(--ui-red); border-color: var(--ui-red); color: var(--ui-on-inverse); }
 .recycle-confirm-dialog .recycle-confirm-submit:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-red) 86%, black); border-color: color-mix(in srgb, var(--ui-red) 86%, black); }
 @media (min-width: 1100px) { .library-grid-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { .folder-window-list.library-grid-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (min-width: 1400px) { .library-grid-list { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1700px) { .library-grid-list { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .study-share-backdrop { z-index: 65; }

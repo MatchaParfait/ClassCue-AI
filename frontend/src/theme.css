@@ -201,6 +201,7 @@
   .library-grid-list, .folder-window-list.library-grid-list { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .library-toolbar { flex-wrap: wrap; }
   .folder-window { width: 100%; height: calc(100dvh - 32px); }
+  .folder-window-unfold { width: 100%; }
   .modal-backdrop { padding: 16px; }
   .folder-window-heading, .folder-window-toolbar, .folder-window-content { padding-left: 16px; padding-right: 16px; }
   .library-processing-options { padding: 16px; }

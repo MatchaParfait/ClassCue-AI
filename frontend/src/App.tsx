@@ -3,6 +3,7 @@ import { isShortcutInput, isUndoShortcut } from "./shortcuts";
 import { useDragTextHints } from "./libraryPreferences";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useStartupLibraryView } from "./hooks/useStartupLibraryView";
+import { useLibraryPointerDrag } from "./hooks/useLibraryPointerDrag";
 import type { StartupLibraryView } from "./hooks/useDesktopAPI";
 import { releaseStartupCover } from "./startupTransition";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -351,6 +352,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const processingForm = { ...processingFormOptions, recallModes };
   const libraryBackgroundRef = useRef<HTMLDivElement>(null);
   const librarySurfaceRef = useRef<HTMLElement>(null);
+  useLibraryPointerDrag(librarySurfaceRef, active && !suspended);
   useEntryMotion(libraryBackgroundRef, { active, initial: false, duration: .14 });
   const folderTriggerRef = useRef<HTMLElement | null>(null);
   const folderScrolls = useRef<Record<string, number>>(savedNavigation.current.folderId
@@ -749,7 +751,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const handleDragOver = (event: DragEvent<HTMLElement>, item: LibraryItem, parentId: string | null = null) => {
     event.preventDefault();
     const intent = resolveDropIntent(event, item, parentId);
-    setDropIntent(intent);
+    setDropIntent(current => current?.targetKey === intent?.targetKey && current?.mode === intent?.mode
+      && current?.edge === intent?.edge ? current : intent);
     event.dataTransfer.dropEffect = intent ? "move" : "none";
   };
 
