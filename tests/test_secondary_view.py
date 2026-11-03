@@ -1,4 +1,7 @@
 from pathlib import Path
+import asyncio
+from contextlib import contextmanager
+from threading import Event, Thread
 
 import pytest
 from fastapi.testclient import TestClient
@@ -96,6 +99,187 @@ def secondary_upload_library(secondary_library, tmp_path, monkeypatch):
 def upload_secondary(client, primary, content=b"synthetic secondary upload"):
     return client.post("/api/videos/upload", params={"filename": "secondary.mp4", "secondary_for": primary},
                        content=content)
+
+
+def test_secondary_upload_waiting_for_import_lock_keeps_health_responsive(secondary_upload_library):
+    import httpx
+
+    client, _, ids = secondary_upload_library
+    locked, health_finished = Event(), Event()
+    health_during_import = []
+
+    def hold_import_lock():
+        with client.app.state.jobs._lock:
+            locked.set()
+            health_during_import.append(health_finished.wait(3))
+
+    worker = Thread(target=hold_import_lock)
+    worker.start()
+    assert locked.wait(3)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
+                                    base_url="http://127.0.0.1") as requests:
+            async def heartbeat():
+                # Give the upload a turn to reach its lock acquisition.
+                await asyncio.sleep(0.05)
+                try:
+                    return await requests.get("/api/health")
+                finally:
+                    health_finished.set()
+
+            return await asyncio.gather(
+                requests.post("/api/videos/upload", params={
+                    "filename": "secondary.mp4", "secondary_for": ids[0],
+                }, content=b"synthetic concurrent upload"),
+                heartbeat(),
+            )
+
+    try:
+        uploaded, health = asyncio.run(exercise())
+    finally:
+        health_finished.set()
+        worker.join(5)
+    assert uploaded.status_code == 200, uploaded.text
+    assert health.status_code == 200
+    assert health_during_import == [True], "upload lock acquisition blocked the service event loop"
+
+
+@pytest.mark.parametrize("phase", ["temporary_creation", "registration", "temporary_cleanup"])
+def test_secondary_upload_disk_work_keeps_health_responsive(secondary_upload_library, monkeypatch, phase):
+    import httpx
+
+    client, store, ids = secondary_upload_library
+    entered, health_finished = Event(), Event()
+    health_during_disk_work, temporary_paths = [], []
+    original_directory = api_main.TemporaryDirectory
+    original_register = api_main.register_managed_video
+
+    def pause():
+        entered.set()
+        health_during_disk_work.append(health_finished.wait(3))
+
+    @contextmanager
+    def directory(**kwargs):
+        if phase == "temporary_creation":
+            pause()
+        with original_directory(**kwargs) as temporary:
+            temporary_paths.append(Path(temporary))
+            try:
+                yield temporary
+            finally:
+                if phase == "temporary_cleanup":
+                    pause()
+
+    def register(*args, **kwargs):
+        if phase == "registration":
+            pause()
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", directory)
+    monkeypatch.setattr(api_main, "register_managed_video", register)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
+                                    base_url="http://127.0.0.1") as requests:
+            async def heartbeat():
+                try:
+                    assert await asyncio.to_thread(entered.wait, 5)
+                    return await requests.get("/api/health")
+                finally:
+                    health_finished.set()
+
+            return await asyncio.gather(
+                requests.post("/api/videos/upload", params={
+                    "filename": "secondary.mp4", "secondary_for": ids[0],
+                }, content=b"synthetic disk work upload"),
+                heartbeat(),
+            )
+
+    try:
+        uploaded, health = asyncio.run(exercise())
+    finally:
+        health_finished.set()
+    assert uploaded.status_code == 200, uploaded.text
+    assert health.status_code == 200
+    assert health_during_disk_work == [True], f"{phase} blocked the service event loop"
+    assert store.get_secondary_view(ids[0])["video_id"] == uploaded.json()["video_id"]
+    assert temporary_paths and all(not path.exists() for path in temporary_paths)
+
+
+@pytest.mark.parametrize("cancellation", ["asyncio", "anyio"])
+def test_cancelled_secondary_upload_closes_file_before_removing_directory(
+    secondary_upload_library, monkeypatch, cancellation,
+):
+    import anyio
+    from starlette.requests import Request
+
+    client, store, ids = secondary_upload_library
+    original_directory, original_open = api_main.TemporaryDirectory, Path.open
+    directories, contexts, files, closed_before_cleanup = [], [], [], []
+
+    @contextmanager
+    def directory(**kwargs):
+        temporary = original_directory(**kwargs)
+        directories.append(temporary)
+        try:
+            yield temporary.name
+        finally:
+            closed_before_cleanup.append(bool(files) and all(file.closed for file in files))
+            temporary.cleanup()
+
+    def make_directory(**kwargs):
+        context = directory(**kwargs)
+        contexts.append(context)  # Keep GC from masking skipped __exit__ calls.
+        return context
+
+    def open_file(path, *args, **kwargs):
+        file = original_open(path, *args, **kwargs)
+        if path.name == "secondary.mp4" and args == ("wb",):
+            files.append(file)
+        return file
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", make_directory)
+    monkeypatch.setattr(Path, "open", open_file)
+    endpoint = next(route.endpoint for route in client.app.routes
+                    if getattr(route, "path", None) == "/api/videos/upload")
+
+    async def exercise():
+        received = False
+        scope = None
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": b"synthetic partial upload", "more_body": True}
+            if cancellation == "asyncio":
+                raise asyncio.CancelledError()
+            scope.cancel()
+            await anyio.lowlevel.checkpoint()
+            raise AssertionError("cancelled stream continued")
+
+        request = Request({"type": "http", "method": "POST"}, receive)
+        if cancellation == "asyncio":
+            with pytest.raises(asyncio.CancelledError):
+                await endpoint(request, filename="secondary.mp4", secondary_for=ids[0])
+        else:
+            with anyio.CancelScope() as scope:
+                await endpoint(request, filename="secondary.mp4", secondary_for=ids[0])
+            assert scope.cancelled_caught
+
+    try:
+        asyncio.run(exercise())
+        assert files and all(file.closed for file in files)
+        assert closed_before_cleanup == [True]
+        assert directories and all(not Path(directory.name).exists() for directory in directories)
+        assert store.get_secondary_view(ids[0]) is None
+        assert len(store.list_videos(include_secondary=True)) == 3
+    finally:
+        for file in files:
+            file.close()
+        for temporary in directories:
+            temporary.cleanup()
 
 
 def test_secondary_upload_stays_out_of_library_counts_search_and_folder_batches(secondary_upload_library):

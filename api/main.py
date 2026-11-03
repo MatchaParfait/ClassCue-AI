@@ -16,7 +16,7 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Iterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, RLock
@@ -24,6 +24,7 @@ from tempfile import SpooledTemporaryFile, TemporaryDirectory
 from typing import Annotated, Any, Callable, Literal
 from urllib.parse import quote, urlsplit
 
+from anyio import CancelScope
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
@@ -2364,6 +2365,20 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             video["storage_warning"] = warning
             return {"video": video, "video_id": video_id, "existed": existed}
 
+    @asynccontextmanager
+    async def upload_io_context(factory):
+        async def exit_context(*exc_info):
+            with CancelScope(shield=True):
+                return await run_in_threadpool(manager.__exit__, *exc_info)
+
+        async with AsyncExitStack() as cleanup:
+            # Register cleanup before cancellation can interrupt resource acquisition.
+            with CancelScope(shield=True):
+                manager = await run_in_threadpool(factory)
+                resource = await run_in_threadpool(manager.__enter__)
+                cleanup.push_async_exit(exit_context)
+            yield resource
+
     @api.post("/api/videos/upload")
     async def upload_video(
         request: Request, filename: str = Query(min_length=1, max_length=200),
@@ -2376,18 +2391,23 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             video_filename(filename, Path(f"upload{suffix}"))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        with jobs._lock:
-            ensure_file_changes_allowed()
-            if secondary_for is not None:
-                _video_or_404(provider.get(), secondary_for)
+
+        def validate_upload():
+            with jobs._lock:
+                ensure_file_changes_allowed()
+                if secondary_for is not None:
+                    _video_or_404(provider.get(), secondary_for)
+
+        # Imports hold the task lock while copying; waiting here must not stall HTTP.
+        await run_in_threadpool(validate_upload)
 
         # Stream browser files to disk; never buffer a classroom recording in memory.
-        with TemporaryDirectory(prefix="classroom-upload-") as temporary:
+        async with upload_io_context(lambda: TemporaryDirectory(prefix="classroom-upload-")) as temporary:
             # Windows TEMP may use an 8.3 alias; canonicalize this server-owned directory.
-            source = Path(temporary).resolve() / filename
+            source = (await run_in_threadpool(Path(temporary).resolve)) / filename
             size = 0
             try:
-                with source.open("wb") as output:
+                async with upload_io_context(lambda: source.open("wb")) as output:
                     async for chunk in request.stream():
                         size += len(chunk)
                         if size > MAX_VIDEO_BYTES:
