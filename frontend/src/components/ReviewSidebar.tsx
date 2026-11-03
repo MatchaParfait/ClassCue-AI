@@ -1,6 +1,6 @@
 import { useShortcuts, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedListItem, AnimatedQuote, Collapse, FadeRegion, SelectionIndicator, useEntryMotion, useSelectionScope } from "./Motion";
-import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Save, Search, Star, Trash2, Undo2, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Redo2, Save, Search, Star, Trash2, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AnalysisRun, Marker, MarkerImportance, MarkerMode, RecallMode, ReviewFilter, ReviewStatus } from "../types";
 import { recallLabel, useRecallSchemes } from "../hooks/useRecallSchemes";
@@ -34,6 +34,8 @@ interface ReviewSidebarProps {
   onChangeStatus: (marker: Marker, status: ReviewStatus) => void;
   onUndo: () => void;
   canUndo: boolean;
+  onRedo?: () => void;
+  canRedo?: boolean;
   undoLabel?: string;
   undoing?: boolean;
   onRestoreExcluded: (marker: Marker) => void;
@@ -74,6 +76,8 @@ export function ReviewSidebar({
   onChangeStatus,
   onUndo,
   canUndo,
+  onRedo,
+  canRedo = false,
   undoLabel = "重点已移除",
   undoing = false,
   onRestoreExcluded,
@@ -250,6 +254,11 @@ export function ReviewSidebar({
             aria-keyshortcuts="Control+Z Meta+Z"><Undo2 size={14} />{undoing ? "正在撤销…" : "撤销"}</button>
         </div>
       )}
+      {canRedo && <div className="redo-banner">
+        <span>可重做上次撤销的操作</span>
+        <button type="button" onClick={onRedo} disabled={undoing} title="重做（Ctrl+Y / Ctrl+Shift+Z）"
+          aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Y Meta+Shift+Z"><Redo2 size={14} />重做</button>
+      </div>}
 
       <div ref={markerListRef} className="marker-list" aria-label="重点列表">
       {analysisVideoId && markers.length > 0 && mode !== "strict_exam_intent"

@@ -269,6 +269,42 @@ it("Ctrl+Z undoes a new manual point without seeking, and the point remains reco
   await until(() => expect(row(4)).not.toBeNull());
 });
 
+it("redoes a creation without creating a duplicate or changing playback", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  expect(key("y", { ctrlKey: true }).defaultPrevented).toBe(true);
+  await until(() => expect(row(4)).not.toBeNull());
+  expect(api.createManualQuestion).toHaveBeenCalledTimes(1);
+  expect(api.updateMarkerStatus).toHaveBeenLastCalledWith(4, "active");
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  await act(async () => container.querySelector<HTMLButtonElement>(".redo-banner button")!.click());
+  await until(() => expect(row(4)).not.toBeNull());
+  expect(container.querySelector("video")!.currentTime).toBe(150.425);
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+});
+
+it("keeps failed redo available and clears it after a new successful edit", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  vi.mocked(api.updateMarkerStatus).mockRejectedValueOnce(new Error("Redo unavailable"));
+  key("Z", { ctrlKey: true, shiftKey: true });
+  await until(() => expect(container.querySelector("[role=alert]")?.textContent).toContain("重做失败"));
+  expect(container.querySelector(".redo-banner")).not.toBeNull();
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4)).not.toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  key("w");
+  await until(() => expect(row(5)).not.toBeNull());
+  expect(container.querySelector(".redo-banner")).toBeNull();
+  expect(key("y", { ctrlKey: true }).defaultPrevented).toBe(false);
+});
+
 it("undoes removals and multiple creations in reverse operation order", async () => {
   key("w");
   await until(() => expect(row(4)).not.toBeNull());
@@ -436,6 +472,18 @@ it("undoes time, importance, emphasis, title and creation together in reverse or
   expect(key("z", { ctrlKey: true }).defaultPrevented).toBe(false);
   expect(container.querySelector("video")!.currentTime).toBe(180);
   expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4)).not.toBeNull());
+  key("Z", { ctrlKey: true, shiftKey: true });
+  await until(() => expect(row(4).querySelector(".marker-main strong")?.textContent).toBe("Named question"));
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4).classList.contains("is-question-emphasized")).toBe(true));
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-importance-label")?.textContent).toBe("很重要"));
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4).querySelector(".marker-time-jump")?.textContent).toBe("3:00"));
+  expect(key("y", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(api.createManualQuestion).toHaveBeenCalledTimes(1);
 });
 
 it("restores a previous adjusted time when undoing a reset to the original position", async () => {
@@ -548,6 +596,10 @@ it("captures the current frame for the clicked question and Ctrl+Z restores its 
   expect(container.querySelector('[role="dialog"]')).toBeNull();
   key("z", { ctrlKey: true });
   await until(() => expect(questionImages.setQuestionImage).toHaveBeenCalledWith(1, original));
+  key("y", { ctrlKey: true });
+  await until(() => expect(questionImages.setQuestionImage).toHaveBeenLastCalledWith(1, {
+    capture_id: "new", binding_mode: "manual",
+  }));
 });
 
 it("a failed current-frame capture leaves the image and undo history unchanged", async () => {

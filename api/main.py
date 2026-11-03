@@ -2328,6 +2328,25 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @api.get("/api/library/redo/latest")
+    def latest_library_redo() -> dict[str, object] | None:
+        return provider.get().latest_library_redo()
+
+    @api.post("/api/library/redo")
+    def redo_library_edit() -> dict[str, object]:
+        with jobs._lock:
+            store = provider.get()
+            latest = store.latest_library_redo()
+            if latest and latest["kind"] in {"video", "folder"}:
+                ensure_file_changes_allowed()
+            try:
+                return store.undo_latest_library_edit(
+                    asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / ".recycle_bin",
+                    asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()), redo=True,
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @api.post("/api/library/reorder")
     def reorder_library(payload: LibraryReorderPayload, background: BackgroundTasks) -> dict[str, object]:
         folder_id = payload.parent_id

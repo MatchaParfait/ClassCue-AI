@@ -35,7 +35,7 @@ export function bindingFromEvent(event: KeyEvent): string | null {
   return normalizeBinding([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Meta", key].filter(Boolean).join("+"));
 }
 const reserved = new Set(["F5", "F6", "F11", "F12", "Alt+F4", "Alt+Tab", "Alt+ArrowLeft", "Alt+ArrowRight", "Ctrl+R", "Ctrl+Shift+R", "Ctrl+W", "Ctrl+Shift+W", "Ctrl+T", "Ctrl+N", "Ctrl+L", "Ctrl+Shift+T", "Ctrl+Shift+N", "Ctrl+Alt+Delete", "Meta+Q", "Meta+W", "Meta+R", "Meta+L", "Meta+T", "Meta+N"]);
-const undoBindings = new Set(["Ctrl+Z", "Meta+Z", "Ctrl+Shift+Z", "Meta+Shift+Z"]);
+const undoBindings = new Set(["Ctrl+Z", "Meta+Z", "Ctrl+Shift+Z", "Meta+Shift+Z", "Ctrl+Y", "Meta+Y"]);
 export function validateShortcuts(map: ShortcutMap, wake = ""): string | null {
   if (wake && !/^Ctrl\+(Alt|Shift)\+[A-Z0-9]$/.test(wake)) return "启动 / 唤起仅支持 Ctrl+Alt+字母/数字或 Ctrl+Shift+字母/数字。";
   const used: { binding: string; label: string }[] = wake ? [{ binding: wake, label: "启动 / 唤起" }] : [];
@@ -69,6 +69,12 @@ export function isShortcutInput(target: EventTarget | null): boolean {
 export function isUndoShortcut(event: KeyboardEvent): boolean {
   return (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z"
     && !event.shiftKey && !event.altKey && !event.repeat && !event.isComposing && !event.defaultPrevented;
+}
+export function isRedoShortcut(event: KeyboardEvent): boolean {
+  return (event.ctrlKey || event.metaKey) && !event.altKey && !event.repeat
+    && !event.isComposing && !event.defaultPrevented
+    && ((event.key.toLowerCase() === "z" && event.shiftKey)
+      || (event.key.toLowerCase() === "y" && !event.shiftKey));
 }
 // Stable snapshots let every mounted page adopt changes immediately, including retained pages.
 let cachedRaw: string | null | undefined;

@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { SHORTCUTS_KEY, defaultShortcuts, isUndoShortcut, matchesShortcut, readShortcuts, saveShortcuts, validateShortcuts } from "./shortcuts";
+import { SHORTCUTS_KEY, defaultShortcuts, isUndoShortcut, isRedoShortcut, matchesShortcut, readShortcuts, saveShortcuts, validateShortcuts } from "./shortcuts";
 beforeEach(() => {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) });
@@ -108,4 +108,19 @@ it("reserves undo keys and preserves unrelated preferences while removing old co
   expect(readShortcuts().nextMarker).toEqual(["J"]);
   expect(readShortcuts().previousMarker).toEqual(["H"]);
   expect(readShortcuts().search).toEqual([]);
+});
+
+it("recognizes redo combinations with exact modifiers and reserves them", () => {
+  for (const options of [{ key: "y", ctrlKey: true }, { key: "Z", ctrlKey: true, shiftKey: true },
+    { key: "z", metaKey: true, shiftKey: true }]) {
+    expect(isRedoShortcut(new KeyboardEvent("keydown", options))).toBe(true);
+  }
+  for (const options of [{ key: "y", ctrlKey: true, shiftKey: true },
+    { key: "y", ctrlKey: true, altKey: true }, { key: "z", ctrlKey: true },
+    { key: "y", ctrlKey: true, repeat: true }, { key: "y", ctrlKey: true, isComposing: true }]) {
+    expect(isRedoShortcut(new KeyboardEvent("keydown", options))).toBe(false);
+  }
+  const map = defaultShortcuts();
+  map.nextMarker = ["Ctrl+Y"];
+  expect(validateShortcuts(map)).toContain("重做");
 });

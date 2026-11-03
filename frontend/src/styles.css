@@ -150,11 +150,11 @@ h1, h2, p { margin: 0; }
 .marker-reset-time { margin-left: auto; }
 .marker-time-editor .field-error { margin: 0; overflow-wrap: anywhere; }
 .marker-time-editor button:focus-visible, .marker-edit-time:focus-visible { outline: 2px solid var(--ui-border); outline-offset: 2px; }
-.danger-action, .undo-banner button {
+.danger-action, .undo-banner button, .redo-banner button {
   display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 5px; color: var(--ui-accent-strong); background: var(--ui-surface); font-size: 12px;
 }
 .danger-action { color: var(--ui-red); }
-.undo-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid var(--ui-amber); border-radius: 6px; color: var(--ui-amber); background: var(--ui-surface-soft); font-size: 12px; }
+.undo-banner, .redo-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid var(--ui-amber); border-radius: 6px; color: var(--ui-amber); background: var(--ui-surface-soft); font-size: 12px; }
 .excluded-section summary { cursor: pointer; }
 .excluded-list { display: grid; gap: 6px; margin-top: 8px; }
 .excluded-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

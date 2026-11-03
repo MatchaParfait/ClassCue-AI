@@ -326,6 +326,13 @@ export async function getLatestLibraryUndo(): Promise<LibraryUndoEntry | null> {
 export async function undoLibraryEdit(): Promise<LibraryUndoEntry> {
   return request<LibraryUndoEntry>("/api/library/undo", { method: "POST" });
 }
+export async function getLatestLibraryRedo(): Promise<LibraryUndoEntry | null> {
+  return request<LibraryUndoEntry | null>("/api/library/redo/latest");
+}
+
+export async function redoLibraryEdit(): Promise<LibraryUndoEntry> {
+  return request<LibraryUndoEntry>("/api/library/redo", { method: "POST" });
+}
 
 export async function moveVideoToFolder(videoId: number, folderId: number | null, previousOrder?: LibraryOrderItem[]): Promise<Video> {
   return normalizeVideo(await request<Video>(`/api/videos/${videoId}/folder`, {

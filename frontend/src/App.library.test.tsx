@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestLibraryUndo, undoLibraryEdit, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getRecentJobs, getLibraryStatus, type LibraryResponse } from "./api/client";
+import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestLibraryUndo, getLatestLibraryRedo, undoLibraryEdit, redoLibraryEdit, getLibrary, getVideos, moveLibraryFolder, moveVideoToFolder, renameVideoFile, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, getJob, getPausedJobs, getLatestBatch, getRecentJobs, getLibraryStatus, type LibraryResponse } from "./api/client";
 import type { Job, Video } from "./types";
 import type { LibraryUndoEntry } from "./api/client";
 import { saveDragTextHints } from "./libraryPreferences";
@@ -34,6 +34,8 @@ vi.mock("./api/client", async (importOriginal) => ({
   deleteVideo: vi.fn(),
   getLatestLibraryUndo: vi.fn(async () => null),
   undoLibraryEdit: vi.fn(),
+  getLatestLibraryRedo: vi.fn(async () => null),
+  redoLibraryEdit: vi.fn(),
 }));
 
 vi.mock("./components/VideoPanel", () => ({ VideoPanel: () => <div /> }));
@@ -87,6 +89,8 @@ beforeEach(async () => {
   vi.mocked(deleteLibraryFolder).mockReset().mockResolvedValue({ operation_id: "trash-folder", kind: "folder", videos: 0, folders: 1 });
   vi.mocked(getLatestLibraryUndo).mockReset().mockResolvedValue(null);
   vi.mocked(undoLibraryEdit).mockReset().mockResolvedValue({ operation_id: "undo", kind: "video", videos: 1, folders: 0 });
+  vi.mocked(getLatestLibraryRedo).mockReset().mockResolvedValue(null);
+  vi.mocked(redoLibraryEdit).mockReset();
   vi.mocked(renameVideoFile).mockReset().mockImplementation(async (id, filename) => {
     videos = videos.map((video) => video.id === id
       ? { ...video, filename, display_name: filename.replace(/\.[^.]+$/, ""), video_path: `library/${filename}` } : video);
@@ -173,7 +177,9 @@ describe("library layout undo", () => {
   function installHistory() {
     let order = ["folder-7", "video-1", "video-2"];
     const history: Array<{ entry: LibraryUndoEntry; videos: Video[]; order: string[] }> = [];
+    const redo: Array<{ action: typeof history[number]; videos: Video[]; order: string[] }> = [];
     const record = (kind: LibraryUndoEntry["kind"], parentId: number | null = null) => {
+      redo.length = 0;
       history.push({ entry: { operation_id: `operation-${history.length + 1}`, kind, parent_id: parentId },
         videos: videos.map(video => ({ ...video })), order: [...order] });
     };
@@ -181,6 +187,7 @@ describe("library layout undo", () => {
       .sort((a, b) => order.indexOf(`${a.type}-${a.folder?.id ?? a.video?.id}`)
         - order.indexOf(`${b.type}-${b.folder?.id ?? b.video?.id}`));
     vi.mocked(getLatestLibraryUndo).mockImplementation(async () => history.at(-1)?.entry ?? null);
+    vi.mocked(getLatestLibraryRedo).mockImplementation(async () => redo.at(-1)?.action.entry ?? null);
     vi.mocked(getLibrary).mockImplementation(async id => ({ ...libraryResponse(id ?? null), items: items(id ?? null) }));
     vi.mocked(moveVideoToFolder).mockImplementation(async (id, folderId) => {
       record("move_video", videos.find(video => video.id === id)!.folder_id ?? null);
@@ -199,9 +206,18 @@ describe("library layout undo", () => {
     });
     vi.mocked(undoLibraryEdit).mockImplementation(async () => {
       const action = history.pop()!;
+      redo.push({ action, videos: videos.map(video => ({ ...video })), order: [...order] });
       videos = action.videos;
       order = action.order;
       return { ...action.entry, videos: 1, folders: 0, ordered_items: items(action.entry.parent_id ?? null)
+        .map(item => ({ type: item.type, id: (item.folder?.id ?? item.video?.id)! })) };
+    });
+    vi.mocked(redoLibraryEdit).mockImplementation(async () => {
+      const saved = redo.pop()!;
+      history.push(saved.action);
+      videos = saved.videos;
+      order = saved.order;
+      return { ...saved.action.entry, ordered_items: items(saved.action.entry.parent_id ?? null)
         .map(item => ({ type: item.type, id: (item.folder?.id ?? item.video?.id)! })) };
     });
     return history;
@@ -355,6 +371,40 @@ describe("library layout undo", () => {
     expect(history).toHaveLength(1);
     undoKey();
     await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+  });
+
+  it("redoes a move through Ctrl+Y and the toolbar after reopening", async () => {
+    installHistory();
+    await moveFirstVideo();
+    undoKey();
+    await until(() => expect(container.querySelector<HTMLButtonElement>(".library-redo")!.disabled).toBe(false));
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "y", ctrlKey: true, bubbles: true, cancelable: true })));
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App />));
+    await until(() => expect(container.querySelector<HTMLButtonElement>(".library-redo")!.disabled).toBe(false));
+    await act(async () => container.querySelector<HTMLButtonElement>(".library-redo")!.click());
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    expect(redoLibraryEdit).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed redo retryable and clears redo after a new edit", async () => {
+    installHistory();
+    await moveFirstVideo();
+    undoKey();
+    await until(() => expect(container.querySelector<HTMLButtonElement>(".library-redo")!.disabled).toBe(false));
+    vi.mocked(redoLibraryEdit).mockRejectedValueOnce(new Error("Redo unavailable"));
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Z", ctrlKey: true, shiftKey: true, bubbles: true })));
+    await until(() => expect(container.querySelector(".library-operation-error")?.textContent).toContain("重做失败"));
+    await act(async () => container.querySelector<HTMLButtonElement>(".library-operation-error button")!.click());
+    await until(() => expect(rootVideoOrder()).toEqual(["video-2"]));
+    undoKey();
+    await until(() => expect(rootVideoOrder()).toEqual(["video-1", "video-2"]));
+    await moveFirstVideo();
+    await until(() => expect(container.querySelector<HTMLButtonElement>(".library-redo")!.disabled).toBe(true));
   });
 });
 

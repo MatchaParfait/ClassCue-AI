@@ -1,5 +1,5 @@
 import { UnsavedChangesProvider } from "./components/UnsavedChanges";
-import { isShortcutInput, isUndoShortcut } from "./shortcuts";
+import { isShortcutInput, isUndoShortcut, isRedoShortcut } from "./shortcuts";
 import { useDragTextHints } from "./libraryPreferences";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useStartupLibraryView } from "./hooks/useStartupLibraryView";
@@ -39,13 +39,14 @@ import {
   Sparkles,
   Trash2,
   Undo2,
+  Redo2,
   Upload,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider, Link, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, type Location } from "react-router-dom";
 import { MATERIALS_ENABLED } from "./featureFlags";
-import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestLibraryUndo, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoLibraryEdit } from "./api/client";
+import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestLibraryUndo, getLatestLibraryRedo, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoLibraryEdit, redoLibraryEdit } from "./api/client";
 import type { LibraryFolder, LibraryOrderItem } from "./api/client";
 import { GlobalSearchProvider, GlobalSearchButton } from "./components/GlobalSearch";
 import { FolderWindow } from "./components/FolderWindow";
@@ -413,10 +414,17 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const [pptVideo, setPptVideo] = useState<Video | null>(null);
   const [canUndoLibrary, setCanUndoLibrary] = useState(false);
   const [undoingLibrary, setUndoingLibrary] = useState(false);
+  const [canRedoLibrary, setCanRedoLibrary] = useState(false);
+  const [redoingLibrary, setRedoingLibrary] = useState(false);
   const libraryChangingRef = useRef(false);
   const [libraryChanging, setLibraryChanging] = useState(false);
   const libraryUndoLatest = useQuery({
     queryKey: ["library-undo-latest"], queryFn: getLatestLibraryUndo, enabled: active,
+    staleTime: 15_000, refetchOnWindowFocus: true,
+    refetchInterval: active ? LIBRARY_SYNC_INTERVAL : false, refetchIntervalInBackground: false,
+  });
+  const libraryRedoLatest = useQuery({
+    queryKey: ["library-redo-latest"], queryFn: getLatestLibraryRedo, enabled: active,
     staleTime: 15_000, refetchOnWindowFocus: true,
     refetchInterval: active ? LIBRARY_SYNC_INTERVAL : false, refetchIntervalInBackground: false,
   });
@@ -684,9 +692,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       try {
         await reorderLibrary(parseFolderId(parentId), orderedItems, apiLibraryOrder(keys));
         setCanUndoLibrary(true);
+        setCanRedoLibrary(false);
         setNotice("已调整顺序，按 Ctrl+Z 撤销");
         void queryClient.invalidateQueries({ queryKey: ["library"] });
         void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
+        void queryClient.invalidateQueries({ queryKey: ["library-redo-latest"] });
       } catch (error) {
         setLibraryState(state => parentId
           ? { ...state, folderOrders: { ...state.folderOrders, [parentId]: allOrdered } }
@@ -841,7 +851,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       void queryClient.invalidateQueries({ queryKey: ["videos"] });
       void queryClient.invalidateQueries({ queryKey: ["library"] });
       setCanUndoLibrary(true);
+      setCanRedoLibrary(false);
       void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-redo-latest"] });
       setNotice(savedFolder ? "视频已移入文件夹" : "视频已放回一级目录");
     } catch (error) {
       setOperationError({ text: `视频移动失败：${errorMessage(error)}`, retry: () => { void moveVideo(videoId, destination); } });
@@ -867,7 +879,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         apiLibraryOrder((previousParent === null ? rootItems : folderItems).map(item => item.key)));
       await queryClient.invalidateQueries({ queryKey: ["library"] });
       setCanUndoLibrary(true);
+      setCanRedoLibrary(false);
       void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-redo-latest"] });
       setNotice(destination ? "文件夹已移入目标文件夹" : "文件夹已放回一级目录");
     } catch (error) {
       setOperationError({ text: `文件夹移动失败：${errorMessage(error)}`, retry: () => { void moveFolder(sourceId, destination); } });
@@ -928,28 +942,31 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     }
   };
 
-  const undoLibraryAction = async () => {
-    if (!workspaceSettled || !canUndoLibrary || libraryChangingRef.current || recycleTarget || renamingFolder
+  const undoLibraryAction = async (redo = false) => {
+    if (!workspaceSettled || !(redo ? canRedoLibrary : canUndoLibrary) || libraryChangingRef.current || recycleTarget || renamingFolder
       || isCreatingFolder || renamingVideo || pptVideo || draggedKey) return;
     libraryChangingRef.current = true;
     setLibraryChanging(true);
-    setUndoingLibrary(true);
+    if (redo) setRedoingLibrary(true);
+    else setUndoingLibrary(true);
     setOperationError(null);
     try {
-      const restored = await undoLibraryEdit();
+      const restored = await (redo ? redoLibraryEdit() : undoLibraryEdit());
       const layoutEdit = ["move_video", "move_folder", "reorder"].includes(restored.kind);
-      if (layoutEdit) {
+      if (layoutEdit || redo) {
         setFolderId(restored.parent_id == null ? null : `folder-${restored.parent_id}`);
         if (restored.parent_id == null) setSortMode("manual");
         else setFolderSortMode("manual");
       }
-      setNotice(layoutEdit ? restored.kind === "reorder" ? "已撤销排序" : "已撤销移动"
+      setNotice(redo ? restored.kind === "reorder" ? "已重做排序" : layoutEdit ? "已重做移动" : "已重做删除"
+        : layoutEdit ? restored.kind === "reorder" ? "已撤销排序" : "已撤销移动"
         : (restored.videos ?? 0) > 1 ? `已恢复 ${restored.videos} 个视频` : "已恢复到视频库");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["videos"] }),
         queryClient.invalidateQueries({ queryKey: ["library"] }),
         queryClient.invalidateQueries({ queryKey: ["library-status"] }),
         queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] }),
+        queryClient.invalidateQueries({ queryKey: ["library-redo-latest"] }),
         queryClient.invalidateQueries({ queryKey: ["recycle-bin-latest"] }),
       ]);
       if (restored.ordered_items) {
@@ -958,34 +975,39 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           : { ...state, folderOrders: { ...state.folderOrders, [`folder-${restored.parent_id}`]: order } });
       }
     } catch (error) {
-      setOperationError({ text: `撤销失败：${errorMessage(error)}`, retry: () => { void undoLibraryAction(); } });
+      setOperationError({ text: `${redo ? "重做" : "撤销"}失败：${errorMessage(error)}`, retry: () => { void undoLibraryAction(redo); } });
     } finally {
       libraryChangingRef.current = false;
       setLibraryChanging(false);
       setUndoingLibrary(false);
+      setRedoingLibrary(false);
     }
   };
 
   useEffect(() => {
     if (!active || suspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isUndoShortcut(event) || isShortcutInput(event.target)) return;
+      const redo = isRedoShortcut(event);
+      if ((!redo && !isUndoShortcut(event)) || isShortcutInput(event.target)) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"]')) return;
-      if (!workspaceSettled || !canUndoLibrary || libraryChangingRef.current || recycleTarget || renamingFolder
+      if (!workspaceSettled || !(redo ? canRedoLibrary : canUndoLibrary) || libraryChangingRef.current || recycleTarget || renamingFolder
         || isCreatingFolder || renamingVideo || pptVideo || draggedKey
         || [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].some(element =>
           !element.classList.contains("folder-window") && !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
       event.preventDefault();
-      void undoLibraryAction();
+      void undoLibraryAction(redo);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [active, suspended, canUndoLibrary, recycleTarget, renamingFolder, isCreatingFolder,
+  }, [active, suspended, canUndoLibrary, canRedoLibrary, recycleTarget, renamingFolder, isCreatingFolder,
     renamingVideo, pptVideo, draggedKey, folderId, workspaceSettled]);
 
   useEffect(() => {
     if (libraryUndoLatest.isSuccess) setCanUndoLibrary(Boolean(libraryUndoLatest.data));
   }, [libraryUndoLatest.data, libraryUndoLatest.isSuccess]);
+  useEffect(() => {
+    if (libraryRedoLatest.isSuccess) setCanRedoLibrary(Boolean(libraryRedoLatest.data));
+  }, [libraryRedoLatest.data, libraryRedoLatest.isSuccess]);
 
   const confirmRemoval = async () => {
     if (!recycleTarget) return;
@@ -1000,6 +1022,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         ? await deleteLibraryFolder(parseFolderId(target.folder.id)!)
         : await deleteVideo(target.video.id);
       setCanUndoLibrary(true);
+      setCanRedoLibrary(false);
       setNotice(target.kind === "folder"
         ? result.videos ? `文件夹已移入回收站（${result.videos} 个视频），按 Ctrl+Z 撤销` : "文件夹已移入回收站，按 Ctrl+Z 撤销"
         : result.message || "视频已移入回收站，按 Ctrl+Z 撤销");
@@ -1009,6 +1032,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       void queryClient.invalidateQueries({ queryKey: ["library-status"] });
       void queryClient.invalidateQueries({ queryKey: ["recycle-bin-latest"] });
       void queryClient.invalidateQueries({ queryKey: ["library-undo-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-redo-latest"] });
     } finally {
       setTrashBusyKey(null);
       libraryChangingRef.current = false;
@@ -1276,6 +1300,22 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const libraryUndoLabel = libraryUndoLatest.data?.kind === "reorder" ? "撤销排序"
     : libraryUndoLatest.data?.kind === "move_video" ? "撤销移动视频"
     : libraryUndoLatest.data?.kind === "move_folder" ? "撤销移动文件夹" : "撤销删除";
+  const libraryRedoLabel = libraryRedoLatest.data?.kind === "reorder" ? "重做排序"
+    : libraryRedoLatest.data?.kind === "move_video" ? "重做移动视频"
+    : libraryRedoLatest.data?.kind === "move_folder" ? "重做移动文件夹" : "重做删除";
+  const libraryHistoryControls = <>
+    <button className="icon-button library-undo" type="button"
+      title={`${libraryUndoLabel}（Ctrl+Z）`} aria-label={libraryUndoLabel} aria-keyshortcuts="Control+Z Meta+Z"
+      disabled={!workspaceSettled || !canUndoLibrary || libraryChanging} onClick={() => void undoLibraryAction()}>
+      {undoingLibrary ? <LoaderCircle className="spin" size={16} /> : <Undo2 size={16} />}
+    </button>
+    <button className="icon-button library-redo" type="button"
+      title={`${libraryRedoLabel}（Ctrl+Y / Ctrl+Shift+Z）`} aria-label={libraryRedoLabel}
+      aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Y Meta+Shift+Z"
+      disabled={!workspaceSettled || !canRedoLibrary || libraryChanging} onClick={() => void undoLibraryAction(true)}>
+      {redoingLibrary ? <LoaderCircle className="spin" size={16} /> : <Redo2 size={16} />}
+    </button>
+  </>;
   const operationErrorView = operationError && <div className="library-operation-error" role="alert"><AlertCircle size={17} /><span>{operationError.text}</span>
     <button className="secondary-button compact" onClick={operationError.retry}><RotateCcw size={14} />重试</button>
     <button className="icon-button" aria-label="关闭错误提示" title="关闭错误提示" onClick={() => setOperationError(null)}><X size={15} /></button></div>;
@@ -1301,11 +1341,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <div className="library-toolbar-tools">
           <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
           <DeviceTransferButton key={`device-${scope}`} libraryId={libraryId} active={active && !suspended} selectedVideoIds={selections.root ?? []} />
-          <button className="icon-button library-undo" type="button"
-            title={`${libraryUndoLabel}（Ctrl+Z）`} aria-label={libraryUndoLabel} aria-keyshortcuts="Control+Z Meta+Z"
-            disabled={!workspaceSettled || !canUndoLibrary || libraryChanging} onClick={() => void undoLibraryAction()}>
-            {undoingLibrary ? <LoaderCircle className="spin" size={16} /> : <Undo2 size={16} />}
-          </button>
+          {libraryHistoryControls}
           <label className="sort-control">
             <span>排序</span>
             <select value={sortMode} aria-label="视频库排序" onChange={(event) => setSortMode(event.target.value as "manual" | "name" | "time")}>
@@ -1363,7 +1399,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           breadcrumbs={folderBreadcrumbs}
           onNavigate={(id) => { clearDragState(); if (id) setFolderId(id); else closeFolder(); }}
           onCreateFolder={() => { setCreateError(null); setIsCreatingFolder(true); }}
-          toolbarActions={activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}
+          toolbarActions={<>{libraryHistoryControls}{activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}</>}
           outsideDropLabel={activeFolder?.parentId ? "移至上一级文件夹" : "移至一级目录"}
           sortMode={folderSortMode} onSortChange={setFolderSortMode} onClose={closeFolder}
           canDropOutside={Boolean(draggedKey && dragSourceRef.current?.folderId === folderId)}

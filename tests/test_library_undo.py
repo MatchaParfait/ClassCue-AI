@@ -240,3 +240,167 @@ def test_visible_reorder_is_undoable_even_if_the_server_already_has_the_requeste
     assert positions(store) == original
     assert undo(client, "reorder")["ordered_items"] == visible
     assert positions(store) == original
+
+
+def redo(client, kind):
+    assert client.get("/api/library/redo/latest").json()["kind"] == kind
+    response = client.post("/api/library/redo")
+    assert response.status_code == 200, response.text
+    assert response.json()["kind"] == kind
+    return response.json()
+
+
+def test_mixed_history_redoes_in_reverse_undo_order_and_survives_reopen(library):
+    store, client, folder, videos, _ = library
+    original = positions(store)
+    client.post(f"/api/videos/{videos[0]}/folder", json={"folder_id": folder})
+    moved = positions(store)
+    client.post("/api/library/reorder", json={
+        "ordered_items": [{"type": "video", "id": videos[2]}, {"type": "folder", "id": folder}],
+    })
+    ordered = positions(store)
+    client.delete(f"/api/videos/{videos[2]}")
+    deleted = positions(store)
+    undo(client, "video")
+    undo(client, "reorder")
+    undo(client, "move_video")
+    assert positions(store) == original
+    assert VideoStore(store.path).latest_library_redo()["kind"] == "move_video"
+    redo(client, "move_video")
+    assert positions(store) == moved
+    redo(client, "reorder")
+    assert positions(store) == ordered
+    redo(client, "video")
+    assert positions(store) == deleted
+    assert client.get("/api/library/redo/latest").json() is None
+    assert client.post("/api/library/redo").status_code == 409
+    undo(client, "video")
+    assert positions(store) == ordered
+
+
+def test_new_successful_edit_discards_redo_but_failed_and_noop_edits_do_not(library):
+    store, client, folder, videos, _ = library
+    client.post(f"/api/videos/{videos[0]}/folder", json={"folder_id": folder})
+    undo(client, "move_video")
+    latest = store.latest_library_redo()
+    client.post(f"/api/videos/{videos[0]}/folder", json={"folder_id": None})
+    assert client.post("/api/library/reorder", json={
+        "ordered_items": [{"type": "video", "id": 99999}],
+    }).status_code == 400
+    assert store.latest_library_redo() == latest
+    client.post(f"/api/videos/{videos[1]}/folder", json={"folder_id": folder})
+    assert store.latest_library_redo() is None
+    assert client.post("/api/library/redo").status_code == 409
+
+
+def test_folder_delete_redo_rejects_new_descendants_and_preserves_retry(library):
+    store, client, folder, videos, _ = library
+    store.set_video_folder(videos[0], folder)
+    client.delete(f"/api/folders/{folder}")
+    undo(client, "folder")
+    latest = store.latest_library_redo()
+    child = store.create_folder("New child", folder)
+    assert client.post("/api/library/redo").status_code == 409
+    assert store.latest_library_redo() == latest
+    assert store.get_video(videos[0]) is not None
+    store.delete_folder(child)
+    redo(client, "folder")
+    assert store.get_folder(folder) is None
+    undo(client, "folder")
+    assert store.get_video(videos[0]) is not None
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("existing_course", [False, True])
+def test_folder_delete_redo_protects_new_course_bindings_and_keeps_retry(library, nested, existing_course):
+    from classcue.study_courses import StudyCourseStore
+
+    store, client, folder, videos, _ = library
+    child = store.create_folder("Child", folder)
+    target = child if nested else folder
+    store.set_video_folder(videos[0], child)
+    courses = StudyCourseStore(store)
+    course = courses.create(name="Existing course") if existing_course else None
+    assert client.delete(f"/api/folders/{folder}").status_code == 200
+    undo(client, "folder")
+    latest = store.latest_library_redo()
+    course = courses.bind(course["id"], target) if course else courses.create(folder_id=target)
+    before = positions(store)
+    response = client.post("/api/library/redo")
+    assert response.status_code == 409
+    assert "课程绑定已变化" in response.json()["detail"]
+    assert courses.course(course["id"])["folder_id"] == target
+    assert positions(store) == before
+    assert store.latest_library_redo() == latest
+    assert store.get_video(videos[0]) is not None
+
+    destination = store.create_folder("Other course folder")
+    courses.bind(course["id"], destination)
+    redo(client, "folder")
+    assert store.get_folder(folder) is None
+    assert courses.course(course["id"])["folder_id"] == destination
+
+
+def test_delete_redo_rejects_changed_metadata(library):
+    store, client, _, videos, _ = library
+    client.delete(f"/api/videos/{videos[0]}")
+    undo(client, "video")
+    store.set_status(videos[0], "transcribed")
+    latest = store.latest_library_redo()
+    assert client.post("/api/library/redo").status_code == 409
+    assert store.latest_library_redo() == latest
+    assert store.get_video(videos[0])["status"] == "transcribed"
+
+
+def test_redo_layout_database_failure_is_atomic_and_retryable(library):
+    store, client, folder, videos, trash = library
+    store.set_video_folder(videos[0], folder, record_undo=True)
+    undo(client, "move_video")
+    original = positions(store)
+    latest = store.latest_library_redo()
+    with store.connect() as connection:
+        connection.execute(
+            "CREATE TRIGGER deny_redo BEFORE UPDATE OF library_order ON videos "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.undo_latest_library_edit(trash, redo=True)
+    assert positions(store) == original
+    assert store.latest_library_redo() == latest
+    with store.connect() as connection:
+        connection.execute("DROP TRIGGER deny_redo")
+    redo(client, "move_video")
+    assert store.get_video(videos[0])["library_folder_id"] == folder
+
+
+def test_delete_redo_keeps_files_and_history_on_failure_and_checks_changed_bytes(library):
+    store, _, _, videos, trash = library
+    video_id = videos[0]
+    path = store.get_video(video_id)["video_path"]
+    from pathlib import Path
+    path = Path(path)
+    original = path.read_bytes()
+    store.trash_video(video_id, trash)
+    store.undo_latest_library_edit(trash)
+    latest = store.latest_library_redo()
+    path.write_bytes(b"changed synthetic recording")
+    with pytest.raises(ValueError, match="文件已被修改"):
+        store.undo_latest_library_edit(trash, redo=True)
+    assert store.latest_library_redo() == latest
+    path.write_bytes(original)
+    with store.connect() as connection:
+        connection.execute(
+            "CREATE TRIGGER deny_delete_redo BEFORE DELETE ON videos "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.undo_latest_library_edit(trash, redo=True)
+    assert path.read_bytes() == original
+    assert store.get_video(video_id) is not None
+    assert store.latest_library_redo() == latest
+    with store.connect() as connection:
+        connection.execute("DROP TRIGGER deny_delete_redo")
+    store.undo_latest_library_edit(trash, redo=True)
+    assert not path.exists()
+    store.undo_latest_library_edit(trash)
+    assert path.read_bytes() == original
