@@ -19,7 +19,7 @@ if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
 from classcue.desktop_runtime import APP_NAME, Lifecycle, Services, SingleInstance
-from classcue.desktop_startup import startup_html, startup_transition_script
+from classcue.desktop_startup import startup_background, startup_html, startup_transition_script
 from scripts.desktop_transition import install_startup_transition
 
 
@@ -38,7 +38,7 @@ class WindowUI:
             library_id = library_identity(PROJECT, load_data_root() / "project.db")
         except (OSError, ValueError):
             library_id = None
-        self.boot_html = startup_html(PROJECT, library_id)
+        self.boot_html = startup_html(PROJECT, scene_id=os.environ.pop("CLASSROOM_STARTUP_SCENE", None))
         self.library_id = library_id
         self.startup_view = None
         self.remove_startup_transition = None
@@ -67,16 +67,15 @@ class WindowUI:
         # Service preparation runs concurrently with WebView's first load.
         self.window.events.loaded.wait(15)
         view = self.script("window.__classroomDesktopView?.() ?? null")
-        if isinstance(view, dict):
-            self.startup_view = {**view, "library_id": self.library_id}
-            if self.remove_startup_transition:
-                self.remove_startup_transition()
-            try:
-                self.remove_startup_transition = install_startup_transition(
-                    self.window, startup_transition_script(PROJECT, self.boot_html, origin, self.startup_view))
-            except (OSError, ValueError):
-                self.remove_startup_transition = None
-                logging.getLogger(__name__).warning("Startup preview transition unavailable", exc_info=True)
+        self.startup_view = {**view, "library_id": self.library_id} if isinstance(view, dict) else None
+        if self.remove_startup_transition:
+            self.remove_startup_transition()
+        try:
+            self.remove_startup_transition = install_startup_transition(
+                self.window, startup_transition_script(PROJECT, self.boot_html, origin, self.startup_view))
+        except (OSError, ValueError):
+            self.remove_startup_transition = None
+            logging.getLogger(__name__).warning("Startup artwork transition unavailable", exc_info=True)
         self.last_error = None
         self.current_url = origin + "/"
         self.window.load_url(origin + "/")
@@ -250,23 +249,25 @@ def main(action="activate"):
     logger = service_logger(log_directory(PROJECT), "desktop")
     sys.stdout = BoundedLogStream(logger, logging.INFO)
     sys.stderr = BoundedLogStream(logger, logging.ERROR)
-    ui = WindowUI()
-    from classcue.desktop_windows import preferences, save_close_behavior
-    lifecycle = Lifecycle(Services(PROJECT), ui,
-                          close_behavior=preferences(PROJECT).get("close_behavior", "ask"),
-                          save_close_behavior=lambda value: save_close_behavior(PROJECT, value))
+    ui, lifecycle = None, None
     tray = None
 
     def dispatch(command):
         if command == "status":
             return {
-                "ready": lifecycle.ready, "starting": lifecycle.starting,
-                "exiting": lifecycle.exiting, "visible": not lifecycle.hidden,
-                "dialog": lifecycle.dialog, "tray": lifecycle.tray_available,
-                "unsaved_changes": lifecycle.unsaved_changes,
+                "ready": bool(lifecycle and lifecycle.ready),
+                "starting": lifecycle is None or lifecycle.starting,
+                "exiting": bool(lifecycle and lifecycle.exiting),
+                "visible": bool(lifecycle and not lifecycle.hidden),
+                "window_ready": bool(ui and ui.window and ui.window.events.loaded.is_set()),
+                "dialog": lifecycle.dialog if lifecycle else None,
+                "tray": bool(lifecycle and lifecycle.tray_available),
+                "unsaved_changes": bool(lifecycle and lifecycle.unsaved_changes),
                 "pid": os.getpid(),
-                "url": ui.current_url,
+                "url": ui.current_url if ui else None,
             }
+        if lifecycle is None:
+            return {"ok": command == "activate"}
         if command == "activate":
             if ui.window is not None:
                 background(lifecycle.show)
@@ -290,6 +291,12 @@ def main(action="activate"):
         return start_frontend.main("stop")
 
     try:
+        # Secondary launches must not rotate artwork or prepare a second window.
+        ui = WindowUI()
+        from classcue.desktop_windows import preferences, save_close_behavior
+        lifecycle = Lifecycle(Services(PROJECT), ui,
+                              close_behavior=preferences(PROJECT).get("close_behavior", "ask"),
+                              save_close_behavior=lambda value: save_close_behavior(PROJECT, value))
         import webview
         from classcue.desktop_windows import Tray, install_shortcuts, preferences
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ClassroomVideoStudy.Desktop")
@@ -300,7 +307,7 @@ def main(action="activate"):
         window = webview.create_window(
             APP_NAME, html=ui.boot_html, js_api=NativeAPI(lifecycle, ui),
             width=1280, height=850, min_size=(800, 600), text_select=True,
-            background_color="#F8F5E9",
+            background_color=startup_background(ui.boot_html),
         )
         ui.window = window
 

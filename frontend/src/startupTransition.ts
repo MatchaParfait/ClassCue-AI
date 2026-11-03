@@ -28,7 +28,6 @@ export function releaseStartupCover(root: HTMLElement | null, beforeReveal?: () 
   if (!cover) return;
   let disposed = false;
   let frame = 0;
-  let timer = 0;
   const cleanups: Array<() => void> = [];
   const images = [...(root?.querySelectorAll<HTMLImageElement>(".video-thumbnail img") ?? [])]
     .filter(image => {
@@ -43,8 +42,26 @@ export function releaseStartupCover(root: HTMLElement | null, beforeReveal?: () 
     image.addEventListener("load", done, { once: true });
     image.addEventListener("error", done, { once: true });
   }));
+  const surface = root?.closest(".library-page") ?? root;
+  const backgroundUrls = new Set<string>();
+  for (const element of surface?.querySelectorAll<HTMLElement>(".library-scene, .character-art") ?? []) {
+    const style = window.getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    if (style.display === "none" || bounds.bottom <= 0 || bounds.top >= window.innerHeight) continue;
+    for (const match of style.backgroundImage.matchAll(/url\((?:"([^"]*)"|'([^']*)'|([^)]*))\)/g)) {
+      backgroundUrls.add((match[1] ?? match[2] ?? match[3]).trim());
+    }
+  }
+  const backgrounds = [...backgroundUrls].map(url => new Promise<void>(resolve => {
+    const image = new Image();
+    const done = () => { image.onload = null; image.onerror = null; void decode(image).finally(resolve); };
+    image.onload = done;
+    image.onerror = done;
+    cleanups.push(() => { image.onload = null; image.onerror = null; });
+    image.src = url;
+    if (image.complete) done();
+  }));
   const cancelPending = () => {
-    window.clearTimeout(timer);
     window.cancelAnimationFrame(frame);
     cleanups.forEach(cleanup => cleanup());
   };
@@ -61,8 +78,8 @@ export function releaseStartupCover(root: HTMLElement | null, beforeReveal?: () 
     const animation = cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: "ease-out", fill: "forwards" });
     void animation.finished.catch(() => {}).finally(remove);
   };
-  const deadline = new Promise(resolve => { timer = window.setTimeout(resolve, 400); });
-  void Promise.race([Promise.all([...ready, document.fonts?.ready]), deadline]).then(() => {
+  // The startup surface owns timeout recovery; a timer must not expose half-ready content.
+  void Promise.all([...ready, ...backgrounds, document.fonts?.ready]).then(() => {
     if (disposed) return;
     // The scroll handoff has committed. Let its layout and decoded images paint first.
     frame = window.requestAnimationFrame(() => { frame = window.requestAnimationFrame(reveal); });

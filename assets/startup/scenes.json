@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "id": "study-rescue",
+      "file": "01-study-rescue.jpg",
+      "caption": "别急，重点已经在赶来的路上。",
+      "background": "#f3f4f1"
+    },
+    {
+      "id": "cue-workshop",
+      "file": "02-cue-workshop.jpg",
+      "caption": "书可以很厚，重点可以很轻。",
+      "background": "#f3f4f1"
+    },
+    {
+      "id": "knowledge-quest",
+      "file": "03-knowledge-quest.jpg",
+      "caption": "知识没走丢，只是藏得有点深。",
+      "background": "#f3f4f1"
+    },
+    {
+      "id": "highlight-fishing",
+      "file": "04-highlight-fishing.jpg",
+      "caption": "这次捞到的，终于是重点。",
+      "background": "#f3f4f1"
+    },
+    {
+      "id": "memory-delivery",
+      "file": "05-memory-delivery.jpg",
+      "caption": "文具带齐了，重点也不能落下。",
+      "background": "#f3f4f1"
+    },
+    {
+      "id": "focus-defense",
+      "file": "06-focus-defense.jpg",
+      "caption": "饼干归饼干，重点归重点。",
+      "background": "#f3f4f1"
+    }
+  ]
+}

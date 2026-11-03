@@ -519,6 +519,11 @@ describe("in-app recycle confirmation", () => {
 });
 
 describe("native startup scroll handoff", () => {
+  beforeEach(() => {
+    // jsdom does not fetch the artwork or thumbnails awaited by the startup handoff.
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+  });
+
   function installBridge(anchor: string | null, libraryId = "012345abcdef") {
     let view: { library_id: string; scroll_y: number; anchor: string | null; offset: number } | null =
       { library_id: libraryId, scroll_y: 900, anchor, offset: -70 };

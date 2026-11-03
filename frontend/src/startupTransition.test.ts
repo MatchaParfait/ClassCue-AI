@@ -5,9 +5,10 @@ import { releaseStartupCover } from "./startupTransition";
 let cancel: ReturnType<typeof releaseStartupCover>;
 const view = { library_id: "012345abcdef", scroll_y: 600, anchor: "video-1", offset: -30 };
 
-function install(origin = location.origin) {
+function install(origin = location.origin, carriedView: typeof view | null = view) {
   const script = template.replace("__STARTUP_TRANSITION_DATA__", JSON.stringify({
-    origin, view, html: '<!doctype html><html><body><main>Cached library</main></body></html>',
+    origin, view: carriedView, background: "#edf5fa",
+    html: '<!doctype html><html><body><main>Startup artwork</main></body></html>',
   }));
   new Function(script)();
   return document.getElementById("classroom-startup-cover")!;
@@ -53,11 +54,27 @@ describe("read-only startup transition", () => {
     expect(window.__classroomStartupView).toBeUndefined();
   });
 
-  it("never permanently covers a failed frontend bundle", async () => {
-    const cover = install();
+  it("keeps the artwork and offers working native recovery when the bundle is slow or missing", async () => {
+    const cover = install(location.origin, null);
+    const frame = cover.querySelector("iframe")!;
+    frame.contentDocument!.body.innerHTML = '<div id="sync"><p id="message"></p></div><div id="actions" hidden>'
+      + '<button data-startup-action="retry">Retry</button><button data-startup-action="logs">Logs</button></div>';
+    frame.dispatchEvent(new Event("load"));
+    const retry = vi.fn(async () => {});
+    const logs = vi.fn(async () => {});
+    vi.stubGlobal("pywebview", { api: { retry, open_logs: logs } });
     await vi.advanceTimersByTimeAsync(10000);
-    expect(cover.isConnected).toBe(false);
-    expect(document.documentElement.style.overflowAnchor).toBe("");
+    expect(cover.isConnected).toBe(true);
+    expect(frame.contentDocument!.getElementById("actions")!.hidden).toBe(false);
+    expect(frame.contentDocument!.getElementById("sync")!.getAttribute("role")).toBe("alert");
+    expect(cover.hasAttribute("aria-hidden")).toBe(false);
+    expect(window.__classroomStartupView).toBeUndefined();
+    frame.contentDocument!.querySelector<HTMLButtonElement>('[data-startup-action="retry"]')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retry).toHaveBeenCalledOnce();
+    frame.contentDocument!.querySelector<HTMLButtonElement>('[data-startup-action="logs"]')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(logs).toHaveBeenCalledOnce();
   });
 
   it("releases immediately after ready paints, with no minimum waiting time or motion in reduced mode", async () => {
@@ -101,7 +118,7 @@ describe("read-only startup transition", () => {
     expect(cover.isConnected).toBe(false);
   });
 
-  it("bounds slow image waiting and cancels stale readiness work", async () => {
+  it("waits for slow visible images instead of revealing partial content, and cancels stale work", async () => {
     const cover = install();
     document.body.innerHTML = '<div class="video-thumbnail"><img></div>';
     const image = document.querySelector("img")!;
@@ -115,7 +132,50 @@ describe("read-only startup transition", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(cover.isConnected).toBe(true);
     cancel = releaseStartupCover(document.body);
-    await vi.advanceTimersByTimeAsync(450);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(cover.isConnected).toBe(true);
+    image.dispatchEvent(new Event("error"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(cover.isConnected).toBe(false);
+  });
+
+  it("blocks hidden application controls and restores their previous state on release", async () => {
+    const application = document.createElement("div");
+    application.id = "root";
+    document.body.append(application);
+    const cover = install(location.origin, null);
+    expect(application.inert).toBe(true);
+    expect(cover.style.background).toBe("rgb(237, 245, 250)");
+    cancel = releaseStartupCover(application);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(cover.isConnected).toBe(false);
+    expect(application.inert).toBe(false);
+    expect(document.documentElement.style.overflowAnchor).toBe("");
+  });
+
+  it("waits for the visible library background so decorative details do not appear after reveal", async () => {
+    document.body.innerHTML = '<main class="library-page"><div class="library-scene" '
+      + 'style="background-image:url(/art/library-bauhaus.webp)"></div><section id="content"></section></main>';
+    const scene = document.querySelector<HTMLElement>(".library-scene")!;
+    vi.spyOn(scene, "getBoundingClientRect").mockReturnValue({
+      top: 100, left: 300, bottom: 500, right: 700, width: 400, height: 400, x: 300, y: 100, toJSON: () => ({}),
+    });
+    let finish!: () => void;
+    const decode = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    vi.stubGlobal("Image", class {
+      complete = true;
+      src = "";
+      onload = null;
+      onerror = null;
+      decode = decode;
+    });
+    const cover = install(location.origin, null);
+    cancel = releaseStartupCover(document.getElementById("content"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(cover.isConnected).toBe(true);
+    expect(decode).toHaveBeenCalledOnce();
+    finish();
+    await vi.advanceTimersByTimeAsync(50);
     expect(cover.isConnected).toBe(false);
   });
 

@@ -61,7 +61,6 @@ from classcue.path_picker import discard_path_picker, read_path_picker_result, s
 from classcue.picker_manager import PickerManager
 from classcue.diagnostics import configure_logging, get_logger, log_exception, redact_text
 from classcue.database_lease import DatabaseLease
-from classcue.desktop_startup import save_library_snapshot, save_startup_cover
 from classcue.qwen_runtime import clear_runtime, runtime_is_ready, runtime_size, runtime_python as qwen_runtime_python
 from classcue.firered_runtime import (
     runtime_is_ready as firered_runtime_is_ready, runtime_size as firered_runtime_size,
@@ -1017,7 +1016,6 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     """Create the local review API around an optional VideoStore instance."""
 
     provider = StoreProvider(store)
-    startup_snapshot_enabled = store is None and os.getenv("CLASSROOM_DESKTOP_MODE") == "1"
     jobs = JobManager(provider)
     lease = DatabaseLease()
     instance_id = uuid.uuid4().hex
@@ -2192,9 +2190,6 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "order": order,
             "items": items,
         }
-        if startup_snapshot_enabled and folder_id is None:
-            background.add_task(save_library_snapshot, DIRECTORY_PROJECT_ROOT, provider.library_id(), result,
-                                asr_storage.audio_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / "thumbnails")
         return result
 
     @api.get("/api/library/search")
@@ -3645,8 +3640,6 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             thumbnail = video_thumbnail(path, cache)
         except (OSError, ThumbnailUnavailable):
             raise HTTPException(status_code=404, detail="视频截图暂不可用")
-        if startup_snapshot_enabled:
-            background.add_task(save_startup_cover, DIRECTORY_PROJECT_ROOT, provider.library_id(), video_id, thumbnail)
         return FileResponse(thumbnail, media_type="image/jpeg", headers={"Cache-Control": "private, no-cache"}, background=background)
 
     @api.get("/api/videos/{video_id}/preview-frame")
