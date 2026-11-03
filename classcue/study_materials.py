@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ FORMATS = {".pdf": "pdf", ".md": "markdown", ".markdown": "markdown",
 MAX_PAGES = 500
 MAX_IMAGE_PIXELS = 60_000_000
 MAX_MARKDOWN_BYTES = 5_000_000
+MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 
 
 def encode(value):
@@ -102,7 +104,14 @@ class StudyMaterialStore:
         return value
 
     def register(self, name, data, course_id=None):
-        from classcue.study_material_parser import parse_document_bytes
+        if not data:
+            raise ValueError("文件为空")
+        if len(data) > MAX_DOCUMENT_BYTES:
+            raise ValueError("单个资料文件不能超过 100 MB")
+        return self.register_stream(name, BytesIO(data), course_id)
+
+    def register_stream(self, name, stream, course_id=None):
+        from classcue.study_material_parser import parse_document_file
         if course_id is not None:
             from classcue.study_courses import StudyCourseStore
             StudyCourseStore(self.store).course(course_id)
@@ -111,25 +120,31 @@ class StudyMaterialStore:
         suffix = Path(filename).suffix.lower()
         if suffix not in FORMATS:
             raise ValueError("支持 PDF、Markdown、JPEG、PNG 和 WebP")
-        if not data:
-            raise ValueError("文件为空")
-        if len(data) > 100 * 1024 * 1024:
-            raise ValueError("单个资料文件不能超过 100 MB")
         document_id = _id()
         directory = self.root / document_id
         directory.mkdir(parents=True, exist_ok=False)
         target = directory / ("original" + suffix)
         try:
-            target.write_bytes(data)
-            blocks, page_count = parse_document_bytes(
-                FORMATS[suffix], data, directory, self.root, document_id,
+            size = 0
+            digest = hashlib.sha256()
+            with target.open("xb") as output:
+                while chunk := stream.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_DOCUMENT_BYTES:
+                        raise ValueError("单个资料文件不能超过 100 MB")
+                    output.write(chunk)
+                    digest.update(chunk)
+            if not size:
+                raise ValueError("文件为空")
+            blocks, page_count = parse_document_file(
+                FORMATS[suffix], target, directory, self.root, document_id,
             )
             with self.store.connect() as db:
                 db.execute("""INSERT INTO study_documents
                     (id,name,format,resource,sha256,page_count,course_id) VALUES (?,?,?,?,?,?,?)""",
                            (document_id, filename, FORMATS[suffix],
                             target.relative_to(self.root).as_posix(),
-                            hashlib.sha256(data).hexdigest(), page_count, course_id))
+                            digest.hexdigest(), page_count, course_id))
                 for ordinal, block in enumerate(blocks):
                     db.execute("""INSERT INTO study_document_blocks
                         (id,document_id,ordinal,payload) VALUES (?,?,?,?)""",

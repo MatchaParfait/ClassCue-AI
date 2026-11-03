@@ -192,6 +192,24 @@ def test_import_only_registers_videos_without_running_asr_or_ai(batch):
     assert batch.client.post(f'/api/jobs/{job["id"]}/retry').status_code == 409
 
 
+def test_new_batch_import_reuses_source_hash_and_verifies_copy(batch, monkeypatch):
+    root = folder(batch, count=1)
+    original_hash = batch.store.file_hash
+    paths = []
+
+    def file_hash(path):
+        paths.append(Path(path))
+        return original_hash(path)
+
+    monkeypatch.setattr(batch.store, "file_hash", file_hash)
+    response = batch.client.post("/api/batch/process", json={"folders": [str(root)], "import_only": True})
+    job = wait(batch, response.json()["job_id"])
+    assert job["status"] == "completed"
+    assert len(batch.store.list_videos()) == 1
+    assert [path.suffix for path in paths] == [".mp4", ".part"]
+    assert batch.asr == batch.ai == []
+
+
 def test_overlapping_source_selections_import_tree_only_once(batch):
     root = folder(batch, "overlapping", 1)
     child = folder(batch, "overlapping/child", 1)

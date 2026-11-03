@@ -1,4 +1,6 @@
 import pytest
+import asyncio
+from threading import Event, Thread
 
 from api.main import create_app
 from fastapi.testclient import TestClient
@@ -13,6 +15,73 @@ from tests.test_question_api import api
 def upload(client, marker, data=None, time=1250, mime="image/png"):
     return client.post(f"/api/markers/{marker}/question/captures?captured_at_ms={time}",
                        content=png() if data is None else data, headers={"Content-Type": mime})
+
+
+def test_capture_waiting_for_task_lock_keeps_health_responsive(api):
+    import httpx
+
+    client, repo, marker, _, model = api
+    locked, health_finished = Event(), Event()
+    observed = []
+
+    def hold():
+        with client.app.state.jobs._lock:
+            locked.set()
+            observed.append(health_finished.wait(3))
+
+    worker = Thread(target=hold)
+    worker.start()
+    assert locked.wait(3)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
+                                    base_url="http://127.0.0.1") as requests:
+            async def health():
+                await asyncio.sleep(.05)
+                try:
+                    return await requests.get("/api/health")
+                finally:
+                    health_finished.set()
+
+            return await asyncio.gather(
+                requests.post(f"/api/markers/{marker}/question/captures", params={"captured_at_ms": 0},
+                              content=png(), headers={"Content-Type": "image/png"}),
+                health(),
+            )
+
+    try:
+        capture, health = asyncio.run(exercise())
+    finally:
+        health_finished.set()
+        worker.join(5)
+    assert capture.status_code == 201
+    assert health.status_code == 200
+    assert observed == [True]
+    assert len(QuestionCaptures(repo.store).list(marker)) == 1
+    assert model.calls == 0
+
+
+def test_capture_rechecks_task_state_after_receiving_body(api):
+    import httpx
+
+    client, repo, marker, video, model = api
+    data = png()
+
+    async def body():
+        yield data[:10]
+        repo.store.create_job("started-during-capture", "video_process", video)
+        repo.store.update_job("started-during-capture", status="running")
+        yield data[10:]
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
+                                    base_url="http://127.0.0.1") as requests:
+            return await requests.post(f"/api/markers/{marker}/question/captures", params={"captured_at_ms": 0},
+                                       content=body(), headers={"Content-Type": "image/png"})
+
+    assert asyncio.run(exercise()).status_code == 409
+    assert QuestionCaptures(repo.store).list(marker) == []
+    assert model.calls == 0
 
 
 def test_upload_is_local_scoped_timestamped_and_not_selected_until_save(api):

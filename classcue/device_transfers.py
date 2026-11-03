@@ -16,7 +16,7 @@ from classcue import device_protocol as protocol, study_share
 from classcue.device_study import current_digest, import_study, restore_study, save_transfer_commit, transfer_commit
 from classcue.device_transfer_store import TransferStore
 from classcue.device_wpd import WpdTransport
-from classcue.video_library import register_managed_video
+from classcue.video_library import hash_video_source, register_managed_video
 
 
 class TransferManager:
@@ -675,6 +675,7 @@ class TransferManager:
                     self._item_failed(task, identity, str(error))
                     return
             stage = directory / f"{identity}.mp4"
+            verified_source = None
             if choice["need_video"]:
                 acknowledged = {(entry["id"], entry["index"]) for entry in task["acks"]}
                 for block in item["blocks"]:
@@ -713,7 +714,8 @@ class TransferManager:
                     self.journal.save(task)
                     self._status(task)
                     return
-                if stage.stat().st_size != item["size"] or self.get_store().file_hash(stage) != identity:
+                verified_source = hash_video_source(self.get_store(), stage)
+                if verified_source[1].st_size != item["size"] or verified_source[0] != identity:
                     task["full_hash_failed"] = identity
                     raise ValueError("完整视频校验失败，请重试任务")
             created_video = None
@@ -729,7 +731,7 @@ class TransferManager:
                     else:
                         video_id, managed_path, registered_existing, _ = register_managed_video(
                             store, stage, Path(self.audio_directory()), Path(self.video_directory()),
-                            delete_source_after_import=False, source_folder="")
+                            delete_source_after_import=False, source_folder="", _verified_source=verified_source)
                         if not registered_existing:
                             created_video = (store, video_id, managed_path)
                             store.update_video_display_name(video_id, item["name"])

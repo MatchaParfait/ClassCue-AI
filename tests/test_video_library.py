@@ -1,6 +1,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
+import asyncio
 import json
 from threading import Event
 
@@ -155,6 +156,317 @@ def test_upload_cleans_up_when_registration_fails(library, monkeypatch):
     assert "fixture registration failure" in response.json()["detail"]
     assert len(paths) == 1
     assert not paths[0].parent.exists()
+
+
+def test_upload_stages_on_library_volume_and_publishes_without_copy(library, monkeypatch):
+    store, source, root, client = library
+    temporary_directory = api_main.TemporaryDirectory
+    temporary_paths, hashes = [], []
+    original_hash = store.file_hash
+
+    @contextmanager
+    def directory(**kwargs):
+        assert Path(kwargs["dir"]) == root
+        with temporary_directory(**kwargs) as temporary:
+            temporary_paths.append(Path(temporary))
+            yield temporary
+
+    def file_hash(path):
+        hashes.append(Path(path))
+        return original_hash(path)
+
+    def unexpected_copy(*_args, **_kwargs):
+        raise AssertionError("same-volume upload must not copy the video again")
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", directory)
+    monkeypatch.setattr(store, "file_hash", file_hash)
+    monkeypatch.setattr(video_library.shutil, "copyfileobj", unexpected_copy)
+    response = client.post("/api/videos/upload", params={"filename": "camera.mp4"}, content=source.read_bytes())
+    assert response.status_code == 200, response.text
+    assert Path(response.json()["video"]["video_path"]).read_bytes() == source.read_bytes()
+    assert len(hashes) == 1
+    assert temporary_paths and all(not path.exists() for path in temporary_paths)
+
+
+def test_consumed_upload_failure_removes_unregistered_file(library, monkeypatch):
+    store, source, root, client = library
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("synthetic registration failure")
+
+    monkeypatch.setattr(store, "create_video", fail)
+    response = client.post("/api/videos/upload", params={"filename": "camera.mp4"}, content=source.read_bytes())
+    assert response.status_code == 400
+    assert source.read_bytes() == b"video fixture"
+    assert not list(root.rglob("*.mp4"))
+    assert not list(root.glob("classroom-upload-*"))
+    assert not store.list_videos()
+
+
+def test_consumed_upload_callback_failure_retains_registered_file(library, monkeypatch):
+    store, source, root, client = library
+    store.create_video("primary", "primary.mp4", str(source), "", 1000)
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("synthetic association failure")
+
+    monkeypatch.setattr(store, "set_secondary_view", fail)
+    response = client.post("/api/videos/upload", params={"filename": "camera.mp4", "secondary_for": 1},
+                           content=b"synthetic other camera")
+    assert response.status_code == 400
+    secondary = next(row for row in store.list_videos(include_secondary=True) if row["is_secondary"])
+    assert Path(secondary["video_path"]).read_bytes() == b"synthetic other camera"
+    assert not list(root.glob("classroom-upload-*"))
+
+
+@pytest.mark.parametrize("phase", ["temporary", "register"])
+def test_task_cancel_waits_for_video_worker_and_cleans_temporary(library, monkeypatch, phase):
+    from starlette.requests import Request
+
+    store, _, root, client = library
+    started, release = Event(), Event()
+    temporary_directory = api_main.TemporaryDirectory
+    original_register = api_main.register_managed_video
+    paths = []
+
+    def pause():
+        started.set()
+        assert release.wait(10)
+
+    @contextmanager
+    def temporary(**kwargs):
+        with temporary_directory(**kwargs) as directory:
+            paths.append(Path(directory))
+            if phase == "temporary":
+                pause()
+            yield directory
+
+    def register(*args, **kwargs):
+        if phase == "register":
+            pause()
+            assert paths[0].is_dir()
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", temporary)
+    monkeypatch.setattr(api_main, "register_managed_video", register)
+    endpoint = next(route.endpoint for route in client.app.routes
+                    if getattr(route, "path", None) == "/api/videos/upload")
+
+    async def receive():
+        return {"type": "http.request", "body": b"synthetic recording", "more_body": False}
+
+    async def exercise():
+        task = asyncio.create_task(endpoint(Request({"type": "http", "method": "POST"}, receive),
+                                            filename="camera.mp4", secondary_for=None))
+        try:
+            assert await asyncio.to_thread(started.wait, 10)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert paths[0].is_dir()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert paths and all(not path.exists() for path in paths)
+    videos = store.list_videos()
+    assert len(videos) == (1 if phase == "register" else 0)
+    if videos:
+        assert Path(videos[0]["video_path"]).read_bytes() == b"synthetic recording"
+
+
+def test_rename_needs_no_video_copy_space_and_hashes_only_once(library, monkeypatch):
+    store, _, root, client = library
+    video_id, path, _, _ = move(library)
+    original_inode = path.stat().st_ino
+    original_hash = store.file_hash
+    hashes = []
+
+    def file_hash(source):
+        hashes.append(Path(source))
+        return original_hash(source)
+
+    def unexpected_copy(*_args, **_kwargs):
+        raise AssertionError("rename must not copy")
+
+    monkeypatch.setattr(store, "file_hash", file_hash)
+    monkeypatch.setattr(video_library.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    monkeypatch.setattr(video_library.shutil, "copyfileobj", unexpected_copy)
+    response = client.patch(f"/api/videos/{video_id}/filename", json={"filename": "renamed.mp4"})
+    assert response.status_code == 200, response.text
+    renamed = Path(response.json()["video_path"])
+    assert renamed.read_bytes() == b"video fixture"
+    assert not path.exists()
+    assert renamed.stat().st_ino == original_inode
+    assert hashes == [path]
+    assert len(list(root.rglob("*.mp4"))) == 1
+
+
+def test_rename_database_failure_restores_original_filename(library):
+    store, _, root, client = library
+    video_id, path, _, _ = move(library)
+    before = dict(store.get_video(video_id))
+    with store.connect() as connection:
+        connection.execute("""CREATE TRIGGER reject_file_rename BEFORE UPDATE OF filename ON videos
+                              BEGIN SELECT RAISE(ABORT, 'synthetic rename failure'); END""")
+    response = client.patch(f"/api/videos/{video_id}/filename", json={"filename": "renamed.mp4"})
+    assert response.status_code == 409
+    assert "原视频已保留" in response.json()["detail"]
+    assert path.read_bytes() == b"video fixture"
+    assert dict(store.get_video(video_id)) == before
+    assert [entry.name for entry in path.parent.iterdir()] == [path.name]
+
+
+def test_case_only_rename_database_failure_restores_original_spelling(library):
+    store, _, _, client = library
+    video_id, path, _, _ = move(library)
+    with store.connect() as connection:
+        connection.execute("""CREATE TRIGGER reject_case_rename BEFORE UPDATE OF filename ON videos
+                              BEGIN SELECT RAISE(ABORT, 'synthetic case rename failure'); END""")
+    response = client.patch(f"/api/videos/{video_id}/filename", json={"filename": path.name.upper()})
+    assert response.status_code == 409
+    assert [entry.name for entry in path.parent.iterdir()] == [path.name]
+    assert Path(store.get_video(video_id)["video_path"]).name == path.name
+
+
+@pytest.mark.parametrize("phase", ["before_move", "case_intermediate", "before_commit", "after_commit"])
+@pytest.mark.parametrize("case_only", [False, True])
+def test_rename_journal_recovers_interrupted_move_without_losing_recording(library, phase, case_only):
+    store, _, _, _ = library
+    video_id, source, _, _ = move(library)
+    target = source.with_name(source.name.upper() if case_only else "renamed.mp4")
+    intermediate = source.with_name(".rename-synthetic.tmp")
+    video_library._save_rename_journal(store, {
+        "video_id": video_id, "digest": store.get_video(video_id)["content_hash"],
+        "source": str(source), "target": str(target), "intermediate": str(intermediate),
+    })
+    if phase == "case_intermediate":
+        source.rename(intermediate)
+    elif phase in {"before_commit", "after_commit"}:
+        source.rename(intermediate)
+        intermediate.rename(target)
+        if phase == "after_commit":
+            store.update_video_file(video_id, target)
+    video_library.recover_managed_rename(store)
+    expected = target if phase == "after_commit" else source
+    assert [entry.name for entry in source.parent.iterdir()] == [expected.name]
+    assert Path(store.get_video(video_id)["video_path"]).read_bytes() == b"video fixture"
+    assert not video_library._rename_journal(store).exists()
+    video_library.recover_managed_rename(store)
+
+
+def test_rename_recovery_refuses_conflicting_recordings(library):
+    store, _, _, _ = library
+    video_id, source, _, _ = move(library)
+    target = source.with_name("taken.mp4")
+    target.write_bytes(b"unrelated recording")
+    video_library._save_rename_journal(store, {
+        "video_id": video_id, "digest": store.get_video(video_id)["content_hash"],
+        "source": str(source), "target": str(target), "intermediate": str(source.with_name(".rename-synthetic.tmp")),
+    })
+    with pytest.raises(ValueError, match="名称冲突"):
+        video_library.recover_managed_rename(store)
+    assert source.read_bytes() == b"video fixture"
+    assert target.read_bytes() == b"unrelated recording"
+    assert video_library._rename_journal(store).exists()
+
+
+def test_api_startup_recovers_uncommitted_managed_rename(library):
+    store, _, _, _ = library
+    video_id, source, _, _ = move(library)
+    target = source.with_name("interrupted.mp4")
+    video_library._save_rename_journal(store, {
+        "video_id": video_id, "digest": store.get_video(video_id)["content_hash"],
+        "source": str(source), "target": str(target), "intermediate": str(source.with_name(".rename-synthetic.tmp")),
+    })
+    source.rename(target)
+    with TestClient(api_main.create_app(store)) as client:
+        assert source.read_bytes() == b"video fixture"
+        assert not target.exists()
+        assert not video_library._rename_journal(store).exists()
+        assert client.get(f"/api/videos/{video_id}/stream").content == b"video fixture"
+
+
+@pytest.mark.parametrize("next_operation", ["reimport", "delete"])
+def test_completed_journal_cleanup_failure_cannot_replay_later_file_changes(library, monkeypatch, next_operation):
+    store, _, root, client = library
+    video_id, _, _, _ = move(library)
+    unlink = Path.unlink
+    journal = video_library._rename_journal(store)
+
+    def fail_journal_unlink(path, *args, **kwargs):
+        if path == journal:
+            raise PermissionError("synthetic journal scanner lock")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail_journal_unlink)
+        renamed = video_library.rename_managed_video(store, video_id, "renamed.mp4", root)
+    assert json.loads(journal.read_text(encoding="utf-8")) == {"completed": True}
+    if next_operation == "reimport":
+        _, final, _, _ = register_managed_video(store, renamed, root.parent / "audio", root, "again.mp4")
+    else:
+        assert client.delete(f"/api/videos/{video_id}").status_code == 200
+        final = None
+    with TestClient(api_main.create_app(store)) as restarted:
+        assert restarted.get("/api/health").status_code == 200
+        assert not journal.exists()
+        if final:
+            assert final.read_bytes() == b"video fixture"
+            assert store.get_video(video_id)["video_path"] == str(final)
+        else:
+            assert not store.list_videos()
+
+
+@pytest.mark.parametrize("invalid", ["conflict", "malformed"])
+def test_unrecoverable_rename_record_keeps_api_available_and_files_untouched(library, invalid):
+    store, _, _, _ = library
+    video_id, source, _, _ = move(library)
+    target = source.with_name("taken.mp4")
+    target.write_bytes(b"unrelated recording")
+    journal = video_library._rename_journal(store)
+    if invalid == "malformed":
+        journal.write_text("{", encoding="utf-8")
+    else:
+        video_library._save_rename_journal(store, {
+            "video_id": video_id, "digest": store.get_video(video_id)["content_hash"],
+            "source": str(source), "target": str(target),
+            "intermediate": str(source.with_name(".rename-synthetic.tmp")),
+        })
+    before = journal.read_bytes()
+    with TestClient(api_main.create_app(store)) as restarted:
+        assert restarted.get("/api/health").status_code == 200
+        assert restarted.get(f"/api/videos/{video_id}/stream").content == b"video fixture"
+        assert restarted.patch(f"/api/videos/{video_id}/filename",
+                               json={"filename": "different.mp4"}).status_code == 400
+    assert source.read_bytes() == b"video fixture"
+    assert target.read_bytes() == b"unrelated recording"
+    assert journal.read_bytes() == before
+
+
+def test_rename_conflict_preserves_existing_target(library):
+    store, _, _, client = library
+    video_id, path, _, _ = move(library)
+    target = path.with_name("taken.mp4")
+    target.write_bytes(b"other recording")
+    before = dict(store.get_video(video_id))
+    response = client.patch(f"/api/videos/{video_id}/filename", json={"filename": target.name})
+    assert response.status_code == 400
+    assert path.read_bytes() == b"video fixture"
+    assert target.read_bytes() == b"other recording"
+    assert dict(store.get_video(video_id)) == before
+
+
+def test_verified_source_changed_before_import_is_rejected(library):
+    store, source, root, _ = library
+    verified = video_library.hash_video_source(store, source)
+    source.write_bytes(b"synthetic changed source")
+    with pytest.raises(ValueError, match="校验后发生变化"):
+        register_managed_video(store, source, root.parent / "audio", root, _verified_source=verified)
+    assert source.read_bytes() == b"synthetic changed source"
+    assert not store.list_videos()
 
 
 def set_copy_mode(client, enabled=True):

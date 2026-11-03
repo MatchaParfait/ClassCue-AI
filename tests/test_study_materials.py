@@ -1,6 +1,11 @@
 """Synthetic manual study selection, with no AI connections."""
 
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
+from threading import Event
+import asyncio
+import hashlib
 import json
 import sqlite3
 
@@ -50,6 +55,202 @@ def test_pdf_metadata_lazy_render_cross_page_and_reopen(repo):
     assert reopened.question(question["id"])["regions"] == question["regions"]
     crop = repo.region_image(doc["id"], blocks[0]["id"], [0.05, 0.05, 0.9, 0.5])
     assert crop.width > 100 and crop.height < Image.open(image).height
+
+
+def test_document_stream_is_read_in_chunks_and_pdf_is_parsed_from_disk(repo, monkeypatch):
+    data = pdf_bytes(2)
+    original_read = Path.read_bytes
+
+    class BoundedReader(BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= 1024 * 1024
+            return super().read(size)
+
+    def no_original_read(path):
+        assert path.name != "original.pdf", "PDF must not be read back into a full bytes buffer"
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", no_original_read)
+    document = repo.register_stream("stream.pdf", BoundedReader(data))
+    assert document["page_count"] == 2
+    assert document["sha256"] == hashlib.sha256(data).hexdigest()
+    with repo.resource(document["resource"]).open("rb") as saved:
+        assert saved.read() == data
+
+
+def test_document_upload_spills_to_library_disk_and_closes_spool(repo, monkeypatch):
+    import api.study_materials as module
+    from api.main import create_app
+
+    original_spool = module.SpooledTemporaryFile
+    streams, rolled = [], []
+    original_register = StudyMaterialStore.register_stream
+
+    def spool(**kwargs):
+        assert kwargs["dir"] == repo.root / ".uploads"
+        assert kwargs["max_size"] == 1024 * 1024
+        kwargs["max_size"] = 32
+        stream = original_spool(**kwargs)
+        streams.append(stream)
+        return stream
+
+    def register(repository, name, stream, course_id):
+        rolled.append(stream._rolled)
+        return original_register(repository, name, stream, course_id)
+
+    monkeypatch.setattr(module, "SpooledTemporaryFile", spool)
+    monkeypatch.setattr(StudyMaterialStore, "register_stream", register)
+    with TestClient(create_app(repo.store)) as client:
+        course = client.post("/api/study-courses", json={"name": "Synthetic course"}).json()
+        response = client.post("/api/study-documents", params={"name": "paper.pdf", "course_id": course["id"]},
+                               content=pdf_bytes(2))
+        assert response.status_code == 201, response.text
+    assert rolled == [True]
+    assert streams and all(stream.closed for stream in streams)
+    assert list((repo.root / ".uploads").iterdir()) == []
+
+
+@pytest.mark.parametrize("data,status", [(b"12345", 413), (b"", 400), (b"bad", 400)])
+def test_failed_document_upload_closes_spool_and_cleans_partial_document(repo, monkeypatch, data, status):
+    import api.study_materials as module
+    from api.main import create_app
+
+    streams = []
+    original_spool = module.SpooledTemporaryFile
+
+    def spool(**kwargs):
+        kwargs["max_size"] = 1
+        stream = original_spool(**kwargs)
+        streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(module, "SpooledTemporaryFile", spool)
+    monkeypatch.setattr(module, "MAX_DOCUMENT_BYTES", 4)
+    with TestClient(create_app(repo.store)) as client:
+        course = client.post("/api/study-courses", json={"name": "Synthetic course"}).json()
+        response = client.post("/api/study-documents", params={"name": "paper.pdf", "course_id": course["id"]},
+                               content=data)
+        assert response.status_code == status, response.text
+    assert streams and all(stream.closed for stream in streams)
+    assert repo.documents() == []
+    assert not list(repo.root.rglob("original.pdf"))
+    assert list((repo.root / ".uploads").iterdir()) == []
+
+
+@pytest.mark.parametrize("cancellation", ["asyncio", "anyio"])
+def test_cancelled_document_upload_closes_spool_without_document(repo, monkeypatch, cancellation):
+    import anyio
+    import api.study_materials as module
+    from starlette.requests import Request
+
+    streams = []
+    original_spool = module.SpooledTemporaryFile
+
+    def spool(**kwargs):
+        kwargs["max_size"] = 1
+        stream = original_spool(**kwargs)
+        streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(module, "SpooledTemporaryFile", spool)
+    routes = module.router(SimpleNamespace(get=lambda: repo.store))
+    endpoint = next(route.endpoint for route in routes.routes
+                    if route.path == "/api/study-documents" and "POST" in route.methods)
+    received = False
+    scope = None
+
+    async def receive():
+        nonlocal received
+        if not received:
+            received = True
+            return {"type": "http.request", "body": b"synthetic partial PDF", "more_body": True}
+        if cancellation == "asyncio":
+            raise asyncio.CancelledError()
+        scope.cancel()
+        await anyio.lowlevel.checkpoint()
+        raise AssertionError("cancelled request continued")
+
+    async def exercise():
+        nonlocal scope
+        request = Request({"type": "http", "method": "POST"}, receive)
+        if cancellation == "asyncio":
+            with pytest.raises(asyncio.CancelledError):
+                await endpoint(request, name="paper.pdf", course_id="unused-course")
+        else:
+            with anyio.CancelScope() as scope:
+                await endpoint(request, name="paper.pdf", course_id="unused-course")
+            assert scope.cancelled_caught
+
+    asyncio.run(exercise())
+    assert streams and all(stream.closed for stream in streams)
+    assert list((repo.root / ".uploads").iterdir()) == []
+    assert repo.documents() == []
+
+
+@pytest.mark.parametrize("phase", ["create", "write", "register", "close"])
+def test_task_cancel_waits_for_document_worker_before_closing_spool(repo, monkeypatch, phase):
+    import api.study_materials as module
+    from classcue.study_courses import StudyCourseStore
+    from starlette.requests import Request
+
+    started, release = Event(), Event()
+    streams = []
+    original_spool = module.SpooledTemporaryFile
+    original_register = StudyMaterialStore.register_stream
+    course = StudyCourseStore(repo.store).create(name="Synthetic course")
+
+    def pause():
+        started.set()
+        assert release.wait(10)
+
+    def spool(**kwargs):
+        stream = original_spool(**kwargs)
+        streams.append(stream)
+        if phase == "create":
+            pause()
+        for method in ("write", "close"):
+            if phase == method:
+                original = getattr(stream, method)
+
+                def blocked(*args):
+                    pause()
+                    return original(*args)
+
+                setattr(stream, method, blocked)
+        return stream
+
+    def register(repository, *args):
+        if phase == "register":
+            pause()
+        return original_register(repository, *args)
+
+    monkeypatch.setattr(module, "SpooledTemporaryFile", spool)
+    monkeypatch.setattr(StudyMaterialStore, "register_stream", register)
+    routes = module.router(SimpleNamespace(get=lambda: repo.store))
+    endpoint = next(route.endpoint for route in routes.routes
+                    if route.path == "/api/study-documents" and "POST" in route.methods)
+
+    async def receive():
+        return {"type": "http.request", "body": pdf_bytes(1), "more_body": False}
+
+    async def exercise():
+        task = asyncio.create_task(endpoint(Request({"type": "http", "method": "POST"}, receive),
+                                            name="paper.pdf", course_id=course["id"]))
+        try:
+            assert await asyncio.to_thread(started.wait, 10)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert streams and not streams[0].closed
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert all(stream.closed for stream in streams)
+    assert list((repo.root / ".uploads").iterdir()) == []
+    assert len(repo.documents()) == (1 if phase in {"register", "close"} else 0)
 
 
 def test_markdown_blocks_keep_source_and_list_items_formula_table_code(repo):

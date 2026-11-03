@@ -9,7 +9,7 @@ import math
 import threading
 from tempfile import NamedTemporaryFile
 
-from classcue.study_materials import MAX_IMAGE_PIXELS
+from classcue.study_materials import MAX_IMAGE_PIXELS, MAX_MARKDOWN_BYTES
 
 
 _PDF_RENDER_LOCK = threading.RLock()
@@ -60,6 +60,18 @@ def pdf_text_bounds(source: Path, page_index: int):
 
 
 def parse_document_bytes(format_name, data, directory: Path, root: Path, document_id: str):
+    return _parse_document(format_name, data, directory, root, document_id)
+
+
+def parse_document_file(format_name, source: Path, directory: Path, root: Path, document_id: str):
+    if format_name == "markdown":
+        if source.stat().st_size > MAX_MARKDOWN_BYTES:
+            raise ValueError("Markdown 文件超过 5 MB，请拆分后导入")
+        return _parse_document(format_name, source.read_bytes(), directory, root, document_id)
+    return _parse_document(format_name, source, directory, root, document_id)
+
+
+def _parse_document(format_name, data, directory: Path, root: Path, document_id: str):
     if format_name == "pdf":
         blocks = _pdf_blocks(data, document_id)
         return blocks, len(blocks)
@@ -69,7 +81,7 @@ def parse_document_bytes(format_name, data, directory: Path, root: Path, documen
     if format_name == "image":
         from PIL import Image, ImageOps
 
-        with Image.open(BytesIO(data)) as source:
+        with Image.open(data if isinstance(data, Path) else BytesIO(data)) as source:
             if source.width * source.height > MAX_IMAGE_PIXELS:
                 raise ValueError("图片尺寸过大，请缩小后导入")
             image = ImageOps.exif_transpose(source).convert("RGB")
@@ -149,7 +161,7 @@ def render_pdf_page(source: Path, page_index: int, target: Path):
 def _markdown_blocks(data, document_id):
     from markdown_it import MarkdownIt
 
-    if len(data) > 5_000_000:
+    if len(data) > MAX_MARKDOWN_BYTES:
         raise ValueError("Markdown 超过 5 MB，请拆分后导入")
     try:
         text = data.decode("utf-8-sig")

@@ -280,6 +280,38 @@ def test_receiver_only_acknowledges_valid_committed_blocks_after_durable_write(t
     assert not target.list_videos()
 
 
+def test_receiver_reuses_verified_source_hash_before_copying_to_library(tmp_path, monkeypatch):
+    import classcue.video_pipeline as video_pipeline
+
+    local, target, _, transport, remote_key, task_id, item = incoming_receiver(tmp_path, has_video=False)
+    monkeypatch.setattr(video_pipeline, "video_duration_ms", lambda _: 10000)
+    study_path = f"tasks/{task_id}/studies/{item['id']}"
+    transport.write("synthetic", study_path + ".ready.json", wire.envelope(
+        remote_key, "study", task_id, local.peer_id,
+        {"id": item["id"], "size": item["study"]["size"], "sha256": item["study"]["sha256"]},
+    ))
+    stem = f"tasks/{task_id}/chunks/{item['id']}.000000"
+    transport.write("synthetic", stem + ".bin", b"synthetic video bytes")
+    transport.write("synthetic", stem + ".ready.json", wire.envelope(
+        remote_key, "block", task_id, local.peer_id, {"id": item["id"], **item["blocks"][0]},
+    ))
+    local.tick()
+    original_hash = target.file_hash
+    paths = []
+
+    def file_hash(path):
+        paths.append(Path(path))
+        return original_hash(path)
+
+    monkeypatch.setattr(target, "file_hash", file_hash)
+    local.tick()
+    assert len(target.list_videos()) == 1
+    # Study import independently verifies the final video across its commit boundary.
+    assert [path.suffix for path in paths] == [".mp4", ".part", ".mp4"]
+    assert len(target.get_segments(target.list_videos()[0]["id"])) == 1
+    assert local.journal.task(task_id)["results"][0]["state"] == "imported"
+
+
 def test_terminal_cleanup_only_removes_expected_payloads_within_own_task(tmp_path):
     local, _, _, transport, _, task_id, item = incoming_receiver(tmp_path)
     other = str(uuid4())

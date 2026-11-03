@@ -24,7 +24,6 @@ from tempfile import SpooledTemporaryFile, TemporaryDirectory
 from typing import Annotated, Any, Callable, Literal
 from urllib.parse import quote, urlsplit
 
-from anyio import CancelScope
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
@@ -95,8 +94,9 @@ from api.bilibili import router as bilibili_router
 from api.questions import router as question_router
 from api.materials import router as materials_router
 from api.study_materials import router as study_materials_router
+from api.upload_io import run_upload_io
 from api.dsh_bridge import router as dsh_bridge_router
-from classcue.video_library import register_managed_video, video_filename
+from classcue.video_library import recover_managed_rename, register_managed_video, rename_managed_video, video_filename
 from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
 from classcue.api_failure import ApiUnavailable
 from classcue.web_batch import batch_summary, make_batch, normalize_batch, preview_directories, run_web_batch
@@ -1068,6 +1068,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             FrameStore(provider.get()).collect()
             before_recovery = asr_storage.storage_root(DIRECTORY_PROJECT_ROOT)
             storage_migration.recover_migration(DIRECTORY_PROJECT_ROOT, provider.get())
+            try:
+                await asyncio.to_thread(recover_managed_rename, provider.get())
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log_exception(LOGGER, "Video rename recovery requires attention; files preserved", exc=exc)
             if before_recovery != asr_storage.storage_root(DIRECTORY_PROJECT_ROOT):
                 # Modules may already have captured the uncommitted model path.
                 recovery_needs_restart.set()
@@ -2362,16 +2366,24 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def upload_io_context(factory):
+        manager = None
+        entered = False
+
         async def exit_context(*exc_info):
-            with CancelScope(shield=True):
-                return await run_in_threadpool(manager.__exit__, *exc_info)
+            if entered:
+                return await run_upload_io(manager.__exit__, *exc_info)
+
+        def enter_context():
+            nonlocal manager, entered
+            manager = factory()
+            resource = manager.__enter__()
+            entered = True
+            return resource
 
         async with AsyncExitStack() as cleanup:
             # Register cleanup before cancellation can interrupt resource acquisition.
-            with CancelScope(shield=True):
-                manager = await run_in_threadpool(factory)
-                resource = await run_in_threadpool(manager.__enter__)
-                cleanup.push_async_exit(exit_context)
+            cleanup.push_async_exit(exit_context)
+            resource = await run_upload_io(enter_context)
             yield resource
 
     @api.post("/api/videos/upload")
@@ -2392,12 +2404,24 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 ensure_file_changes_allowed()
                 if secondary_for is not None:
                     _video_or_404(provider.get(), secondary_for)
+                try:
+                    _audio, library = video_import_directories()
+                    library.mkdir(parents=True, exist_ok=True)
+                    return library
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="无法准备视频库上传目录，请检查存储设置和磁盘空间") from exc
 
         # Imports hold the task lock while copying; waiting here must not stall HTTP.
-        await run_in_threadpool(validate_upload)
+        upload_library = await run_in_threadpool(validate_upload)
+
+        def upload_directory():
+            try:
+                return TemporaryDirectory(prefix="classroom-upload-", dir=upload_library)
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail="无法创建视频临时文件，请检查视频库所在磁盘空间") from exc
 
         # Stream browser files to disk; never buffer a classroom recording in memory.
-        async with upload_io_context(lambda: TemporaryDirectory(prefix="classroom-upload-")) as temporary:
+        async with upload_io_context(upload_directory) as temporary:
             # Windows TEMP may use an 8.3 alias; canonicalize this server-owned directory.
             source = (await run_in_threadpool(Path(temporary).resolve)) / filename
             size = 0
@@ -2407,7 +2431,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                         size += len(chunk)
                         if size > MAX_VIDEO_BYTES:
                             raise HTTPException(status_code=413, detail="视频超过 1GB，请压缩后再导入")
-                        await run_in_threadpool(output.write, chunk)
+                        await run_upload_io(output.write, chunk)
+                    await run_upload_io(output.flush)
+                    await run_upload_io(os.fsync, output.fileno())
                 if size == 0:
                     raise HTTPException(status_code=400, detail="视频文件为空")
 
@@ -2424,7 +2450,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                         result = {"video": video, "video_id": video_id, "existed": existed}
                         return result
 
-                return await run_in_threadpool(finish_import)
+                return await run_upload_io(finish_import)
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2501,9 +2527,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             store.remove_secondary_view(video_id)
             return {"removed": True}
 
-    def import_video(path: str | Path, filename: str | None = None, *, on_registered=None,
-                     rename: bool = False, browser_upload: bool = False, secondary_only: bool = False,
-                     preserve_source: bool = False, validate_content=None):
+    def video_import_directories() -> tuple[Path, Path]:
         root = provider.data_root()
         audio = asr_storage.audio_directory(DIRECTORY_PROJECT_ROOT, root)
         library = asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, root)
@@ -2512,6 +2536,13 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             library, audio, asr_storage.log_directory(DIRECTORY_PROJECT_ROOT),
             assets / "models" / "asr", assets / ".runtime", DIRECTORY_PROJECT_ROOT / ".runtime",
         )
+        return audio, library
+
+    def import_video(path: str | Path, filename: str | None = None, *, on_registered=None,
+                     rename: bool = False, browser_upload: bool = False, secondary_only: bool = False,
+                     preserve_source: bool = False, validate_content=None, _verified_source=None):
+        root = provider.data_root()
+        audio, library = video_import_directories()
         return register_managed_video(
             provider.get(), path, audio, library, filename, on_registered=on_registered,
             delete_source_after_import=not preserve_source and (
@@ -2520,6 +2551,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             source_folder="" if browser_upload else None,
             secondary_only=secondary_only,
             validate_content=validate_content,
+            _verified_source=_verified_source,
+            _consume_upload=browser_upload,
         )
 
     @api.patch("/api/videos/{video_id}/filename")
@@ -2534,9 +2567,15 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 path = Path(video["video_path"])
                 if not path.is_file():
                     raise ValueError("视频源文件不存在，请先重新选择文件")
-                if provider.get().file_hash(path) != video["content_hash"]:
-                    raise ValueError("视频内容已变化，请先重新导入，未修改文件名")
-                _id, _path, _existed, warning = import_video(path, payload.filename, rename=True)
+                _audio, library = video_import_directories()
+                renamed = rename_managed_video(provider.get(), video_id, payload.filename, library)
+                warning = None
+                if renamed is None:
+                    if provider.get().file_hash(path) != video["content_hash"]:
+                        raise ValueError("视频内容已变化，请先重新导入，未修改文件名")
+                    _id, _path, _existed, warning = import_video(path, payload.filename, rename=True)
+            except sqlite3.Error as exc:
+                raise HTTPException(status_code=409, detail="保存文件名失败，原视频已保留，请稍后重试") from exc
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             result = video_payload(_video_or_404(provider.get(), video_id))

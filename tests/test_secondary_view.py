@@ -199,8 +199,10 @@ def test_secondary_import_hashes_only_source_and_verified_copy(secondary_upload_
     else:
         response = upload_secondary(client, ids[0])
     assert response.status_code == 200, response.text
-    assert len(paths) == 2
-    assert paths[0].suffix == ".mp4" and paths[1].suffix == ".part"
+    assert len(paths) == (2 if local else 1)
+    assert paths[0].suffix == ".mp4"
+    if local:
+        assert paths[1].suffix == ".part"
 
 
 def test_local_secondary_import_disk_work_keeps_health_responsive(secondary_upload_library, monkeypatch):

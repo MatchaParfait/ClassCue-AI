@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from functools import wraps
 from io import BytesIO
+from contextlib import asynccontextmanager
+from tempfile import SpooledTemporaryFile
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from classcue.study_materials import StudyMaterialStore
+from api.upload_io import run_upload_io
+from classcue.study_materials import MAX_DOCUMENT_BYTES, StudyMaterialStore
 from classcue.study_courses import StudyCourseStore
 
 
@@ -124,6 +127,35 @@ def router(provider, jobs=None):
             data.extend(chunk)
         return bytes(data)
 
+    @asynccontextmanager
+    async def document_body(request: Request, repo: StudyMaterialStore):
+        output = None
+
+        def create():
+            nonlocal output
+            directory = repo.root / ".uploads"
+            directory.mkdir(parents=True, exist_ok=True)
+            output = SpooledTemporaryFile(max_size=1024 * 1024, dir=directory, mode="w+b")
+
+        def append(chunk):
+            if output.tell() + len(chunk) > 1024 * 1024:
+                output.rollover()
+            output.write(chunk)
+
+        try:
+            await run_upload_io(create)
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_DOCUMENT_BYTES:
+                    raise HTTPException(413, "文件超过允许大小")
+                await run_upload_io(append, chunk)
+            await run_upload_io(output.seek, 0)
+            yield output
+        finally:
+            if output is not None:
+                await run_upload_io(output.close)
+
     @routes.get("/api/study-documents")
     def documents(include_deleted: bool = False, course_id: str | None = None, unassigned: bool = False):
         return repository().documents(include_deleted=include_deleted, course_id=course_id, unassigned=unassigned)
@@ -131,10 +163,10 @@ def router(provider, jobs=None):
     @routes.post("/api/study-documents", status_code=201)
     async def upload(request: Request, name: str = Query(min_length=1, max_length=240),
                      course_id: str = Query(min_length=1, max_length=100)):
-        data = await body(request, 100 * 1024 * 1024)
-        repo = repository()
         try:
-            return await run_in_threadpool(repo.register, name, data, course_id)
+            repo = await run_in_threadpool(repository)
+            async with document_body(request, repo) as stream:
+                return await run_upload_io(repo.register_stream, name, stream, course_id)
         except KeyError:
             raise HTTPException(404, "课程资料夹不存在") from None
         except (ValueError, TypeError) as error:

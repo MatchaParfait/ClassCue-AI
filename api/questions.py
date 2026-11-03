@@ -190,7 +190,7 @@ def router(provider, jobs, slide_root):
     @routes.post("/api/markers/{marker_id}/question/captures", status_code=201)
     async def upload_capture(marker_id: int, request: Request, captured_at_ms: int = Query(ge=0, le=9007199254740991),
                              as_question_image: bool = False):
-        idle()
+        await run_in_threadpool(idle)
         if request.headers.get("content-type", "").split(";")[0] not in {"image/jpeg", "image/png", "image/webp"}:
             raise HTTPException(status_code=415, detail="截图仅支持 JPEG、PNG 或 WebP")
         data = bytearray()

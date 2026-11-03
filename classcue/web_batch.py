@@ -15,6 +15,8 @@ from classcue.video_pipeline import (
     prepare_video_for_analysis, retranscribe_video,
 )
 from classcue.video_store import VideoStore, source_directory_key
+from classcue.video_library import hash_video_source
+from classcue.video_pipeline import _file_identity
 from classcue.asr_models import get_model, selected_model_id
 from classcue.early_extraction import early_analysis
 
@@ -223,9 +225,13 @@ def run_web_batch(
             update(0, f"{source.name}：正在保存到视频库", "importing")
             folder_id = ensure_folder(source.parent, Path(entry["source_root"]))
             entry["folder_id"] = folder_id
+            verified_source = None
             if source.is_file():
-                entry["content_hash"] = store.file_hash(source)
+                verified_source = hash_video_source(store, source)
+                entry["content_hash"] = verified_source[0]
                 checkpoint()
+                if _file_identity(source.stat()) != _file_identity(verified_source[1]):
+                    raise ValueError("视频在校验后发生变化，请重新导入")
             existing = store.get_video_by_hash(entry.get("content_hash", ""))
             if existing is not None:
                 entry["video_id"] = int(existing["id"])
@@ -243,7 +249,9 @@ def run_web_batch(
                     entry["video_path"] = store.get_video(video_id)["video_path"]
                     checkpoint()
 
-                _id, _path, _exists, warning = import_video(source, on_registered=registered)
+                _id, _path, _exists, warning = import_video(
+                    source, on_registered=registered, _verified_source=verified_source,
+                )
                 entry["warning"] = warning or ""
             if any(previous.get("video_id") == entry["video_id"] for previous in entries[:index]):
                 entry["status"] = "skipped"
