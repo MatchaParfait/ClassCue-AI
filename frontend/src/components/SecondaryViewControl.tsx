@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeftRight, Check, LoaderCircle, SlidersHorizontal, Trash2 } from "lucide-react";
-import { getSecondaryView, removeSecondaryView, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
+import { createPicker, getSecondaryView, importSecondaryView, pollPicker, removeSecondaryView, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
+import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import type { SecondaryView } from "../types";
 import { AnimatePresence, AnimatedPopup } from "./Motion";
 
@@ -16,10 +17,13 @@ interface Props {
 
 export function SecondaryViewControl({ videoId, demo, secondary, active, switching, onChange, onSwitch }: Props) {
   const id = useId();
+  const desktop = useDesktopAPI();
   const containerRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const alive = useRef(false);
+  const videoIdRef = useRef(videoId);
+  videoIdRef.current = videoId;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const busyRef = useRef(false);
@@ -65,12 +69,18 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
     setBusy(true);
     setError(null);
     try { await operation(); }
-    catch (failure) { if (alive.current) { setError(message(failure)); setOpen(true); } }
+    catch (failure) { if (alive.current && videoIdRef.current === videoId) { setError(message(failure)); setOpen(true); } }
     finally { busyRef.current = false; if (alive.current) setBusy(false); }
   };
   const offsetMs = Math.round(Number(offset) * 1000);
   const validOffset = offset.trim() !== "" && Number.isSafeInteger(offsetMs);
   const label = secondary ? active ? "切换到主视角" : "切换到副视角" : "导入副视角";
+  const showImported = (imported: Awaited<ReturnType<typeof importSecondaryView>>) => {
+    if (!alive.current || videoIdRef.current !== videoId) return;
+    onChangeRef.current(imported.secondary_view);
+    setOpen(true);
+    if (imported.video.storage_warning) setError(imported.video.storage_warning);
+  };
 
   return <div ref={containerRef} className="secondary-view-control">
     <input ref={fileRef} type="file" hidden accept=".mp4,.mov,.mkv,.avi" aria-label="选择副视角视频"
@@ -79,18 +89,21 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
         event.currentTarget.value = "";
         if (!file) return;
         void run(async () => {
-          const uploaded = await uploadSecondaryView(videoId, file);
-          if (alive.current) {
-            onChangeRef.current(uploaded.secondary_view);
-            setOpen(true);
-            if (uploaded.video.storage_warning) setError(uploaded.video.storage_warning);
-          }
+          showImported(await uploadSecondaryView(videoId, file));
         });
       }} />
     <button className={`secondary-view-button secondary-view-switch${active ? " is-active" : ""}`} type="button"
       aria-label={label} aria-pressed={active} title={demo ? "演示模式暂不支持导入副视角" : label}
       disabled={demo || loading || busy || switching}
-      onClick={() => { setError(null); if (secondary) onSwitch(); else fileRef.current?.click(); }}>
+      onClick={() => {
+        setError(null);
+        if (secondary) onSwitch();
+        else if (desktop) void run(async () => {
+          const path = await pollPicker(await createPicker("file"), 15 * 60_000);
+          if (path && alive.current && videoIdRef.current === videoId) showImported(await importSecondaryView(videoId, path));
+        });
+        else fileRef.current?.click();
+      }}>
       {busy || loading || switching ? <LoaderCircle className="spin" size={13} /> : <ArrowLeftRight size={14} />}
       <span>{secondary ? "切换视角" : "添加副视角"}</span>
     </button>

@@ -293,6 +293,70 @@ def test_failed_verification_preserves_source_and_removes_partial(library, monke
     assert not store.list_videos()
 
 
+def test_source_changing_during_hash_is_rejected_before_copy(library, monkeypatch):
+    store, source, root, _ = library
+    original_hash = store.file_hash
+
+    def mutate(path):
+        digest = original_hash(path)
+        source.write_bytes(b"source changed during hash")
+        return digest
+
+    monkeypatch.setattr(store, "file_hash", mutate)
+    with pytest.raises(ValueError, match="读取期间发生变化"):
+        move(library)
+    assert source.read_bytes() == b"source changed during hash"
+    assert not list(root.rglob("*.mp4"))
+    assert not store.list_videos()
+
+
+def test_copy_changing_during_verification_is_rejected(library, monkeypatch):
+    store, source, root, _ = library
+    original_hash = store.file_hash
+
+    def mutate(path):
+        digest = original_hash(path)
+        if Path(path).suffix == ".part":
+            Path(path).write_bytes(b"copy changed after hash")
+        return digest
+
+    monkeypatch.setattr(store, "file_hash", mutate)
+    with pytest.raises(ValueError, match="副本在校验期间发生变化"):
+        move(library)
+    assert source.read_bytes() == b"video fixture"
+    assert not list(root.rglob("*.mp4"))
+    assert not list(root.rglob("*.part"))
+    assert not store.list_videos()
+
+
+def test_copy_changing_before_registration_is_rejected(library, monkeypatch):
+    store, source, root, _ = library
+    original_register = video_pipeline.register_local_video
+
+    def mutate(store, path, *args, **kwargs):
+        Path(path).write_bytes(b"copy changed before registration")
+        return original_register(store, path, *args, **kwargs)
+
+    monkeypatch.setattr(video_pipeline, "register_local_video", mutate)
+    with pytest.raises(ValueError, match="校验后发生变化"):
+        move(library)
+    assert source.read_bytes() == b"video fixture"
+    assert not list(root.rglob("*.mp4"))
+    assert not store.list_videos()
+
+
+def test_reimport_of_unchanged_managed_file_does_not_hash(library, monkeypatch):
+    store, _, _, _ = library
+    video_id, path, _, _ = move(library)
+
+    def unexpected_hash(_path):
+        raise AssertionError("unchanged managed file should use its saved identity")
+
+    monkeypatch.setattr(store, "file_hash", unexpected_hash)
+    result = register_managed_video(store, path, path.parent / "audio", path.parent.parent)
+    assert result[:3] == (video_id, path, True)
+
+
 def test_failed_db_registration_preserves_source(library, monkeypatch):
     store, source, root, _ = library
     def denied(*_args, **_kwargs):

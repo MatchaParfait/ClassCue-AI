@@ -2419,21 +2419,14 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 def finish_import() -> dict[str, object]:
                     with jobs._lock:
                         ensure_file_changes_allowed()
-                        store = provider.get()
                         if secondary_for is not None:
-                            primary = _video_or_404(store, secondary_for)
-                            if primary["content_hash"] == store.file_hash(source):
-                                raise ValueError("副视角不能使用主视频本身，请选择另一个视频")
+                            return import_secondary_video(secondary_for, source, filename, browser_upload=True)
                         video_id, _path, existed, warning = import_video(
-                            source, filename, browser_upload=True, secondary_only=secondary_for is not None,
-                            on_registered=(lambda imported: store.set_secondary_view(secondary_for, imported))
-                            if secondary_for is not None else None,
+                            source, filename, browser_upload=True,
                         )
                         video = video_payload(_video_or_404(provider.get(), video_id))
                         video["storage_warning"] = warning
                         result = {"video": video, "video_id": video_id, "existed": existed}
-                        if secondary_for is not None:
-                            result["secondary_view"] = _row_to_dict(store.get_secondary_view(secondary_for))
                         return result
 
                 return await run_in_threadpool(finish_import)
@@ -2443,6 +2436,33 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def ensure_file_changes_allowed() -> None:
         if storage_migrating.is_set() or jobs.is_running() or provider.get().list_paused_jobs():
             raise HTTPException(status_code=409, detail="请先完成或停止任务，再移动视频或修改文件名")
+
+    def import_secondary_video(video_id: int, path: str | Path, filename: str | None,
+                               *, browser_upload: bool = False) -> dict[str, object]:
+        store = provider.get()
+        primary = _video_or_404(store, video_id)
+
+        def validate_content(digest: str) -> None:
+            if primary["content_hash"] == digest:
+                raise ValueError("副视角不能使用主视频本身，请选择另一个视频")
+
+        imported, _path, existed, warning = import_video(
+            path, filename, browser_upload=browser_upload, secondary_only=True, preserve_source=True,
+            validate_content=validate_content, on_registered=lambda secondary: store.set_secondary_view(video_id, secondary),
+        )
+        video = video_payload(_video_or_404(store, imported))
+        video["storage_warning"] = warning
+        return {"video": video, "video_id": imported, "existed": existed,
+                "secondary_view": _row_to_dict(store.get_secondary_view(video_id))}
+
+    @api.post("/api/videos/{video_id}/secondary-view/import")
+    def import_secondary_view(video_id: int, payload: VideoRegisterPayload) -> dict[str, object]:
+        with jobs._lock:
+            ensure_file_changes_allowed()
+            try:
+                return import_secondary_video(video_id, payload.path or "", payload.filename)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @api.get("/api/videos/{video_id}/secondary-view")
     def get_secondary_view(video_id: int) -> dict[str, object] | None:
@@ -2487,7 +2507,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             return {"removed": True}
 
     def import_video(path: str | Path, filename: str | None = None, *, on_registered=None,
-                     rename: bool = False, browser_upload: bool = False, secondary_only: bool = False):
+                     rename: bool = False, browser_upload: bool = False, secondary_only: bool = False,
+                     preserve_source: bool = False, validate_content=None):
         root = provider.data_root()
         audio = asr_storage.audio_directory(DIRECTORY_PROJECT_ROOT, root)
         library = asr_storage.video_directory(DIRECTORY_PROJECT_ROOT, root)
@@ -2498,9 +2519,12 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         )
         return register_managed_video(
             provider.get(), path, audio, library, filename, on_registered=on_registered,
-            delete_source_after_import=rename or asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, root),
+            delete_source_after_import=not preserve_source and (
+                rename or asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, root)
+            ),
             source_folder="" if browser_upload else None,
             secondary_only=secondary_only,
+            validate_content=validate_content,
         )
 
     @api.patch("/api/videos/{video_id}/filename")

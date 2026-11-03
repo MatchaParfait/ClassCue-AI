@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from inspect import signature
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -126,8 +127,13 @@ def discover_videos(folder: str | Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES)
 
 
+def _file_identity(stat: os.stat_result) -> tuple[int, ...]:
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 def register_local_video(
     store: VideoStore, raw_path: str | Path, audio_dir: str | Path, *, secondary_only: bool = False,
+    _verified_content: tuple[str, os.stat_result] | None = None,
 ) -> tuple[int, Path, bool]:
     video_path = Path(raw_path).expanduser().resolve()
     if not video_path.is_file():
@@ -137,14 +143,17 @@ def register_local_video(
     stat = video_path.stat()
     if stat.st_size > MAX_VIDEO_BYTES:
         raise ValueError("视频超过 1GB，请压缩后再识别")
+    # Only the managed importer supplies this identity, after hashing the actual copy.
+    if _verified_content is not None and _file_identity(stat) != _file_identity(_verified_content[1]):
+        raise ValueError("视频在校验后发生变化，请重新导入")
     existing_path = store.get_video_by_path(video_path)
-    if existing_path and int(existing_path["source_size"] or 0) == stat.st_size and int(existing_path["source_mtime_ns"] or 0) == stat.st_mtime_ns:
+    if _verified_content is None and existing_path and int(existing_path["source_size"] or 0) == stat.st_size and int(existing_path["source_mtime_ns"] or 0) == stat.st_mtime_ns:
         if existing_path["is_secondary"] and not secondary_only:
             store.promote_secondary_video(int(existing_path["id"]))
         return int(existing_path["id"]), video_path, True
 
     # The full hash is only needed for a new file or a file whose cheap identity changed.
-    digest = store.file_hash(video_path)
+    digest = _verified_content[0] if _verified_content is not None else store.file_hash(video_path)
     existing = store.get_video_by_hash(digest)
     if existing:
         store.update_video_path(int(existing["id"]), str(video_path), stat.st_size, stat.st_mtime_ns)

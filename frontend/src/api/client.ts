@@ -806,6 +806,16 @@ export async function uploadSecondaryView(videoId: number, file: File): Promise<
   return { ...raw, video: normalizeVideo(raw.video) };
 }
 
+export async function importSecondaryView(videoId: number, path: string): Promise<{
+  secondary_view: SecondaryView; video: Video;
+}> {
+  const raw = await request<{ secondary_view: SecondaryView; video: Video }>(
+    `/api/videos/${videoId}/secondary-view/import`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) },
+  );
+  return { ...raw, video: normalizeVideo(raw.video) };
+}
+
 export function getSecondaryView(videoId: number): Promise<SecondaryView | null> {
   return request(`/api/videos/${videoId}/secondary-view`);
 }

@@ -45,6 +45,7 @@ def register_managed_video(
     delete_source_after_import: bool = True,
     source_folder: str | None = None,
     secondary_only: bool = False,
+    validate_content: Callable[[str], None] | None = None,
 ) -> tuple[int, Path, bool, str | None]:
     source = Path(raw_path).expanduser().absolute()
     if source.resolve() != source or source.is_symlink():
@@ -63,7 +64,7 @@ def register_managed_video(
     # Serialize registration and renaming, including clients in another process.
     with FileLock(str(Path(store.path).parent / "video-library.lock"), timeout=30):
         current = store.get_video_by_path(source)
-        if current and source.is_relative_to(library_dir) and name == source.name:
+        if current and source.is_relative_to(library_dir) and name == source.name and validate_content is None:
             video_id, path, existed = video_pipeline.register_local_video(
                 store, source, audio_dir, secondary_only=secondary_only,
             )
@@ -72,8 +73,13 @@ def register_managed_video(
             return video_id, path, existed, None
 
         digest = store.file_hash(source)
+        if video_pipeline._file_identity(before) != video_pipeline._file_identity(source.stat()):
+            raise ValueError("视频在读取期间发生变化，请重新导入，原文件已保留")
+        if validate_content:
+            validate_content(digest)
         existing = store.get_video_by_hash(digest)
         destination = library_dir / digest / name
+        verified_stat = before
         if destination.parent.resolve() != destination.parent:
             raise ValueError("视频库中的目标目录不能是符号链接或目录联接")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -86,10 +92,14 @@ def register_managed_video(
             except Exception:
                 intermediate.rename(source)
                 raise
+            verified_stat = destination.stat()
         if destination != source:
             if destination.exists():
+                verified_stat = destination.stat()
                 if destination.is_symlink() or not destination.is_file() or store.file_hash(destination) != digest:
                     raise ValueError("视频库中存在不同内容的同名文件，未覆盖任何文件")
+                if video_pipeline._file_identity(verified_stat) != video_pipeline._file_identity(destination.stat()):
+                    raise ValueError("视频库文件在校验期间发生变化，请重新导入")
             else:
                 if shutil.disk_usage(library_dir).free < before.st_size:
                     raise ValueError("视频库所在磁盘空间不足，原文件未移动")
@@ -101,8 +111,11 @@ def register_managed_video(
                             shutil.copyfileobj(input_file, output, length=4 * 1024 * 1024)
                         output.flush()
                         os.fsync(output.fileno())
+                    copied_stat = temporary.stat()
                     if store.file_hash(temporary) != digest:
                         raise ValueError("视频复制校验失败，原文件未移动")
+                    if video_pipeline._file_identity(copied_stat) != video_pipeline._file_identity(temporary.stat()):
+                        raise ValueError("视频副本在校验期间发生变化，原文件未移动")
                     # Exclusive creation prevents overwriting a file that appeared during copying.
                     if os.name == "nt":
                         # Windows rename is atomic and refuses an existing destination, including on exFAT.
@@ -110,6 +123,11 @@ def register_managed_video(
                     else:
                         os.link(temporary, destination)
                     created = True
+                    verified_stat = destination.stat()
+                    # Renaming may change ctime; the copied file itself must stay identical.
+                    if video_pipeline._file_identity(copied_stat)[:-1] != video_pipeline._file_identity(verified_stat)[:-1]:
+                        destination.unlink(missing_ok=True)
+                        raise ValueError("视频副本在校验后发生变化，原文件未移动")
                 finally:
                     if temporary is not None:
                         temporary.unlink(missing_ok=True)
@@ -118,6 +136,7 @@ def register_managed_video(
         try:
             video_id, path, existed = video_pipeline.register_local_video(
                 store, destination, audio_dir, secondary_only=secondary_only,
+                _verified_content=(digest, verified_stat),
             )
             registered = True
             original_folder = str(source.parent) if not source.is_relative_to(library_dir) else None

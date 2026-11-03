@@ -101,6 +101,147 @@ def upload_secondary(client, primary, content=b"synthetic secondary upload"):
                        content=content)
 
 
+def test_local_secondary_import_skips_upload_temp_preserves_source_and_stays_hidden(
+    secondary_upload_library, tmp_path, monkeypatch,
+):
+    client, store, ids = secondary_upload_library
+    source = tmp_path / "local-camera.mp4"
+    source.write_bytes(b"synthetic local secondary")
+
+    def unexpected_temp(**_kwargs):
+        raise AssertionError("local import must not stage an upload")
+
+    monkeypatch.setattr(api_main, "TemporaryDirectory", unexpected_temp)
+    endpoint = f"/api/videos/{ids[0]}/secondary-view/import"
+    for existed in (False, True):
+        response = client.post(endpoint, json={"path": str(source)})
+        assert response.status_code == 200, response.text
+        result = response.json()
+        secondary_id = result["video_id"]
+        assert result["existed"] is existed
+        assert result["secondary_view"]["video_id"] == secondary_id
+        assert result["video"]["storage_warning"] is None
+        assert Path(result["video"]["video_path"]).read_bytes() == source.read_bytes()
+        assert store.get_video(secondary_id)["is_secondary"] == 1
+        assert {row["id"] for row in store.list_videos()} == set(ids)
+        assert not store.has_transcript(secondary_id)
+        assert not store.list_recent_jobs()
+    managed = result["video"]["video_path"]
+    assert client.post(endpoint, json={"path": managed}).json()["existed"]
+    assert source.read_bytes() == b"synthetic local secondary"
+    assert len(store.list_videos(include_secondary=True)) == 4
+
+
+def test_local_secondary_rejects_primary_missing_path_and_missing_parent_without_changes(
+    secondary_upload_library, tmp_path,
+):
+    client, store, ids = secondary_upload_library
+    before = dict(store.get_video(ids[0]))
+    source = Path(before["video_path"])
+    endpoint = f"/api/videos/{ids[0]}/secondary-view/import"
+    assert client.post(endpoint, json={"path": str(source)}).status_code == 400
+    assert client.post(endpoint, json={"path": str(tmp_path / "missing.mp4")}).status_code == 400
+    assert client.post("/api/videos/999/secondary-view/import", json={"path": str(source)}).status_code == 404
+    assert dict(store.get_video(ids[0])) == before
+    assert source.read_bytes() == b"synthetic camera 0"
+    assert len(store.list_videos(include_secondary=True)) == 3
+    assert store.get_secondary_view(ids[0]) is None
+
+
+@pytest.mark.parametrize("block", ["running", "resource_paused", "migration"])
+def test_local_secondary_import_obeys_file_change_guards(secondary_upload_library, block):
+    client, store, ids = secondary_upload_library
+    source = Path(store.get_video(ids[1])["video_path"])
+    if block == "migration":
+        client.app.state.storage_migrating.set()
+    else:
+        store.create_job("busy-import", "video_process", ids[0])
+        store.update_job("busy-import", status=block)
+    try:
+        response = client.post(f"/api/videos/{ids[0]}/secondary-view/import", json={"path": str(source)})
+        assert response.status_code == 409
+        assert source.read_bytes() == b"synthetic camera 1"
+        assert store.get_secondary_view(ids[0]) is None
+    finally:
+        client.app.state.storage_migrating.clear()
+
+
+def test_local_secondary_failed_link_keeps_original_and_valid_copy(secondary_upload_library, monkeypatch):
+    client, store, ids = secondary_upload_library
+    source = Path(store.get_video(ids[1])["video_path"])
+
+    def fail(*_args):
+        raise ValueError("synthetic link failure")
+
+    monkeypatch.setattr(store, "set_secondary_view", fail)
+    response = client.post(f"/api/videos/{ids[0]}/secondary-view/import", json={"path": str(source)})
+    assert response.status_code == 400
+    assert source.read_bytes() == b"synthetic camera 1"
+    assert Path(store.get_video(ids[1])["video_path"]).read_bytes() == source.read_bytes()
+    assert store.get_secondary_view(ids[0]) is None
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_secondary_import_hashes_only_source_and_verified_copy(secondary_upload_library, tmp_path, monkeypatch, local):
+    client, store, ids = secondary_upload_library
+    original_hash = store.file_hash
+    paths = []
+
+    def file_hash(path):
+        paths.append(Path(path))
+        return original_hash(path)
+
+    monkeypatch.setattr(store, "file_hash", file_hash)
+    if local:
+        source = tmp_path / "local-camera.mp4"
+        source.write_bytes(b"synthetic local secondary")
+        response = client.post(f"/api/videos/{ids[0]}/secondary-view/import", json={"path": str(source)})
+    else:
+        response = upload_secondary(client, ids[0])
+    assert response.status_code == 200, response.text
+    assert len(paths) == 2
+    assert paths[0].suffix == ".mp4" and paths[1].suffix == ".part"
+
+
+def test_local_secondary_import_disk_work_keeps_health_responsive(secondary_upload_library, monkeypatch):
+    import httpx
+
+    client, store, ids = secondary_upload_library
+    entered, health_finished = Event(), Event()
+    health_during_import = []
+    original_register = api_main.register_managed_video
+
+    def register(*args, **kwargs):
+        entered.set()
+        health_during_import.append(health_finished.wait(3))
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(api_main, "register_managed_video", register)
+    source = store.get_video(ids[1])["video_path"]
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
+                                    base_url="http://127.0.0.1") as requests:
+            async def heartbeat():
+                try:
+                    assert await asyncio.to_thread(entered.wait, 5)
+                    return await requests.get("/api/health")
+                finally:
+                    health_finished.set()
+
+            return await asyncio.gather(
+                requests.post(f"/api/videos/{ids[0]}/secondary-view/import", json={"path": source}),
+                heartbeat(),
+            )
+
+    try:
+        imported, health = asyncio.run(exercise())
+    finally:
+        health_finished.set()
+    assert imported.status_code == health.status_code == 200
+    assert health_during_import == [True]
+
+
 def test_secondary_upload_waiting_for_import_lock_keeps_health_responsive(secondary_upload_library):
     import httpx
 
