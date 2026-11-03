@@ -9,33 +9,38 @@ html,body{width:100%;height:100%;margin:0;overflow:hidden}
 body{background:__STARTUP_BACKGROUND__;color:#192b24;font:14px "Segoe UI","Microsoft YaHei",sans-serif;letter-spacing:0}
 .startup-screen{position:relative;isolation:isolate;width:100%;height:100%;min-height:360px}
 .startup-art{position:absolute;inset:0;z-index:-2;width:100%;height:100%;object-fit:cover;object-position:center;user-select:none}
-.startup-screen:before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(#fffffff0,#ffffff00 120px),linear-gradient(to top,#fffffff5,#ffffff00 var(--startup-footer,160px))}
+.startup-screen:before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(#ffffff66,#ffffff00 120px),linear-gradient(to top,#ffffff66,#ffffff00 var(--startup-footer,160px))}
 .startup-screen[data-error="true"]{--startup-footer:240px}
-.startup-brand{position:absolute;top:24px;left:32px;right:32px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.startup-glass{border:1px solid #ffffffe0;border-radius:8px;background:#f7fbf8f2;box-shadow:0 6px 24px #192b241f,inset 0 1px 0 #fff,inset 0 -1px 0 #ffffff80}
+.startup-brand{position:absolute;top:12px;left:16px;max-width:calc(100% - 32px);padding:10px 15px;display:flex;align-items:baseline;gap:8px 14px;flex-wrap:wrap}
 .startup-brand h1{margin:0;font-size:27px;line-height:1.3;font-weight:750}
-.startup-brand p{margin:0;color:#52655a;font-size:13px}
-.startup-copy{position:absolute;left:32px;right:32px;bottom:24px;max-width:960px;max-height:calc(100% - 100px);overflow:auto}
-.startup-caption{margin:0 0 8px;font-size:20px;line-height:1.4;font-weight:650;text-wrap:pretty}
-.startup-status{display:flex;align-items:flex-start;gap:9px;color:#52655a;min-height:24px}
+.startup-brand p{margin:0;color:#33483b;font-size:14px;font-weight:600;line-height:1.6}
+.startup-copy{position:absolute;left:16px;bottom:12px;width:max-content;max-width:min(992px,calc(100% - 32px));max-height:calc(100% - 112px);padding:12px 15px;overflow:auto}
+.startup-caption{margin:0 0 8px;font-size:20px;line-height:1.4;font-weight:650;text-wrap:pretty;overflow-wrap:anywhere}
+.startup-status{display:flex;align-items:flex-start;gap:9px;color:#33483b;font-weight:550;min-height:24px}
 .startup-status:before{content:"";flex:0 0 7px;height:7px;margin-top:8px;border-radius:50%;background:#54845c}
 .startup-status[data-error="true"]{color:#9f3636}
 .startup-status[data-error="true"]:before{background:#b74c4c}
 .startup-status p{margin:0;line-height:1.7;white-space:pre-line;overflow-wrap:anywhere}
 .startup-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 button{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 15px;border:1px solid #aabdb0;border-radius:6px;background:#ffffffeb;color:#254d34;font:inherit;cursor:pointer}
+button:hover:not(:disabled){border-color:#688571;background:#fff}
 button:focus-visible{outline:2px solid #285c35;outline-offset:3px}
 button:disabled{cursor:wait;opacity:.6}
 [hidden]{display:none!important}
 dialog{max-width:440px;max-height:80vh;border:1px solid #cbd6cf;border-radius:8px;padding:24px;background:#fff;color:#192b24}
 dialog p{line-height:1.7;white-space:pre-line}
 dialog::backdrop{background:#192b243d}
-@media(max-width:760px){.startup-brand{left:24px;right:24px;top:20px}.startup-copy{left:24px;right:24px}.startup-caption{font-size:18px}.startup-brand h1{font-size:24px}}
-@media(max-height:520px){.startup-brand{top:16px}.startup-copy{bottom:16px}.startup-caption{font-size:18px}}
+@supports((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.startup-glass{background:linear-gradient(135deg,#ffffffe8,#f4faf4d6);-webkit-backdrop-filter:blur(18px) saturate(1.12);backdrop-filter:blur(18px) saturate(1.12)}}
+@media(prefers-reduced-transparency:reduce){.startup-glass{background:#f7fbf8;-webkit-backdrop-filter:none;backdrop-filter:none}}
+@media(forced-colors:active){.startup-glass{background:Canvas;border-color:CanvasText;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}}
+@media(max-width:760px){.startup-brand,.startup-copy{left:12px;max-width:calc(100% - 24px);padding-left:11px;padding-right:11px}.startup-caption{font-size:18px}.startup-brand h1{font-size:24px}}
+@media(max-height:520px){.startup-brand{top:8px}.startup-copy{bottom:8px}.startup-caption{font-size:18px}}
 </style>
 <main class="startup-screen" aria-label="应用启动画面" data-scene-id="__STARTUP_SCENE__">
   <!--STARTUP_ARTWORK-->
-  <header class="startup-brand"><h1>ClassCue AI</h1><p>课堂重点复习</p></header>
-  <div class="startup-copy">
+  <header class="startup-brand startup-glass"><h1>ClassCue AI</h1><p>课堂重点复习</p></header>
+  <div class="startup-copy startup-glass">
     <p class="startup-caption"><!--STARTUP_CAPTION--></p>
     <div class="startup-status" id="sync" role="status"><p id="message">正在打开视频库…</p></div>
     <div class="startup-actions" id="actions" hidden>

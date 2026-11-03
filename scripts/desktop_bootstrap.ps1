@@ -14,7 +14,7 @@ New-Item -ItemType Directory -Force -Path $Runtime | Out-Null
 $Scene = $null
 $Artwork = $null
 $script:ArtworkSurface = $null
-$script:ArtworkSurfaceError = $false
+$script:ArtworkSurfaceLayout = ""
 $script:StartupFailed = $false
 try {
     $ArtRoot = Join-Path $ProjectRoot "assets\startup"
@@ -64,8 +64,8 @@ $Form.Controls.Add($Brand)
 $Subtitle = New-Object Windows.Forms.Label
 $Subtitle.AutoSize = $true
 $Subtitle.BackColor = [Drawing.Color]::Transparent
-$Subtitle.ForeColor = [Drawing.ColorTranslator]::FromHtml("#52655a")
-$Subtitle.Font = New-Object Drawing.Font("Microsoft YaHei UI", 10)
+$Subtitle.ForeColor = [Drawing.ColorTranslator]::FromHtml("#33483b")
+$Subtitle.Font = New-Object Drawing.Font("Microsoft YaHei UI", 10.5)
 $Subtitle.Text = "课堂重点复习"
 $Form.Controls.Add($Subtitle)
 $Caption = New-Object Windows.Forms.Label
@@ -77,7 +77,7 @@ $Form.Controls.Add($Caption)
 $Label = New-Object Windows.Forms.Label
 $Label.BackColor = [Drawing.Color]::Transparent
 $Label.ForeColor = $Subtitle.ForeColor
-$Label.Font = New-Object Drawing.Font("Microsoft YaHei UI", 10)
+$Label.Font = New-Object Drawing.Font("Microsoft YaHei UI", 10.5)
 $Label.Text = "正在准备桌面环境…"
 $Form.Controls.Add($Label)
 $Retry = New-Object Windows.Forms.Button
@@ -91,6 +91,23 @@ $Logs.Size = New-Object Drawing.Size(100, 38)
 $Logs.Visible = $false
 $Form.Controls.Add($Logs)
 $Logs.Add_Click({ Start-Process notepad.exe -ArgumentList "`"$(Join-Path $Runtime 'desktop-prepare-error.log')`"" })
+
+function Draw-StartupGlass($Canvas, [Drawing.Rectangle]$Bounds) {
+    $Path = New-Object Drawing.Drawing2D.GraphicsPath
+    $Brush = New-Object Drawing.Drawing2D.LinearGradientBrush($Bounds,
+        [Drawing.Color]::FromArgb(232, 255, 255, 255), [Drawing.Color]::FromArgb(216, 244, 250, 244),
+        [Drawing.Drawing2D.LinearGradientMode]::Vertical)
+    $Border = New-Object Drawing.Pen([Drawing.Color]::FromArgb(224, 255, 255, 255), 1)
+    try {
+        $Path.AddArc($Bounds.Left, $Bounds.Top, 16, 16, 180, 90)
+        $Path.AddArc(($Bounds.Right - 16), $Bounds.Top, 16, 16, 270, 90)
+        $Path.AddArc(($Bounds.Right - 16), ($Bounds.Bottom - 16), 16, 16, 0, 90)
+        $Path.AddArc($Bounds.Left, ($Bounds.Bottom - 16), 16, 16, 90, 90)
+        $Path.CloseFigure()
+        $Canvas.FillPath($Brush, $Path)
+        $Canvas.DrawPath($Border, $Path)
+    } finally { $Path.Dispose(); $Brush.Dispose(); $Border.Dispose() }
+}
 
 function Update-Layout {
     $Edge = if ($Form.ClientSize.Width -le 760) { 24 } else { 32 }
@@ -113,37 +130,50 @@ function Update-Layout {
     $Logs.Location = New-Object Drawing.Point(($Edge + 110), ($StatusTop + $StatusHeight + 14))
     $SurfaceWidth = $Form.ClientSize.Width
     $SurfaceHeight = $Form.ClientSize.Height
-    if ($Artwork -and $SurfaceWidth -gt 0 -and $SurfaceHeight -gt 0 -and
+    $HeaderGlass = New-Object Drawing.Rectangle(($Edge - 16), 8,
+        ($Brand.PreferredWidth + 14 + $Subtitle.PreferredWidth + 32), ($Brand.PreferredHeight + 24))
+    $ContentWidth = [Math]::Max($CaptionSize.Width, $StatusSize.Width)
+    if ($script:StartupFailed) { $ContentWidth = [Math]::Max(220, $ContentWidth) }
+    $FooterGlass = New-Object Drawing.Rectangle(($Edge - 16), ($Top - 12),
+        ([int][Math]::Min($Width + 32, $ContentWidth + 32)), ($SurfaceHeight - $Top))
+    $SurfaceLayout = "$SurfaceWidth,$SurfaceHeight,$HeaderGlass,$FooterGlass"
+    if ($SurfaceWidth -gt 0 -and $SurfaceHeight -gt 0 -and
         (-not $script:ArtworkSurface -or $script:ArtworkSurface.Width -ne $SurfaceWidth -or
             $script:ArtworkSurface.Height -ne $SurfaceHeight -or
-            $script:ArtworkSurfaceError -ne $script:StartupFailed)) {
+            $script:ArtworkSurfaceLayout -ne $SurfaceLayout)) {
         # Match the WebView's centered object-fit: cover without distorting the image.
         $Surface = New-Object Drawing.Bitmap($SurfaceWidth, $SurfaceHeight)
         $Canvas = [Drawing.Graphics]::FromImage($Surface)
         try {
             $Canvas.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $Scale = [Math]::Max($SurfaceWidth / $Artwork.Width, $SurfaceHeight / $Artwork.Height)
-            $DrawWidth = [int][Math]::Ceiling($Artwork.Width * $Scale)
-            $DrawHeight = [int][Math]::Ceiling($Artwork.Height * $Scale)
-            $Canvas.DrawImage($Artwork, [int](($SurfaceWidth - $DrawWidth) / 2),
-                [int](($SurfaceHeight - $DrawHeight) / 2), $DrawWidth, $DrawHeight)
+            $Canvas.Clear($Form.BackColor)
+            if ($Artwork) {
+                $Scale = [Math]::Max($SurfaceWidth / $Artwork.Width, $SurfaceHeight / $Artwork.Height)
+                $DrawWidth = [int][Math]::Ceiling($Artwork.Width * $Scale)
+                $DrawHeight = [int][Math]::Ceiling($Artwork.Height * $Scale)
+                $Canvas.DrawImage($Artwork, [int](($SurfaceWidth - $DrawWidth) / 2),
+                    [int](($SurfaceHeight - $DrawHeight) / 2), $DrawWidth, $DrawHeight)
+            }
             $HeaderArea = New-Object Drawing.Rectangle(0, 0, $SurfaceWidth, 120)
             $FooterHeight = if ($script:StartupFailed) { 240 } else { 160 }
             $FooterArea = New-Object Drawing.Rectangle(0, ($SurfaceHeight - $FooterHeight), $SurfaceWidth, $FooterHeight)
             $HeaderBrush = New-Object Drawing.Drawing2D.LinearGradientBrush($HeaderArea,
-                [Drawing.Color]::FromArgb(240, 255, 255, 255), [Drawing.Color]::FromArgb(0, 255, 255, 255),
+                [Drawing.Color]::FromArgb(102, 255, 255, 255), [Drawing.Color]::FromArgb(0, 255, 255, 255),
                 [Drawing.Drawing2D.LinearGradientMode]::Vertical)
             $FooterBrush = New-Object Drawing.Drawing2D.LinearGradientBrush($FooterArea,
-                [Drawing.Color]::FromArgb(0, 255, 255, 255), [Drawing.Color]::FromArgb(245, 255, 255, 255),
+                [Drawing.Color]::FromArgb(0, 255, 255, 255), [Drawing.Color]::FromArgb(102, 255, 255, 255),
                 [Drawing.Drawing2D.LinearGradientMode]::Vertical)
             try {
                 $Canvas.FillRectangle($HeaderBrush, $HeaderArea)
                 $Canvas.FillRectangle($FooterBrush, $FooterArea)
             } finally { $HeaderBrush.Dispose(); $FooterBrush.Dispose() }
+            $Canvas.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            Draw-StartupGlass $Canvas $HeaderGlass
+            Draw-StartupGlass $Canvas $FooterGlass
         } finally { $Canvas.Dispose() }
         $PreviousSurface = $script:ArtworkSurface
         $script:ArtworkSurface = $Surface
-        $script:ArtworkSurfaceError = $script:StartupFailed
+        $script:ArtworkSurfaceLayout = $SurfaceLayout
         $Form.BackgroundImage = $Surface
         if ($PreviousSurface) { $PreviousSurface.Dispose() }
     }
@@ -223,6 +253,7 @@ $Form.Add_FormClosing({
     if ($script:Preparation -and -not $script:Preparation.HasExited) {
         $EventArgs.Cancel = $true
         $Label.Text = "正在准备应用，请等待本次准备结束后再关闭。"
+        Update-Layout
     }
 })
 $Timer.Add_Tick({
@@ -248,6 +279,7 @@ $Timer.Add_Tick({
         $script:Launching = $true
         $script:WindowDeadline = [DateTime]::UtcNow.AddSeconds(60)
         $Label.Text = "正在打开视频库…"
+        Update-Layout
     } catch {
         Show-Failure "桌面窗口未能启动，请查看日志后重试。"
     }
