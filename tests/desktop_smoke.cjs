@@ -10,7 +10,6 @@ const environment = [".venv", path.join(".runtime", "venv")]
   .find(directory => fs.existsSync(path.join(directory, "python.exe")));
 assert.ok(environment, "Prepare the desktop Python environment first");
 const python = path.join(environment, "python.exe");
-const pythonw = path.join(environment, "pythonw.exe");
 const prepared = spawnSync(python, ["tests/fixtures/desktop_application.py"], { cwd: root, encoding: "utf8" });
 assert.equal(prepared.status, 0, prepared.stderr);
 const fixture = JSON.parse(prepared.stdout.trim().split("\n").at(-1));
@@ -75,11 +74,12 @@ assert len(matched)==1,matched
   assert.equal(spawnSync(python, ["-c", code], { encoding: "utf8" }).status, 0);
 }
 async function main() {
-  processHandle = spawn(pythonw, [path.join(fixture.project, "scripts", "desktop_app.py")], {
-    cwd: fixture.project, env, windowsHide: true, stdio: "ignore",
+  processHandle = spawn(fixture.host, ["--desktop"], {
+    cwd: fixture.project, env, stdio: "ignore",
   });
   processHandle.unref();
   const initial = await until(() => ipc("status"), state => state.ready && state.tray);
+  assert.equal(initial.pid, processHandle.pid, "The branded executable must own the desktop window");
   console.log("ready", initial.pid);
   browser = await chromium.connectOverCDP("http://127.0.0.1:9238");
   const page = browser.contexts()[0].pages()[0];
@@ -231,7 +231,7 @@ async function main() {
   await page.getByRole("button", { name: "最小化到托盘", exact: true }).click();
   await until(() => ipc("status"), state => !state.visible);
   assert.ok((await fetch(`${api}/api/library/status`).then(r => r.json())).processing);
-  const secondary = spawn(pythonw, [path.join(fixture.project, "scripts", "desktop_app.py")], {
+  const secondary = spawn(fixture.host, [], {
     cwd: fixture.project, env, windowsHide: true, stdio: "ignore",
   });
   await new Promise(resolve => secondary.once("exit", resolve));

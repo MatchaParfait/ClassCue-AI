@@ -69,4 +69,8 @@ if (-not (Test-Path -LiteralPath $Index) -or (Get-Item -LiteralPath $Index).Last
 }
 $Pythonw = Join-Path (Split-Path $Python -Parent) "pythonw.exe"
 if (-not (Test-Path -LiteralPath $Pythonw)) { throw "The windowed Python executable is missing." }
-@{ pythonw = $Pythonw } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $ProjectRoot ".runtime\desktop_ready.json") -Encoding UTF8
+Write-Host "Preparing the ClassCue AI desktop host..." -ForegroundColor Cyan
+& $Python (Join-Path $PSScriptRoot "prepare_desktop_host.py")
+if ($LASTEXITCODE -ne 0) { throw "The ClassCue AI desktop host could not be prepared." }
+$DesktopHost = Join-Path $ProjectRoot ".runtime\desktop-host\ClassCue-AI.exe"
+@{ pythonw = $Pythonw; host = $DesktopHost } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $ProjectRoot ".runtime\desktop_ready.json") -Encoding UTF8

@@ -80,7 +80,7 @@ $Timer.Add_Tick({
     }
     try {
         $Config = Get-Content -LiteralPath (Join-Path $Runtime "desktop_ready.json") -Raw | ConvertFrom-Json
-        Start-Process -FilePath $Config.pythonw -WorkingDirectory $ProjectRoot -WindowStyle Hidden -ArgumentList "`"$(Join-Path $PSScriptRoot 'desktop_app.py')`""
+        Start-Process -FilePath $Config.host -WorkingDirectory $ProjectRoot -ArgumentList "--desktop"
         $Form.Close()
     } catch {
         $Progress.Visible = $false

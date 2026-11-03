@@ -60,6 +60,8 @@ def main():
             container.mux(packet)
     store = VideoStore(data / "project.db")
     store.create_video("desktop-qa", media.name, str(media), str(project / "audio.wav"), 3000)
+    from scripts.prepare_desktop_host import prepare_host
+    host = prepare_host(project)
     api_path = project / "api" / "main.py"
     text = api_path.read_text(encoding="utf-8")
     qa_route = '''
@@ -74,7 +76,7 @@ def main():
 '''
     text = text.replace("    from classcue.frontend_host import mount_frontend", qa_route + "    from classcue.frontend_host import mount_frontend")
     api_path.write_text(text, encoding="utf-8")
-    print(json.dumps({"project": str(project), "data": str(data)}, ensure_ascii=True))
+    print(json.dumps({"project": str(project), "data": str(data), "host": str(host)}, ensure_ascii=True))
 
 
 if __name__ == "__main__":
