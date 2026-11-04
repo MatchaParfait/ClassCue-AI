@@ -15,7 +15,14 @@ h1, h2, p { margin: 0; }
 .video-section .source-badge { flex: 0 0 auto; }
 .video-frame:focus-visible { outline: 2px solid var(--ui-player-border); outline-offset: 3px; }
 .video-frame:fullscreen { width: 100%; height: 100%; aspect-ratio: auto; border-radius: 0; }
-.video-player { display: block; width: 100%; height: 100%; object-fit: contain; background: var(--ui-player-bg); cursor: pointer; }
+.video-player { display: block; width: 100%; height: 100%; object-fit: contain; background: var(--ui-player-bg); cursor: pointer; touch-action: manipulation; user-select: none; }
+.video-player.is-long-pressing { cursor: wait; }
+.video-long-press-indicator {
+  position: absolute; top: 14px; left: 50%; z-index: 1; transform: translateX(-50%);
+  padding: 4px 8px; border: 1px solid var(--ui-player-border); border-radius: 4px;
+  color: var(--ui-player-text); background: var(--ui-player-scrim); font-size: 12px;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
 .video-caption-area { position: absolute; inset: 12px 12px 88px; pointer-events: none; }
 .video-caption {
   position: absolute; width: max-content; max-width: 100%; max-height: 100%; overflow: auto;

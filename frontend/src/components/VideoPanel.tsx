@@ -2,7 +2,7 @@ import { useShortcuts, matchesShortcut, shortcutTitle, shortcutAria } from "../s
 import { AnimatePresence, AnimatedPopup, useEntryMotion } from "./Motion";
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, Type, Volume2, VolumeX } from "lucide-react";
-import type { CSSProperties, KeyboardEvent, RefObject } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import type { SecondaryView, Subtitle, Video } from "../types";
 import { getStreamUrl } from "../api/client";
 import { formatTime } from "../utils";
@@ -100,9 +100,14 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [longPressing, setLongPressing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [captionReset, setCaptionReset] = useState(0);
+  const longPressTimer = useRef<number | null>(null);
+  const longPressPointerId = useRef<number | null>(null);
+  const longPressRestore = useRef<{ rate: number; wasPaused: boolean } | null>(null);
+  const suppressLongPressClick = useRef(false);
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
 
@@ -310,6 +315,53 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   };
 
   const toggleSubtitles = () => setPreferences((current) => ({ ...current, enabled: !current.enabled }));
+  const clearLongPressTimer = () => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+  const finishLongPress = () => {
+    clearLongPressTimer();
+    longPressPointerId.current = null;
+    const restore = longPressRestore.current;
+    longPressRestore.current = null;
+    if (!restore) return;
+    const element = videoRef.current;
+    if (element) {
+      element.playbackRate = restore.rate;
+      if (restore.wasPaused) element.pause();
+    }
+    setPlaybackRate(restore.rate);
+    setLongPressing(false);
+  };
+  const beginLongPress = (event: ReactPointerEvent<HTMLVideoElement>) => {
+    if (event.button !== 0 || !event.isPrimary || longPressPointerId.current !== null) return;
+    clearLongPressTimer();
+    longPressPointerId.current = event.pointerId;
+    suppressLongPressClick.current = false;
+    longPressTimer.current = window.setTimeout(() => {
+      longPressTimer.current = null;
+      const element = videoRef.current;
+      if (!element || pendingSource.current) return;
+      longPressRestore.current = { rate: element.playbackRate, wasPaused: element.paused };
+      element.playbackRate = 3;
+      setPlaybackRate(3);
+      setLongPressing(true);
+      suppressLongPressClick.current = true;
+      if (element.paused) void element.play().catch(() => undefined);
+    }, 320);
+  };
+  useEffect(() => {
+    const release = () => finishLongPress();
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      finishLongPress();
+    };
+  }, [videoRef]);
   const playerKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || event.nativeEvent.isComposing || (event.target as HTMLElement).closest("button, input, select, textarea, [contenteditable], [role='group']")) return;
     if (event.repeat && !matchesShortcut(event.nativeEvent, shortcuts, "seekBack") && !matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) return;
@@ -332,7 +384,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       <div ref={frameRef} className="video-frame" tabIndex={0} aria-label="视频播放器" onKeyDown={playerKeyboard}>
         <video
           ref={videoRef}
-          className="video-player"
+          className={`video-player${longPressing ? " is-long-pressing" : ""}`}
           playsInline
           autoPlay={autoPlay && !restoredRef.current && !switching}
           crossOrigin="anonymous"
@@ -424,11 +476,21 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
               setPlaybackError("视频加载失败，请检查视频文件或连接。");
             }
           }}
-          onClick={() => void togglePlay()}
+          onPointerDown={beginLongPress}
+          onPointerLeave={finishLongPress}
+          onContextMenu={(event) => event.preventDefault()}
+          onClick={() => {
+            if (suppressLongPressClick.current) {
+              suppressLongPressClick.current = false;
+              return;
+            }
+            void togglePlay();
+          }}
           onDoubleClick={() => void toggleFullscreen()}
         >
           你的浏览器不支持视频播放。
         </video>
+        {longPressing && <div className="video-long-press-indicator" role="status" aria-live="polite">3x</div>}
         {subtitles.length > 0 && (
           <DraggableSubtitle key={`${progressKey}:${captionReset}`} text={preferences.enabled ? activeSubtitle?.text ?? "" : ""} fontSize={preferences.fontSize} />
         )}
@@ -520,7 +582,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
                 setPlaybackRate(Number(event.target.value));
               }}
             >
-              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}x</option>)}
+              {[0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map((rate) => <option key={rate} value={rate}>{rate}x</option>)}
             </select>
             <button className="player-control" type="button" aria-label={fullscreen ? "退出全屏" : "全屏"} title={shortcutTitle(fullscreen ? "退出全屏" : "全屏", shortcuts, "fullscreen")} aria-keyshortcuts={shortcutAria(shortcuts, "fullscreen")} onClick={() => void toggleFullscreen()}>
               {fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}

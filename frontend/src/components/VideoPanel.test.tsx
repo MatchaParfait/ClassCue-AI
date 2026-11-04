@@ -307,11 +307,43 @@ describe("video subtitles and player controls", () => {
     expect(videoRef.current?.muted).toBe(false);
     expect(videoRef.current?.volume).toBe(0.5);
     const speed = container.querySelector<HTMLSelectElement>(".player-speed")!;
+    expect([...speed.options].map(option => option.value)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "2", "2.5", "3"]);
     act(() => {
       speed.value = "1.5";
       speed.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(videoRef.current?.playbackRate).toBe(1.5);
+  });
+
+  it("temporarily plays at 3x while the video is held and restores the prior state", async () => {
+    vi.useFakeTimers();
+    try {
+      mount();
+      const element = videoRef.current!;
+      const pointerDown = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+      Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+      Object.defineProperty(pointerDown, "isPrimary", { value: true });
+      act(() => element.dispatchEvent(pointerDown));
+      act(() => vi.advanceTimersByTime(319));
+      expect(element.playbackRate).toBe(1);
+      act(() => vi.advanceTimersByTime(1));
+      expect(element.playbackRate).toBe(3);
+      expect(element.play).toHaveBeenCalledOnce();
+      expect(container.querySelector(".video-long-press-indicator")?.textContent).toBe("3x");
+
+      const pointerUp = new MouseEvent("pointerup", { bubbles: true, cancelable: true, button: 0 });
+      Object.defineProperty(pointerUp, "pointerId", { value: 7 });
+      act(() => window.dispatchEvent(pointerUp));
+      expect(element.playbackRate).toBe(1);
+      expect(element.pause).toHaveBeenCalledOnce();
+      expect(container.querySelector(".video-long-press-indicator")).toBeNull();
+
+      const playCalls = vi.mocked(element.play).mock.calls.length;
+      act(() => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(vi.mocked(element.play).mock.calls.length).toBe(playCalls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fullscreen targets the whole player including the subtitles and controls", async () => {
