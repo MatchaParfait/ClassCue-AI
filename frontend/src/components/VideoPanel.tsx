@@ -10,6 +10,7 @@ import { DraggableSubtitle } from "./DraggableSubtitle";
 import { AudioChannelControl } from "./AudioChannelControl";
 import type { SearchSeek } from "../searchNavigation";
 import { useReviewTabs } from "./ReviewTabs";
+import { playbackProgressKey, savePlaybackProgress } from "../playbackProgress";
 import { SecondaryViewControl } from "./SecondaryViewControl";
 
 export interface PlayerTimeline {
@@ -35,6 +36,10 @@ interface VideoPanelProps {
 
 const PREFERENCES_KEY = "classroom-player-subtitles";
 
+function holdKey(event: { code: string; key: string }): string {
+  return event.code || event.key.toLowerCase();
+}
+
 function readSubtitlePreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(PREFERENCES_KEY) ?? "{}") as { enabled?: boolean; fontSize?: number };
@@ -52,7 +57,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const shortcuts = useShortcuts();
   const headingRef = useRef<HTMLDivElement>(null);
   useEntryMotion(headingRef, { duration: .14 });
-  const progressKey = `classroom-study-progress:${libraryId}:${videoId}`;
+  const progressKey = playbackProgressKey(libraryId, videoId);
   const positions = useReviewTabs()?.positions;
   const [secondary, setSecondary] = useState<SecondaryView | null>(null);
   const [secondaryActive, setSecondaryActive] = useState(false);
@@ -78,8 +83,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     const save = () => {
       if (!pendingSource.current && (!Number.isFinite(element.currentTime) || element.readyState < 1)) return;
       const time = pendingSource.current?.time ?? boundTime(element.currentTime - mapping.current.offset);
-      positions?.set(progressKey, time);
-      try { localStorage.setItem(progressKey, String(time)); } catch { /* Playback does not require storage. */ }
+      savePlaybackProgress(progressKey, time, positions);
     };
     window.addEventListener("pagehide", save);
     return () => {
@@ -108,6 +112,10 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const longPressPointerId = useRef<number | null>(null);
   const longPressRestore = useRef<{ rate: number; wasPaused: boolean } | null>(null);
   const suppressLongPressClick = useRef(false);
+  const keyboardLongPressTimer = useRef<number | null>(null);
+  const keyboardLongPressKey = useRef<string | null>(null);
+  const keyboardLongPressDelta = useRef<number | null>(null);
+  const keyboardLongPressRestore = useRef<{ rate: number; wasPaused: boolean } | null>(null);
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
 
@@ -163,9 +171,15 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     if (play) void element.play().catch(() => undefined);
   };
 
+  const focusPlayer = () => frameRef.current?.focus({ preventScroll: true });
+
   useImperativeHandle(timelineRef, () => ({
     getCurrentTime: getPrimaryTime,
-    seekTo: seek,
+    seekTo: (seconds, play = false) => {
+      if (!Number.isFinite(seconds)) return;
+      seek(seconds, play);
+      focusPlayer();
+    },
     isReady: () => !pendingSource.current && (videoRef.current?.readyState ?? 0) >= 2,
   }));
 
@@ -271,8 +285,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const saveProgress = (element: HTMLVideoElement) => {
     if (pendingSource.current || element.readyState < 1) return;
     const time = boundTime(element.currentTime - mapping.current.offset);
-    positions?.set(progressKey, time);
-    try { localStorage.setItem(progressKey, String(time)); } catch { /* Playback does not require storage. */ }
+    savePlaybackProgress(progressKey, time, positions);
   };
 
   const togglePlay = async () => {
@@ -321,12 +334,11 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       longPressTimer.current = null;
     }
   };
-  const finishLongPress = () => {
-    clearLongPressTimer();
-    longPressPointerId.current = null;
-    const restore = longPressRestore.current;
-    longPressRestore.current = null;
-    if (!restore) return;
+  const restoreLongPressPlayback = (restore: { rate: number; wasPaused: boolean }) => {
+    if (pendingSource.current) {
+      pendingSource.current.rate = restore.rate;
+      if (restore.wasPaused) pendingSource.current.resume = false;
+    }
     const element = videoRef.current;
     if (element) {
       element.playbackRate = restore.rate;
@@ -335,8 +347,16 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     setPlaybackRate(restore.rate);
     setLongPressing(false);
   };
+  const finishLongPress = () => {
+    clearLongPressTimer();
+    longPressPointerId.current = null;
+    const restore = longPressRestore.current;
+    longPressRestore.current = null;
+    if (!restore) return;
+    restoreLongPressPlayback(restore);
+  };
   const beginLongPress = (event: ReactPointerEvent<HTMLVideoElement>) => {
-    if (event.button !== 0 || !event.isPrimary || longPressPointerId.current !== null) return;
+    if (event.button !== 0 || event.isPrimary === false || longPressPointerId.current !== null || keyboardLongPressKey.current !== null) return;
     clearLongPressTimer();
     longPressPointerId.current = event.pointerId;
     suppressLongPressClick.current = false;
@@ -352,6 +372,41 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       if (element.paused) void element.play().catch(() => undefined);
     }, 320);
   };
+  const clearKeyboardLongPressTimer = () => {
+    if (keyboardLongPressTimer.current !== null) {
+      window.clearTimeout(keyboardLongPressTimer.current);
+      keyboardLongPressTimer.current = null;
+    }
+  };
+  const finishKeyboardLongPress = (seekShortPress = false) => {
+    clearKeyboardLongPressTimer();
+    const delta = keyboardLongPressDelta.current;
+    keyboardLongPressKey.current = null;
+    keyboardLongPressDelta.current = null;
+    const restore = keyboardLongPressRestore.current;
+    keyboardLongPressRestore.current = null;
+    if (!restore) {
+      if (seekShortPress && delta !== null) seek(getPrimaryTime() + delta);
+      return;
+    }
+    restoreLongPressPlayback(restore);
+  };
+  const beginKeyboardLongPress = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.repeat || keyboardLongPressKey.current !== null || longPressPointerId.current !== null) return;
+    keyboardLongPressKey.current = holdKey(event);
+    keyboardLongPressDelta.current = 5;
+    clearKeyboardLongPressTimer();
+    keyboardLongPressTimer.current = window.setTimeout(() => {
+      keyboardLongPressTimer.current = null;
+      const element = videoRef.current;
+      if (!element || pendingSource.current) return;
+      keyboardLongPressRestore.current = { rate: element.playbackRate, wasPaused: element.paused };
+      element.playbackRate = 3;
+      setPlaybackRate(3);
+      setLongPressing(true);
+      if (element.paused) void element.play().catch(() => undefined);
+    }, 320);
+  };
   useEffect(() => {
     const release = () => finishLongPress();
     window.addEventListener("pointerup", release);
@@ -362,12 +417,39 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       finishLongPress();
     };
   }, [videoRef]);
+  useEffect(() => {
+    const release = (event: globalThis.KeyboardEvent) => {
+      if (keyboardLongPressKey.current === holdKey(event)) {
+        event.preventDefault();
+        finishKeyboardLongPress(true);
+      }
+    };
+    const cancel = () => finishKeyboardLongPress(false);
+    const visibilityChanged = () => {
+      if (document.visibilityState === "hidden") cancel();
+    };
+    window.addEventListener("keyup", release);
+    window.addEventListener("blur", cancel);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      window.removeEventListener("keyup", release);
+      window.removeEventListener("blur", cancel);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      cancel();
+    };
+  }, [progressKey, videoRef]);
   const playerKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || event.nativeEvent.isComposing || (event.target as HTMLElement).closest("button, input, select, textarea, [contenteditable], [role='group']")) return;
-    if (event.repeat && !matchesShortcut(event.nativeEvent, shortcuts, "seekBack") && !matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) return;
+    if (event.repeat) {
+      if (matchesShortcut(event.nativeEvent, shortcuts, "seekBack") || matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) event.preventDefault();
+      return;
+    }
     if (matchesShortcut(event.nativeEvent, shortcuts, "playPause")) { event.preventDefault(); void togglePlay(); }
     else if (matchesShortcut(event.nativeEvent, shortcuts, "seekBack")) { event.preventDefault(); seek(currentTime - 5); }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) { event.preventDefault(); seek(currentTime + 5); }
+    else if (matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) {
+      event.preventDefault();
+      beginKeyboardLongPress(event);
+    }
     else if (matchesShortcut(event.nativeEvent, shortcuts, "mute")) { event.preventDefault(); toggleMute(); }
     else if (matchesShortcut(event.nativeEvent, shortcuts, "subtitles") && subtitles.length) { event.preventDefault(); toggleSubtitles(); }
     else if (matchesShortcut(event.nativeEvent, shortcuts, "fullscreen")) { event.preventDefault(); void toggleFullscreen(); }
@@ -381,7 +463,16 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
         </div>
         <span className="source-badge">{video.status === "review_ready" ? "可复习" : "字幕可查看"}</span>
       </div>
-      <div ref={frameRef} className="video-frame" tabIndex={0} aria-label="视频播放器" onKeyDown={playerKeyboard}>
+      <div ref={frameRef} className="video-frame" tabIndex={0} aria-label="视频播放器" onKeyDown={playerKeyboard}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) finishKeyboardLongPress(false);
+        }}
+        onKeyUp={(event) => {
+          if (keyboardLongPressKey.current === holdKey(event)) {
+            event.preventDefault();
+            finishKeyboardLongPress(true);
+          }
+        }}>
         <video
           ref={videoRef}
           className={`video-player${longPressing ? " is-long-pressing" : ""}`}
@@ -508,6 +599,8 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
             disabled={duration <= 0}
             style={{ "--progress": `${progress}%` } as CSSProperties}
             onChange={(event) => seek(Number(event.target.value))}
+            onPointerUp={(event) => { if (event.button === 0) focusPlayer(); }}
+            onClick={focusPlayer}
           />
           <div className="player-toolbar">
             <button className="player-control" type="button" aria-label={playing ? "暂停" : "播放"} title={shortcutTitle(playing ? "暂停" : "播放", shortcuts, "playPause")} aria-keyshortcuts={shortcutAria(shortcuts, "playPause")} onClick={() => void togglePlay()}>

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { getLibrary, getVideos, moveVideoToFolder, reorderLibrary, processVideo, processSelectedVideos, getAsrSelection, getAiSettings, type LibraryResponse } from "./api/client";
 import type { Video } from "./types";
+import { playbackProgressKey, savePlaybackProgress } from "./playbackProgress";
 
 vi.mock("./api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("./api/client")>(),
@@ -134,6 +135,30 @@ async function mountWithSyncClock() {
 }
 
 describe("library status synchronization", () => {
+  it("shows saved watch positions on root cards and updates without a library request", async () => {
+    localStorage.setItem(playbackProgressKey("default-library", 1), "4");
+    await mountWithSyncClock();
+    const progress = card("video-1").querySelector('[role="progressbar"]')!;
+    expect(progress.getAttribute("aria-valuenow")).toBe("40");
+    expect(progress.textContent).toBe("");
+    expect(card("video-2").querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("0");
+    act(() => savePlaybackProgress(playbackProgressKey("default-library", 1), 7));
+    expect(progress.getAttribute("aria-valuenow")).toBe("70");
+    expect(getVideos).not.toHaveBeenCalled();
+    expect(getLibrary).not.toHaveBeenCalled();
+  });
+
+  it("shows the same watch-position indicator inside a folder", async () => {
+    videos[0].folder_id = 7;
+    localStorage.setItem(playbackProgressKey("default-library", 1), "6");
+    await mountWithSyncClock();
+    click(container.querySelector(".folder-card-link"));
+    await advanceSyncClock();
+    const progress = container.querySelector('.folder-window [data-library-key="video-1"] [role="progressbar"]')!;
+    expect(progress.getAttribute("aria-valuenow")).toBe("60");
+    expect(progress.textContent).toBe("");
+  });
+
   it("shows zero counts initially and updates the three color counts on the 15 second sync", async () => {
     await mountWithSyncClock();
     expect(card("video-1").querySelector(".video-marker-counts")?.textContent).toBe("000");

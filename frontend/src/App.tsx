@@ -51,6 +51,7 @@ import type { LibraryFolder, LibraryOrderItem } from "./api/client";
 import { GlobalSearchProvider, GlobalSearchButton } from "./components/GlobalSearch";
 import { FolderWindow } from "./components/FolderWindow";
 import { VideoThumbnail } from "./components/VideoThumbnail";
+import { VideoWatchProgress } from "./components/VideoWatchProgress";
 import { RecycleConfirmDialog } from "./components/RecycleConfirmDialog";
 import { ReviewTabs, ReviewTabsProvider, useReviewTabs } from "./components/ReviewTabs";
 import { MarkerImportanceCounts } from "./components/MarkerImportanceCounts";
@@ -1215,6 +1216,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <VideoThumbnail video={video} />
           {video.duration_ms > 0 && <span className="thumbnail-duration">{formatTime(video.duration_ms)}</span>}
         </button>
+        <VideoWatchProgress libraryId={video.library_id ?? libraryId ?? import.meta.env.VITE_LIBRARY_ID ?? "default-library"}
+          videoId={video.id} durationMs={video.duration_ms} />
         {editingVideoName ? (
           <form className="library-video-rename" aria-label="重命名视频" onSubmit={(event) => {
             event.preventDefault();

@@ -9,6 +9,7 @@ import type { SearchSeek } from "../searchNavigation";
 import { ReviewTabsProvider } from "./ReviewTabs";
 import * as api from "../api/client";
 import type { PlayerTimeline } from "./VideoPanel";
+import { VideoWatchProgress } from "./VideoWatchProgress";
 
 const video: Video = {
   id: 1, display_name: "Lesson", filename: "lesson.mp4",
@@ -107,6 +108,20 @@ it("saves on page hide, but never overwrites an existing position for an unready
   videoRef.current!.currentTime = 36;
   act(() => window.dispatchEvent(new Event("pagehide")));
   expect(localStorage.getItem("classroom-study-progress:test:1")).toBe("36");
+});
+
+it("publishes the primary watch position to library indicators when playback pauses", () => {
+  act(() => root.render(<ReviewTabsProvider>
+    <VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+      currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef} />
+    <VideoWatchProgress libraryId="test" videoId={1} durationMs={60_000} />
+  </ReviewTabsProvider>));
+  loadMetadata();
+  videoRef.current!.currentTime = 24;
+  act(() => videoRef.current!.dispatchEvent(new Event("pause")));
+  const progress = container.querySelector('[role="progressbar"]')!;
+  expect(progress.getAttribute("aria-valuenow")).toBe("40");
+  expect(progress.getAttribute("title")).toBe("上次看到 0:24 / 1:00");
 });
 
 it.each([.5, 59.5])("restores exact in-window tab positions near the start or end: %s", (seconds) => {
@@ -322,7 +337,6 @@ describe("video subtitles and player controls", () => {
       const element = videoRef.current!;
       const pointerDown = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
       Object.defineProperty(pointerDown, "pointerId", { value: 7 });
-      Object.defineProperty(pointerDown, "isPrimary", { value: true });
       act(() => element.dispatchEvent(pointerDown));
       act(() => vi.advanceTimersByTime(319));
       expect(element.playbackRate).toBe(1);
@@ -467,6 +481,46 @@ describe("secondary camera and primary timeline", () => {
     expect(videoRef.current!.getAttribute("src")).toContain("/1/stream");
   });
 
+  it.each([
+    ["keyboard", false], ["keyboard", true], ["pointer", false], ["pointer", true],
+  ] as const)("restores the %s hold before fallback metadata arrives (originally paused: %s)", async (input, wasPaused) => {
+    vi.useFakeTimers();
+    try {
+      await mountSecondary({ ...secondary, duration_ms: 30000 });
+      act(() => button("切换到副视角").click());
+      loadMetadata(30);
+      const element = videoRef.current!;
+      const frame = container.querySelector<HTMLElement>(".video-frame")!;
+      element.playbackRate = 2.5;
+      Object.defineProperty(element, "paused", { configurable: true, value: wasPaused });
+      if (input === "keyboard") {
+        act(() => frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      } else {
+        const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+        Object.defineProperty(down, "pointerId", { value: 7 });
+        act(() => element.dispatchEvent(down));
+      }
+      act(() => vi.advanceTimersByTime(320));
+      expect(element.playbackRate).toBe(3);
+      element.currentTime = 30;
+      act(() => element.dispatchEvent(new Event("ended")));
+      expect(element.getAttribute("src")).toContain("/1/stream");
+      if (input === "keyboard") {
+        act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+      } else {
+        act(() => window.dispatchEvent(new Event("pointerup")));
+      }
+      expect(element.playbackRate).toBe(2.5);
+      vi.mocked(element.play).mockClear();
+      loadMetadata();
+      expect(element.playbackRate).toBe(2.5);
+      expect(element.currentTime).toBe(25);
+      expect(element.play).toHaveBeenCalledTimes(wasPaused ? 0 : 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retains a timestamp selected during loading and recovers from a missing secondary file", async () => {
     await mountSecondary();
     act(() => button("切换到副视角").click());
@@ -541,4 +595,238 @@ it("updates player shortcuts immediately without firing while editing controls o
   press(caption, "u"); expect(caption.style.top).toBe(before);
   press(caption, "p"); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
   expect(container.querySelector('[aria-label="播放"]')?.getAttribute("title")).toContain("P");
+});
+
+it("defers a short ArrowRight seek until keyup and ignores repeated keydown events", () => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const frame = container.querySelector(".video-frame")!;
+    const press = (key: string, options: KeyboardEventInit = {}) => act(() => {
+      frame.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options }));
+    });
+    press("ArrowRight");
+    expect(videoRef.current!.currentTime).toBe(0);
+    press("ArrowRight", { repeat: true });
+    expect(videoRef.current!.currentTime).toBe(0);
+    act(() => frame.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true, cancelable: true })));
+    expect(videoRef.current!.currentTime).toBe(5);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("uses a held ArrowRight for temporary 3x playback without seeking", () => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const frame = container.querySelector(".video-frame")!;
+    act(() => frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.currentTime).toBe(0);
+    expect(videoRef.current!.playbackRate).toBe(3);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+    act(() => frame.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true, cancelable: true })));
+    expect(videoRef.current!.currentTime).toBe(0);
+    expect(videoRef.current!.playbackRate).toBe(1);
+    expect(videoRef.current!.pause).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["", "KeyL"])("releases a customized hold after Shift is released first (code: %s)", code => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const map = defaultShortcuts();
+    map.seekForward = ["Shift+L"];
+    act(() => saveShortcuts(map));
+    const element = videoRef.current!;
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    act(() => frame.dispatchEvent(new KeyboardEvent("keydown", { key: "L", code, shiftKey: true, bubbles: true })));
+    act(() => vi.advanceTimersByTime(320));
+    expect(element.playbackRate).toBe(3);
+    act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft" })));
+    expect(element.playbackRate).toBe(3);
+    act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "l", code })));
+    expect(element.playbackRate).toBe(1);
+    expect(element.currentTime).toBe(0);
+    expect(container.querySelector(".video-long-press-indicator")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  ["keyboard", 160], ["keyboard", 320], ["pointer", 160], ["pointer", 320],
+] as const)("keeps %s as the only hold owner when another input starts after %s ms", (first, delay) => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const element = videoRef.current!;
+    element.playbackRate = 2.5;
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    const keyDown = () => act(() => frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    const pointerDown = () => {
+      const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+      Object.defineProperty(down, "pointerId", { value: 7 });
+      act(() => element.dispatchEvent(down));
+    };
+    (first === "keyboard" ? keyDown : pointerDown)();
+    act(() => vi.advanceTimersByTime(delay));
+    (first === "keyboard" ? pointerDown : keyDown)();
+    act(() => vi.advanceTimersByTime(320));
+    expect(element.playbackRate).toBe(3);
+    if (first === "keyboard") {
+      act(() => window.dispatchEvent(new Event("pointerup")));
+      expect(element.playbackRate).toBe(3);
+      act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+    } else {
+      act(() => window.dispatchEvent(new Event("pointerup")));
+      expect(element.playbackRate).toBe(2.5);
+      act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+    }
+    expect(element.playbackRate).toBe(2.5);
+    expect(element.currentTime).toBe(0);
+    expect(container.querySelector(".video-long-press-indicator")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["click", "pointerup"])("returns focus after progress %s so holding ArrowRight does not move the slider", eventType => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    const progress = container.querySelector<HTMLInputElement>(".player-progress")!;
+    act(() => progress.focus());
+    inputValue(progress, "20");
+    act(() => progress.dispatchEvent(new MouseEvent(eventType, { bubbles: true, button: 0, detail: 1 })));
+    expect(document.activeElement).toBe(frame);
+
+    const down = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    act(() => document.activeElement!.dispatchEvent(down));
+    expect(down.defaultPrevented).toBe(true);
+    expect(videoRef.current!.currentTime).toBe(20);
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.playbackRate).toBe(3);
+    const repeated = new KeyboardEvent("keydown", { key: "ArrowRight", repeat: true, bubbles: true, cancelable: true });
+    act(() => document.activeElement!.dispatchEvent(repeated));
+    expect(repeated.defaultPrevented).toBe(true);
+    expect(videoRef.current!.currentTime).toBe(20);
+    act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true })));
+    expect(videoRef.current!.playbackRate).toBe(1);
+    expect(videoRef.current!.currentTime).toBe(20);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("returns focus from an external timestamp jump and restores the previous speed after holding ArrowRight", () => {
+  vi.useFakeTimers();
+  try {
+    act(() => root.render(<>
+      <VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+        currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange}
+        videoRef={videoRef} timelineRef={timelineRef} />
+      <button className="test-timestamp" onClick={() => timelineRef.current!.seekTo(20, true)}>0:20</button>
+    </>));
+    loadMetadata();
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    const timestamp = container.querySelector<HTMLButtonElement>(".test-timestamp")!;
+    act(() => {
+      timestamp.focus();
+      timestamp.click();
+    });
+    expect(document.activeElement).toBe(frame);
+    expect(videoRef.current!.currentTime).toBe(20);
+    videoRef.current!.playbackRate = 2.5;
+    Object.defineProperty(videoRef.current!, "paused", { configurable: true, value: false });
+    act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.playbackRate).toBe(3);
+    act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+    expect(videoRef.current!.playbackRate).toBe(2.5);
+    expect(videoRef.current!.currentTime).toBe(20);
+    expect(videoRef.current!.pause).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps native arrow-key control when the progress slider is deliberately keyboard-focused", () => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const progress = container.querySelector<HTMLInputElement>(".player-progress")!;
+    act(() => progress.focus());
+    const down = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    act(() => document.activeElement!.dispatchEvent(down));
+    expect(down.defaultPrevented).toBe(false);
+    act(() => vi.advanceTimersByTime(500));
+    expect(videoRef.current!.playbackRate).toBe(1);
+    expect(document.activeElement).toBe(progress);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each([false, true])("cancels a keyboard hold on window blur without a short seek (boosted: %s)", boosted => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    act(() => {
+      frame.focus();
+      frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    act(() => vi.advanceTimersByTime(boosted ? 320 : 160));
+    expect(videoRef.current!.playbackRate).toBe(boosted ? 3 : 1);
+    act(() => window.dispatchEvent(new Event("blur")));
+    act(() => vi.advanceTimersByTime(500));
+    expect(videoRef.current!.playbackRate).toBe(1);
+    act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+    expect(videoRef.current!.currentTime).toBe(0);
+    expect(container.querySelector(".video-long-press-indicator")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["focus", "hidden"])("restores playback when an active keyboard hold is interrupted by %s", interruption => {
+  vi.useFakeTimers();
+  try {
+    mount();
+    loadMetadata();
+    const frame = container.querySelector<HTMLElement>(".video-frame")!;
+    act(() => {
+      frame.focus();
+      frame.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.playbackRate).toBe(3);
+    if (interruption === "focus") {
+      const outside = container.appendChild(document.createElement("button"));
+      act(() => outside.focus());
+    } else {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+    }
+    expect(videoRef.current!.playbackRate).toBe(1);
+    act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" })));
+    expect(videoRef.current!.currentTime).toBe(0);
+    expect(container.querySelector(".video-long-press-indicator")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -96,11 +96,11 @@
   .folder-card .library-card-body > span { color: var(--ui-text); font-size: 11px; }
   .folder-card .folder-rename-button { background: color-mix(in srgb, var(--character-card) 60%, transparent); }
   .library-card.video-card {
-    grid-template-rows: auto minmax(76px, auto) auto; padding: 0 12px 10px;
+    padding: 0 12px 10px;
     border: 8px solid var(--ui-primary); border-radius: 28px; background: var(--character-card);
   }
   .library-thumbnail-link { width: calc(100% + 24px); margin: 0 -12px; border-radius: 19px 19px 12px 12px; }
-  .video-card .library-card-body { align-items: center; justify-content: flex-start; align-self: stretch; margin: 0; padding: 12px 0; border-radius: 0; background: transparent; text-align: left; }
+  .video-card .library-card-body { align-items: center; justify-content: flex-start; align-self: stretch; margin: 0; padding: 4px 0 6px; border-radius: 0; background: transparent; text-align: left; }
   .video-card .library-card-body strong { color: var(--character-ink); font-size: 14px; font-weight: 650; line-height: 23px; }
   .video-card .library-video-labels { gap: 5px 8px; padding: 0; }
   .video-card .library-card-actions .icon-button { width: 30px; height: 30px; color: var(--character-ink); }

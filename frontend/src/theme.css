@@ -159,12 +159,12 @@
 .folder-card .drag-handle { justify-self: center; align-self: center; color: var(--ui-on-inset); }
 .folder-card-link:hover { box-shadow: inset 0 0 0 1px var(--ui-accent-strong); }
 .library-card.video-card {
-  grid-template-rows: auto minmax(80px, auto) auto; padding: 10px 14px 14px;
+  padding: 10px 14px 14px;
   background: var(--ui-frame); border-color: var(--ui-frame-border);
 }
 .library-thumbnail-link { width: 100%; margin: 0; border-radius: 7px; }
 .video-card .library-card-body {
-  align-self: stretch; justify-content: center; margin: 12px 0 10px; padding: 10px 12px;
+  align-self: stretch; justify-content: center; margin: 0 0 6px; padding: 4px 12px;
   border-radius: 8px; background: var(--ui-inset); color: var(--ui-on-inset);
 }
 .video-card .library-card-body strong { color: var(--ui-on-inset); font-weight: 700; }
