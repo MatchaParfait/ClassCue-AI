@@ -156,6 +156,47 @@ function loadMetadata(seconds = 60) {
   act(() => videoRef.current!.dispatchEvent(new Event("loadedmetadata")));
 }
 
+it("waits for persistent history before restoring and never replaces it with the initial zero", () => {
+  const save = vi.fn();
+  const render = (ready: boolean, position?: number) => act(() => root.render(
+    <VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+      currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+      studyProgressReady={ready} studyPositionMs={position} studyObservedAt={100} onStudyProgress={save} />,
+  ));
+  render(false); loadMetadata();
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(save).not.toHaveBeenCalled();
+  render(true, 23_180);
+  expect(videoRef.current!.currentTime).toBe(23.18);
+  videoRef.current!.currentTime = 25;
+  act(() => videoRef.current!.dispatchEvent(new Event("pause")));
+  expect(save).toHaveBeenLastCalledWith(25, 60);
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(save).toHaveBeenLastCalledWith(25, 60, true);
+});
+
+it("keeps a newer local position when a previous database save failed", () => {
+  localStorage.setItem("classroom-study-progress:test:1", "59.8");
+  localStorage.setItem("classroom-study-progress:test:1:updated-at", "200");
+  act(() => root.render(<VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+    currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+    studyPositionMs={20_000} studyObservedAt={100} />));
+  loadMetadata();
+  expect(videoRef.current!.currentTime).toBe(59.8);
+});
+
+it("saves a periodic progress checkpoint during playback", () => {
+  const save = vi.fn();
+  act(() => root.render(<VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+    currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+    onStudyProgress={save} />));
+  loadMetadata();
+  Object.defineProperty(videoRef.current!, "paused", { configurable: true, value: false });
+  videoRef.current!.currentTime = 18;
+  act(() => videoRef.current!.dispatchEvent(new Event("timeupdate")));
+  expect(save).toHaveBeenLastCalledWith(18, 60);
+});
+
 function pointer(element: HTMLElement, type: string, x: number, y: number) {
   const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
   Object.defineProperty(event, "pointerId", { value: 1 });

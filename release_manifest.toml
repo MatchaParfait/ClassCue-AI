@@ -62,6 +62,8 @@ files = [
     "classcue/study_courses.py",
     "classcue/study_material_parser.py",
     "api/study_materials.py",
+    "api/study_bookmarks.py",
+    "classcue/study_bookmarks.py",
     "api/upload_io.py",
     "classcue/citation_matching.py",
     "classcue/cleanup_progress.py",

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { AlertCircle, CheckCircle2, LoaderCircle, X } from "lucide-react";
+import { AlertCircle, Bookmark, BookmarkPlus, CheckCircle2, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { useShortcuts, matchesShortcut, isShortcutInput, isUndoShortcut, isRedoShortcut } from "../shortcuts";
 import { getAnalysisRuns } from "../api/client";
 import { TopBar } from "../components/TopBar";
@@ -17,6 +17,8 @@ import { useCreateManualQuestionMutation, useMarkerImportanceMutation, useMarker
 import type { Marker, MarkerImportance, MarkerMode, ReviewFilter, ReviewStatus } from "../types";
 import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTime } from "../utils";
 import { AnimatePresence, AnimatedPopup } from "../components/Motion";
+import { useStudyProgress } from "../hooks/useStudyProgress";
+import { StudyBookmarksDialog, type BookmarkScope } from "../components/StudyBookmarks";
 
 type ReviewChange =
   | { kind: "time"; previous: number | null; next: number | null }
@@ -48,6 +50,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const study = useStudyData(videoId || 0, mockMode);
   const queryClient = useQueryClient();
   const { video, subtitles, markers: allMarkers, errors, isLoading } = study;
+  const savedStudy = useStudyProgress(video?.library_id, videoId, !mockMode && !isLoading && Boolean(video && canOpenReview(video.status, subtitles.length > 0)));
+  const [bookmarkScope, setBookmarkScope] = useState<BookmarkScope | null>(null);
   const runs = useQuery({
     queryKey: ["study", "analysis-runs", videoId], queryFn: () => getAnalysisRuns(videoId),
     enabled: !mockMode && Boolean(video), staleTime: 30_000,
@@ -97,7 +101,14 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
   const [bilibiliMarkerId, setBilibiliMarkerId] = useState<number | null>(null);
   const reviewBackground = useRef<HTMLDivElement>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [noticeState, setNoticeState] = useState<{ text: string | null }>({ text: null });
+  const notice = noticeState.text;
+  const setNotice = useCallback((text: string | null) => setNoticeState({ text }), []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [noticeState, setNotice]);
   const [jumpTimeError, setJumpTimeError] = useState<string | null>(null);
 
   const visibleMarkers = useMemo(
@@ -485,7 +496,26 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onDurationChange={setDuration}
               videoRef={videoRef}
               timelineRef={timelineRef}
+              studyProgressReady={savedStudy.ready}
+              studyPositionMs={savedStudy.position}
+              studyObservedAt={savedStudy.observedAt}
+              onStudyProgress={savedStudy.save}
             />
+            {!mockMode && video.library_id && <div className="review-study-tools">
+              <button type="button" className="secondary-button compact" onClick={() => {
+                const time = getPlayerTime();
+                if (!timelineRef.current?.isReady() || time === undefined || !Number.isFinite(time)) {
+                  setJumpTimeError("无法读取当前播放位置，请等待视频加载后重试"); return;
+                }
+                setBookmarkScope({ title: video.display_name, videoId, positionMs: Math.round(time * 1000), create: true });
+              }}><BookmarkPlus size={15} />添加书签</button>
+              <button type="button" className="text-button compact" onClick={() => setBookmarkScope({
+                title: video.display_name, videoId,
+              })}><Bookmark size={15} />本视频书签</button>
+              {savedStudy.error && <span className="study-progress-error" role="status">续看记录同步失败
+                <button type="button" className="icon-button" title="重试同步续看记录" aria-label="重试同步续看记录" onClick={savedStudy.retry}><RotateCcw size={14} /></button>
+              </span>}
+            </div>}
             {errors.subtitles && <LocalError label="字幕" error={errors.subtitles} />}
           </div>
           <div>
@@ -525,6 +555,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               canUndo={undoHistory.length > 0}
               onRedo={() => void undoReviewAction(true)}
               canRedo={redoHistory.length > 0}
+              historyVersion={`${undoHistory.length}:${undoHistory.at(-1)?.sequence ?? ""}:${redoHistory.length}:${redoHistory.at(-1)?.sequence ?? ""}`}
               undoLabel={undoLabels[undoHistory.at(-1)?.kind ?? "remove"]}
               undoing={Boolean(undoing || pendingEdits || markerMutation.isPending || createQuestionMutation.isPending)}
               onRestoreExcluded={(marker) => void updateStatus(marker, "active")}
@@ -539,6 +570,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
         key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
         onCaptureFrame={captureFrame}
         backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}
+      {bookmarkScope && video.library_id && <StudyBookmarksDialog libraryId={video.library_id} scope={bookmarkScope}
+        onClose={() => setBookmarkScope(null)} onSeek={position => seekTo(position / 1000)} />}
       <AnimatePresence>{notice && (
         <AnimatedPopup key="notice" duration={.18} className="toast" role="status">
           <CheckCircle2 size={17} /><span>{notice}</span>

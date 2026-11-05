@@ -32,6 +32,10 @@ interface VideoPanelProps {
   timelineRef?: RefObject<PlayerTimeline>;
   navigationSeek?: SearchSeek;
   autoPlay?: boolean;
+  studyProgressReady?: boolean;
+  studyPositionMs?: number;
+  studyObservedAt?: number;
+  onStudyProgress?: (seconds: number, duration: number, keepalive?: boolean) => void;
 }
 
 const PREFERENCES_KEY = "classroom-player-subtitles";
@@ -53,12 +57,18 @@ function readSubtitlePreferences() {
   }
 }
 
-export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false, currentTime, onTimeUpdate, onDurationChange, videoRef, timelineRef, navigationSeek, autoPlay = false }: VideoPanelProps) {
+export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false, currentTime, onTimeUpdate, onDurationChange, videoRef, timelineRef, navigationSeek, autoPlay = false,
+  studyProgressReady = true, studyPositionMs, studyObservedAt, onStudyProgress }: VideoPanelProps) {
   const shortcuts = useShortcuts();
   const headingRef = useRef<HTMLDivElement>(null);
   useEntryMotion(headingRef, { duration: .14 });
   const progressKey = playbackProgressKey(libraryId, videoId);
   const positions = useReviewTabs()?.positions;
+  const studySave = useRef(onStudyProgress);
+  studySave.current = onStudyProgress;
+  const studyReady = useRef(studyProgressReady);
+  studyReady.current = studyProgressReady;
+  const lastStudySave = useRef(0);
   const [secondary, setSecondary] = useState<SecondaryView | null>(null);
   const [secondaryActive, setSecondaryActive] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -81,9 +91,11 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     const element = videoRef.current;
     if (!element) return;
     const save = () => {
+      if (!studyReady.current && !restoredRef.current) return;
       if (!pendingSource.current && (!Number.isFinite(element.currentTime) || element.readyState < 1)) return;
       const time = pendingSource.current?.time ?? boundTime(element.currentTime - mapping.current.offset);
       savePlaybackProgress(progressKey, time, positions);
+      if (restoredRef.current) studySave.current?.(time, mainDuration.current, true);
     };
     window.addEventListener("pagehide", save);
     return () => {
@@ -267,8 +279,14 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
 
   const restoreProgress = (element: HTMLVideoElement) => {
     if (navigationSeek) { applyNavigationSeek(element); return; }
-    if (restoredRef.current) return;
+    if (restoredRef.current || !studyProgressReady) return;
     restoredRef.current = true;
+    let localUpdatedAt = 0;
+    try { localUpdatedAt = Number(localStorage.getItem(`${progressKey}:updated-at`)) || 0; } catch { /* Optional metadata. */ }
+    if (studyPositionMs !== undefined && localUpdatedAt <= (studyObservedAt ?? 0)) {
+      seek(Math.max(0, Math.min(studyPositionMs / 1000, element.duration)));
+      return;
+    }
     const sessionTime = positions?.get(progressKey);
     if (sessionTime !== undefined && Number.isFinite(sessionTime)) {
       const next = Math.max(0, Math.min(sessionTime, element.duration));
@@ -277,16 +295,27 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     }
     let saved = 0;
     try { saved = Number(localStorage.getItem(progressKey)); } catch { return; }
+    if (localUpdatedAt > 0 && Number.isFinite(saved) && saved >= 0) {
+      seek(Math.min(saved, element.duration));
+      return;
+    }
     if (Number.isFinite(saved) && saved > 1 && saved < element.duration - 3) {
       seek(saved);
     }
   };
 
   const saveProgress = (element: HTMLVideoElement) => {
-    if (pendingSource.current || element.readyState < 1) return;
+    if (pendingSource.current || element.readyState < 1 || !restoredRef.current) return;
     const time = boundTime(element.currentTime - mapping.current.offset);
     savePlaybackProgress(progressKey, time, positions);
+    studySave.current?.(time, mainDuration.current);
+    lastStudySave.current = Date.now();
   };
+
+  useEffect(() => {
+    const element = videoRef.current;
+    if (element && element.readyState >= 1 && Number.isFinite(element.duration) && element.duration > 0) restoreProgress(element);
+  }, [studyProgressReady, studyPositionMs, studyObservedAt, progressKey]);
 
   const togglePlay = async () => {
     const element = videoRef.current;
@@ -539,6 +568,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
               saveProgress(element);
             }
             publishTime(boundTime(time));
+            if (!element.paused && Date.now() - lastStudySave.current >= 10_000) saveProgress(element);
           }}
           onPlay={() => setPlaying(true)}
           onPause={(event) => {

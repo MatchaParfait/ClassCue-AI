@@ -333,6 +333,8 @@ class VideoStore:
             )
             initialize_subtitle_search(connection)
             initialize_bilibili(connection)
+            from classcue.study_bookmarks import initialize_study_bookmarks
+            initialize_study_bookmarks(connection)
             from classcue.question_store import initialize_questions
             initialize_questions(connection)
             from classcue.material_store import initialize_materials
@@ -935,6 +937,8 @@ class VideoStore:
         "video_experiments",
         "video_share_imports",
         "video_secondary_views",
+        "video_study_progress",
+        "video_bookmarks",
         "question_analyses",
         "question_captures",
         "question_visuals",
@@ -1418,6 +1422,7 @@ class VideoStore:
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
                     "llm_experiment_results",
                     "video_share_imports",
+                    "video_study_progress", "video_bookmarks",
                     "question_materials", "question_analyses", "question_captures", "question_visuals",
                     "bili_marker_context", "bili_study_runs", "bili_run_trace",
                     "bili_frames", "bili_read_cache",

@@ -286,6 +286,39 @@ it("redoes a creation without creating a duplicate or changing playback", async 
   expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
 });
 
+it("hides operation notices and history hints after three seconds while keeping keyboard undo and redo available", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  expect(container.querySelector(".undo-banner")).not.toBeNull();
+  expect(container.querySelector(".toast[role=status]")).not.toBeNull();
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 3300)); });
+  expect(container.querySelector(".undo-banner")).toBeNull();
+  await until(() => expect(container.querySelector(".toast[role=status]")).toBeNull());
+  key("z", { ctrlKey: true });
+  await until(() => expect(row(4)).toBeNull());
+  expect(container.querySelector(".redo-banner")).not.toBeNull();
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 3300)); });
+  expect(container.querySelector(".redo-banner")).toBeNull();
+  await until(() => expect(container.querySelector(".toast[role=status]")).toBeNull());
+  key("y", { ctrlKey: true });
+  await until(() => expect(row(4)).not.toBeNull());
+  expect(container.querySelector(".undo-banner")).not.toBeNull();
+}, 15_000);
+
+it("restarts the three-second notice timer for consecutive operations with identical text", async () => {
+  key("w");
+  await until(() => expect(row(4)).not.toBeNull());
+  const firstText = container.querySelector(".toast[role=status]")?.textContent;
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1800)); });
+  key("w");
+  await until(() => expect(row(5)).not.toBeNull());
+  expect(container.querySelector(".toast[role=status]")?.textContent).toBe(firstText);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1500)); });
+  expect(container.querySelector(".toast[role=status]")?.textContent).toBe(firstText);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1800)); });
+  await until(() => expect(container.querySelector(".toast[role=status]")).toBeNull());
+}, 10_000);
+
 it("keeps failed redo available and clears it after a new successful edit", async () => {
   key("w");
   await until(() => expect(row(4)).not.toBeNull());

@@ -19,6 +19,7 @@ export function savePlaybackProgress(key: string, seconds: number, positions?: M
   if (!Number.isFinite(seconds) || seconds < 0) return;
   positions?.set(key, seconds);
   try { localStorage.setItem(key, String(seconds)); } catch { /* Session playback still works without storage. */ }
+  try { localStorage.setItem(`${key}:updated-at`, String(Date.now())); } catch { /* Optional freshness metadata. */ }
   window.dispatchEvent(new CustomEvent(PLAYBACK_PROGRESS_EVENT, { detail: { key } }));
 }
 

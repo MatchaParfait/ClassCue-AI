@@ -3,8 +3,8 @@ import { playbackProgressKey, readPlaybackProgress, subscribePlaybackProgress } 
 import { formatTime } from "../utils";
 import { useReviewTabs } from "./ReviewTabs";
 
-export function VideoWatchProgress({ libraryId, videoId, durationMs }: {
-  libraryId: string; videoId: number; durationMs: number;
+export function VideoWatchProgress({ libraryId, videoId, durationMs, savedPositionMs, savedObservedAt }: {
+  libraryId: string; videoId: number; durationMs: number; savedPositionMs?: number; savedObservedAt?: number;
 }) {
   const positions = useReviewTabs()?.positions;
   const key = playbackProgressKey(libraryId, videoId);
@@ -12,7 +12,10 @@ export function VideoWatchProgress({ libraryId, videoId, durationMs }: {
   const snapshot = useCallback(() => readPlaybackProgress(key, positions), [key, positions]);
   const seconds = useSyncExternalStore(subscribe, snapshot);
   const duration = Number.isFinite(durationMs) && durationMs > 0 ? durationMs / 1000 : 0;
-  const position = duration > 0 ? Math.min(seconds, duration) : seconds;
+  let localUpdatedAt = 0;
+  try { localUpdatedAt = Number(localStorage.getItem(`${key}:updated-at`)) || 0; } catch { /* Optional freshness metadata. */ }
+  const savedSeconds = savedPositionMs === undefined || localUpdatedAt > (savedObservedAt ?? Infinity) ? seconds : savedPositionMs / 1000;
+  const position = duration > 0 ? Math.min(savedSeconds, duration) : savedSeconds;
   const percent = duration > 0 ? position / duration * 100 : 0;
   const label = position > 0
     ? `上次看到 ${formatTime(position * 1000)}${duration > 0 ? ` / ${formatTime(durationMs)}` : "（视频时长未知）"}`

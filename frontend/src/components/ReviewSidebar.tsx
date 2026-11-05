@@ -36,6 +36,7 @@ interface ReviewSidebarProps {
   canUndo: boolean;
   onRedo?: () => void;
   canRedo?: boolean;
+  historyVersion?: string;
   undoLabel?: string;
   undoing?: boolean;
   onRestoreExcluded: (marker: Marker) => void;
@@ -78,6 +79,7 @@ export function ReviewSidebar({
   canUndo,
   onRedo,
   canRedo = false,
+  historyVersion,
   undoLabel = "重点已移除",
   undoing = false,
   onRestoreExcluded,
@@ -98,6 +100,13 @@ export function ReviewSidebar({
   imageSaving = false,
 }: ReviewSidebarProps) {
   const shortcuts = useShortcuts();
+  const [historyHintVisible, setHistoryHintVisible] = useState(true);
+  useEffect(() => {
+    setHistoryHintVisible(true);
+    if (undoing || (!canUndo && !canRedo)) return;
+    const timer = window.setTimeout(() => setHistoryHintVisible(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [canUndo, canRedo, undoLabel, undoing, historyVersion]);
   const schemes = useRecallSchemes(Boolean(analysisVideoId));
   const queryClient = useQueryClient();
   const visuals = useQuery({
@@ -247,14 +256,14 @@ export function ReviewSidebar({
         {imageError ?? visuals.error?.message}
       </p>}
 
-      {canUndo && (
+      {canUndo && historyHintVisible && (
         <div className="undo-banner">
           <span>{undoLabel}</span>
           <button type="button" onClick={onUndo} disabled={undoing} title="撤销（Ctrl+Z）"
             aria-keyshortcuts="Control+Z Meta+Z"><Undo2 size={14} />{undoing ? "正在撤销…" : "撤销"}</button>
         </div>
       )}
-      {canRedo && <div className="redo-banner">
+      {canRedo && historyHintVisible && <div className="redo-banner">
         <span>可重做上次撤销的操作</span>
         <button type="button" onClick={onRedo} disabled={undoing} title="重做（Ctrl+Y / Ctrl+Shift+Z）"
           aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Y Meta+Shift+Z"><Redo2 size={14} />重做</button>

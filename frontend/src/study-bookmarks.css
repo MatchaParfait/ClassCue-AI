@@ -1,0 +1,80 @@
+.library-card.folder-card:has(.folder-study-hints) { flex-wrap: wrap; }
+.folder-study-hints {
+  position: relative; z-index: 2; display: flex; flex: 1 0 100%; align-items: center;
+  flex-wrap: wrap; gap: 6px; min-width: 0; padding-top: 8px; margin-top: 2px;
+  border-top: 1px solid color-mix(in srgb, var(--ui-accent-strong) 16%, transparent);
+}
+.study-resume {
+  display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%; width: 100%;
+  padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 8px;
+  background: var(--ui-surface); color: var(--ui-accent-strong); cursor: pointer; text-align: left;
+}
+.study-resume > span { display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; }
+.study-resume small { flex-shrink: 0; color: var(--ui-muted); font-size: 11px; }
+.study-resume strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.study-resume time { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.study-resume:hover { background: var(--ui-accent-soft); border-color: var(--ui-accent-strong); }
+.study-resume.is-compact { flex: 1 1 130px; width: auto; padding: 3px 5px; gap: 5px; border-color: transparent; background: transparent; }
+.study-resume.is-compact > span { gap: 5px; }
+.study-resume.is-compact strong { font-size: 11px; font-weight: 500; }
+.study-resume.is-compact time { font-size: 11px; }
+.study-resume.is-compact:hover { background: color-mix(in srgb, var(--ui-surface) 64%, transparent); }
+.study-bookmark-count {
+  display: inline-flex; align-items: center; justify-content: flex-start; gap: 5px; min-width: 0; max-width: 100%;
+  padding: 4px 7px; border: 1px solid color-mix(in srgb, var(--ui-accent-strong) 20%, transparent);
+  border-radius: 6px; background: color-mix(in srgb, var(--ui-surface) 70%, transparent);
+  color: var(--ui-accent-strong); font-size: 11px; line-height: 1.5; cursor: pointer;
+}
+.study-bookmark-count > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.study-bookmark-count small { font-variant-numeric: tabular-nums; }
+.study-bookmark-count:hover { background: var(--ui-accent-soft); border-color: var(--ui-accent-strong); }
+.library-study-resume { margin: 0 0 14px; }
+.folder-study-resume { margin-bottom: 14px; }
+.video-study-hints { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; padding: 0 0 8px; font-size: 11px; color: var(--ui-muted); }
+.video-study-hints .study-bookmark-count { flex: 0 1 auto; }
+.review-study-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 0; }
+.study-progress-error { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 12px; color: var(--ui-red); }
+.study-progress-error .icon-button { min-height: 28px; min-width: 28px; padding: 4px; }
+.study-bookmarks-backdrop { z-index: 75; }
+.study-bookmarks-dialog {
+  display: flex; flex-direction: column; width: min(600px, 100%); max-height: min(720px, calc(100dvh - 40px));
+  min-width: 0; overflow: hidden; border: 1px solid var(--ui-border); border-radius: 8px;
+  background: var(--ui-surface); color: var(--ui-text); box-shadow: var(--ui-shadow-overlay);
+}
+.study-bookmarks-dialog > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--ui-border); }
+.study-bookmarks-dialog > header > div { min-width: 0; }
+.study-bookmarks-dialog h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+.study-bookmarks-dialog header p { color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 4px; }
+.study-bookmarks-content { overflow: auto; padding: 0 20px; overscroll-behavior: contain; }
+.study-bookmark-editor { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--ui-border); }
+.study-bookmark-editor label { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; }
+.study-bookmark-editor label > span { color: var(--ui-muted); font-size: 12px; font-weight: 400; }
+.study-bookmark-editor textarea { resize: vertical; min-height: 78px; max-height: 220px; padding: 10px; border: 1px solid var(--ui-border); background: var(--ui-surface-raised); box-sizing: border-box; width: 100%; }
+.study-bookmark-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.study-bookmark-list { list-style: none; padding: 0; margin: 0; }
+.study-bookmark-list li { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--ui-border); }
+.study-bookmark-list li:last-child { border-bottom: 0; }
+.study-bookmark-open { display: grid; flex: 1; min-width: 0; gap: 5px; padding: 0; text-align: left; color: var(--ui-text); border: 0; background: transparent; cursor: pointer; }
+.study-bookmark-open:hover .study-bookmark-video-name { color: var(--ui-accent-strong); }
+.study-bookmark-path { font-size: 11px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.study-bookmark-reminder { display: grid; min-width: 0; gap: 3px; margin: 5px 0 8px; }
+.study-bookmark-field-label { flex-shrink: 0; color: var(--ui-muted); font-size: 11px; font-weight: 400; line-height: 1.7; }
+.study-bookmark-note { color: var(--ui-text); font-size: 15px; font-weight: 600; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; }
+.study-bookmark-note.is-empty { color: var(--ui-muted); font-size: 13px; font-weight: 400; }
+.study-bookmark-source { display: flex; align-items: baseline; min-width: 0; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border); }
+.study-bookmark-video-name { min-width: 0; color: var(--ui-muted); font-size: 12px; font-weight: 400; line-height: 1.7; overflow-wrap: anywhere; }
+.study-bookmark-time { display: inline-flex; align-items: center; gap: 5px; color: var(--ui-accent-strong); font-size: 12px; font-variant-numeric: tabular-nums; }
+.study-bookmark-tools { display: flex; flex-shrink: 0; gap: 4px; }
+.study-bookmark-tools .icon-button { min-width: 28px; min-height: 28px; padding: 5px; border-color: transparent; background: transparent; }
+.study-bookmark-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px 12px; font-size: 13px; color: var(--ui-muted); }
+.study-bookmark-removed { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--ui-muted); padding: 10px 0; }
+.study-bookmarks-footer { padding: 12px 20px; border-top: 1px solid var(--ui-border); }
+@media (max-width: 520px) {
+  .study-resume > span { display: grid; gap: 1px; }
+  .study-resume.is-compact > span { display: flex; }
+  .study-bookmarks-dialog > header { padding: 14px; }
+  .study-bookmarks-content { padding-inline: 14px; }
+  .study-bookmark-list li { gap: 6px; }
+  .study-bookmark-tools { flex-direction: column; }
+  .study-progress-error { margin-left: 0; }
+}

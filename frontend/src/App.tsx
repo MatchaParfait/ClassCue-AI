@@ -21,6 +21,8 @@ import {
   Clock3,
   Database,
   BookOpen,
+  Bookmark,
+  BookmarkPlus,
   FileVideo,
   Folder,
   FolderInput,
@@ -43,7 +45,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider, Link, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, type Location } from "react-router-dom";
 import { MATERIALS_ENABLED } from "./featureFlags";
 import { createLibraryFolder, deleteLibraryFolder, deleteVideo, getLatestBatch, getLatestLibraryUndo, getLatestLibraryRedo, getLibrary, getPausedJobs, getVideos, getLibraryStatus, moveLibraryFolder, moveVideoToFolder, renameLibraryFolder, renameVideoFile, reorderLibrary, undoLibraryEdit, redoLibraryEdit } from "./api/client";
@@ -85,6 +87,9 @@ import { WarmAtmosphere } from "./components/WarmAtmosphere";
 import { AnimatePresence, AnimatedOverlay, AnimatedPopup, motion, spotlight, useEntryMotion, useMotionTransition, useNewItems, useReducedMotion } from "./components/Motion";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import { PptViewer } from "./components/PptViewer";
+import { FolderStudyHints, StudyResume, StudyBookmarksDialog, type BookmarkScope } from "./components/StudyBookmarks";
+import { getStudyNavigation, studyNavigationKey, studyVideoUrl, type StudyVideo } from "./api/studyBookmarks";
+import "./study-bookmarks.css";
 
 const LIBRARY_SYNC_INTERVAL = 15_000;
 const ProcessPage = lazy(() => import("./components/ProcessPage").then(module => ({ default: module.ProcessPage })));
@@ -384,6 +389,23 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     enabled: active && folderId !== null,
   });
   const videoList = useMemo(() => videos.data ?? [], [videos.data]);
+  const studyNavigation = useQuery({
+    queryKey: studyNavigationKey(libraryId), queryFn: getStudyNavigation,
+    ...syncOptions, enabled: active && Boolean(libraryId),
+  });
+  const studyData = studyNavigation.data?.library_id === libraryId ? studyNavigation.data : undefined;
+  const studyFolders = useMemo(() => new Map(studyData?.folders.map(item => [item.folder_id, item])), [studyData]);
+  const studyVideos = useMemo(() => new Map(studyData?.videos.map(item => [item.video_id, item])), [studyData]);
+  const [bookmarkScope, setBookmarkScope] = useState<BookmarkScope | null>(null);
+  useEffect(() => {
+    if (active && libraryId) void queryClient.invalidateQueries({ queryKey: studyNavigationKey(libraryId) });
+  }, [videoList, rootLibrary.data, library.data, active, libraryId, queryClient]);
+  const resumeStudy = (video: StudyVideo) => {
+    const current = videoList.find(item => item.id === video.video_id);
+    if (current && !canOpenReview(current.status, Boolean(current.has_transcript))) {
+      onOpenPanel(`/process?videoId=${current.id}`);
+    } else if (libraryId) navigate(studyVideoUrl(libraryId, video.video_id, video.position_ms));
+  };
   const storageKey = scope === "default" ? LIBRARY_STORAGE_KEY : `${LIBRARY_STORAGE_KEY}:${scope}`;
   const [libraryState, setLibraryState] = useState<VideoLibraryState>(() => readLibraryState(storageKey));
   const [sortMode, setSortMode] = useState<"manual" | "name" | "time">(savedNavigation.current.sortMode);
@@ -392,7 +414,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const dragSourceRef = useRef<{ key: string; folderId: string | null } | null>(null);
   const [dropIntent, setDropIntent] = useState<DropIntent | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [noticeState, setNoticeState] = useState<{ text: string | null }>({ text: null });
+  const notice = noticeState.text;
+  const setNotice = useCallback((text: string | null) => setNoticeState({ text }), []);
   const [renamingFolder, setRenamingFolder] = useState<VideoLibraryFolder | null>(null);
   const [renameName, setRenameName] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
@@ -488,9 +512,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
   }, [active, rootLibrary.data]);
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 4000);
+    const timer = window.setTimeout(() => setNotice(null), 3000);
     return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [noticeState, setNotice]);
 
   useEffect(() => {
     if (draggedKey !== null) return;
@@ -1169,10 +1193,13 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
             {movingFolders.has(item.key) ? <LoaderCircle className="spin" size={17} /> : <GripVertical size={17} />}
           </span>
           {dragFeedback(item)}
+          <FolderStudyHints summary={id === null ? undefined : studyFolders.get(id)} onResume={resumeStudy}
+            onBookmarks={() => setBookmarkScope({ title: item.folder.name, folderId: id ?? undefined })} />
         </motion.article>
       );
     }
     const video = item.video;
+    const videoStudy = studyVideos.get(video.id);
     const editingVideoName = renamingVideo?.id === video.id;
     const renameBlockReason = videoFileChangeBlockReason(video, fileChangeJobs);
     const selectionKey = parentId ?? "root";
@@ -1217,7 +1244,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           {video.duration_ms > 0 && <span className="thumbnail-duration">{formatTime(video.duration_ms)}</span>}
         </button>
         <VideoWatchProgress libraryId={video.library_id ?? libraryId ?? import.meta.env.VITE_LIBRARY_ID ?? "default-library"}
-          videoId={video.id} durationMs={video.duration_ms} />
+          videoId={video.id} durationMs={video.duration_ms || videoStudy?.duration_ms || 0} savedPositionMs={videoStudy?.position_ms ?? undefined}
+          savedObservedAt={videoStudy?.observed_at ?? undefined} />
         {editingVideoName ? (
           <form className="library-video-rename" aria-label="重命名视频" onSubmit={(event) => {
             event.preventDefault();
@@ -1248,6 +1276,15 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         ) : <button className="library-card-body library-card-link" type="button" onClick={openVideo} draggable={false}>
           <strong title={video.filename}>{video.display_name}</strong>
         </button>}
+        {videoStudy && (videoStudy.position_ms !== null || videoStudy.bookmark_count > 0) && <div className="video-study-hints">
+          {videoStudy.position_ms !== null && <span>{videoStudy.completed ? "上次看完" : `上次看到 ${formatTime(videoStudy.position_ms)}`}</span>}
+          {videoStudy.bookmark_count > 0 && <button className="study-bookmark-count" type="button"
+            title={videoStudy.bookmark_note || "查看视频书签"} aria-label={`查看视频书签（${videoStudy.bookmark_count}）`}
+            onClick={() => setBookmarkScope({ title: video.display_name, videoId: video.id })}>
+            <Bookmark size={13} /><span>{videoStudy.bookmark_note || `书签 ${videoStudy.bookmark_count}`}</span>
+            {videoStudy.bookmark_note && <small>{videoStudy.bookmark_count}</small>}
+          </button>}
+        </div>}
         <div className="library-video-labels">
             <span className={`status-badge status-${ready ? "ready" : video.status === "failed" ? "failed" : video.status === "processing" ? "processing" : "pending"}`} title={`${statusLabel(video.status)}${!ready ? ` · ${statusHint(video.status)}` : ""}`}>{statusLabel(video.status)}</span>
             <MarkerImportanceCounts counts={video.marker_importance_counts} />
@@ -1288,6 +1325,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           </button>
           <span className="drag-handle" title={moving.has(video.id) ? "正在移动" : "拖动调整位置"}>{moving.has(video.id) ? <LoaderCircle className="spin" size={17} /> : <GripVertical size={17} />}</span>
           <ToolbarMenu label={`管理视频“${video.display_name}”`} icon={<MoreHorizontal size={18} />} disabled={moving.has(video.id) || editingVideoName}>
+            {libraryId && <button type="button" role="menuitem" onClick={() => {
+              setBookmarkScope({ title: video.display_name, videoId: video.id, positionMs: null, create: true });
+            }}><BookmarkPlus size={15} />添加复习提醒</button>}
             <StudyShareExportMenuItem video={video} blockReason={renameBlockReason} />
             <DeviceTransferSendMenuItem selection={{ title: video.display_name || video.filename, videoIds: [video.id] }} disabled={Boolean(renameBlockReason) || !libraryId} />
             <VideoMoveMenu currentFolder={parseFolderId(libraryState.assignments[String(video.id)] ?? null)}
@@ -1345,6 +1385,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
           <DeviceTransferButton key={`device-${scope}`} libraryId={libraryId} active={active && !suspended} selectedVideoIds={selections.root ?? []} />
           {libraryHistoryControls}
+          {libraryId && <button type="button" className="icon-button" title="全部复习书签" aria-label="全部复习书签"
+            onClick={() => setBookmarkScope({ title: "全部视频" })}><Bookmark size={16} /></button>}
           <label className="sort-control">
             <span>排序</span>
             <select value={sortMode} aria-label="视频库排序" onChange={(event) => setSortMode(event.target.value as "manual" | "name" | "time")}>
@@ -1361,6 +1403,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         {rootLibrary.isError && <div className="library-error"><LocalError label="文件夹列表" error={rootLibrary.error} />
           <button className="secondary-button compact" onClick={() => void rootLibrary.refetch()}><RotateCcw size={14} />重试</button></div>}
         {operationErrorView}
+        {studyNavigation.isError && libraryId && <div className="local-error" role="status"><span>续看与书签提示读取失败</span>
+          <button type="button" className="icon-button" title="重试复习记录" aria-label="重试复习记录" onClick={() => void studyNavigation.refetch()}><RotateCcw size={14} /></button></div>}
+        {studyData?.latest && <div className="library-study-resume"><StudyResume latest={studyData.latest} onOpen={() => resumeStudy(studyData.latest!)} /></div>}
         {videos.isError && (
           <div className="error-panel" role="alert">
             <AlertCircle size={20} />
@@ -1402,7 +1447,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           breadcrumbs={folderBreadcrumbs}
           onNavigate={(id) => { clearDragState(); if (id) setFolderId(id); else closeFolder(); }}
           onCreateFolder={() => { setCreateError(null); setIsCreatingFolder(true); }}
-          toolbarActions={<>{libraryHistoryControls}{activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}</>}
+          toolbarActions={<>{libraryHistoryControls}{libraryId && <button type="button" className="icon-button" title="本文件夹书签" aria-label="本文件夹书签"
+            onClick={() => setBookmarkScope({ title: activeFolder?.name ?? "文件夹", folderId: parseFolderId(folderId) ?? undefined })}><Bookmark size={16} /></button>}
+            {activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}</>}
           outsideDropLabel={activeFolder?.parentId ? "移至上一级文件夹" : "移至一级目录"}
           sortMode={folderSortMode} onSortChange={setFolderSortMode} onClose={closeFolder}
           canDropOutside={Boolean(draggedKey && dragSourceRef.current?.folderId === folderId)}
@@ -1413,6 +1460,9 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           initialScroll={folderScrolls.current[folderId] ?? 0}
           onScroll={(scroll) => { folderScrolls.current[folderId] = scroll; savedNavigation.current.folderScroll = scroll; saveLibraryNavigation(navigationKey, savedNavigation.current); }}>
           {operationErrorView}
+          {studyFolders.get(parseFolderId(folderId) ?? -1)?.latest && <div className="folder-study-resume"><StudyResume
+            latest={studyFolders.get(parseFolderId(folderId)!)!.latest!}
+            onOpen={() => resumeStudy(studyFolders.get(parseFolderId(folderId)!)!.latest!)} /></div>}
           {folderItems.length > 0 && processingControls(folderVideos, folderId)}
           {(videos.isLoading || rootLibrary.isLoading || library.isLoading) ? (
             <div className="folder-window-empty"><LoaderCircle className="spin" size={24} /><span>正在读取文件夹…</span></div>
@@ -1434,6 +1484,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           {notice && <p className="library-folder-notice" role="status"><CheckCircle2 size={16} />{notice}</p>}
         </FolderWindow>
       )}
+      {bookmarkScope && libraryId && active && !suspended && <StudyBookmarksDialog key={`${bookmarkScope.folderId}:${bookmarkScope.videoId}`}
+        libraryId={libraryId} scope={bookmarkScope} onClose={() => setBookmarkScope(null)} />}
       <AnimatePresence>
       {renamingFolder && active && !suspended && (
         <AnimatedOverlay key="rename" className="modal-backdrop" role="presentation" onClick={() => { if (!renameBusy) setRenamingFolder(null); }}>
