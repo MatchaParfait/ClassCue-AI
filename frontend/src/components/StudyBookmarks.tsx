@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkPlus, ChevronRight, LoaderCircle, Pencil, Play, RotateCcw, Save, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bookmark, BookmarkPlus, ChevronRight, FileVideo, FolderOpen, LoaderCircle, Pencil, Play, RotateCcw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -7,7 +7,7 @@ import { createStudyBookmark, deleteStudyBookmark, editStudyBookmark, getStudyBo
   studyNavigationKey, studyVideoUrl, type StudyBookmark, type StudyFolder, type StudyVideo } from "../api/studyBookmarks";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { canOpenReview, formatTime } from "../utils";
-import { AnimatedOverlay } from "./Motion";
+import { AnimatedOverlay, motion, useIsPresent, useMotionTransition, useReducedMotion } from "./Motion";
 
 export type BookmarkScope = { title: string; folderId?: number; videoId?: number; positionMs?: number | null; create?: boolean };
 
@@ -18,10 +18,17 @@ export function StudyResume({ latest, onOpen, compact = false }: {
   return <button type="button" className={`study-resume${compact ? " is-compact" : ""}`} onClick={onOpen}
     title={`${[...latest.path.map(folder => folder.name), latest.display_name].join(" › ")} · ${label}`}
     aria-label={`继续复习：${latest.display_name}，${label}`}>
-    <Play size={14} aria-hidden="true" />
-    <span><small>{compact ? "上次" : "继续复习"}</small><strong>{latest.display_name}</strong></span>
-    <time>{latest.completed ? "已看完" : formatTime(latest.position_ms ?? 0)}</time>
-    {!compact && <ChevronRight size={16} />}
+    <span className="study-resume-icon"><Play size={compact ? 13 : 17} aria-hidden="true" /></span>
+    <span className="study-resume-copy">
+      <span className="study-resume-title"><small>{compact ? "上次" : "继续复习"}</small><strong>{latest.display_name}</strong></span>
+      {!compact && latest.path.length > 0 && <span className="study-resume-path"><FolderOpen size={12} aria-hidden="true" />
+        <span>{latest.path.map(folder => folder.name).join(" › ")}</span></span>}
+    </span>
+    <span className="study-resume-position">
+      {!compact && !latest.completed && <small>上次看到</small>}
+      <time>{latest.completed ? "已看完" : formatTime(latest.position_ms ?? 0)}</time>
+    </span>
+    {!compact && <ChevronRight className="study-resume-arrow" size={17} aria-hidden="true" />}
   </button>;
 }
 
@@ -33,7 +40,7 @@ export function FolderStudyHints({ summary, onResume, onBookmarks }: {
     onDragStart={event => { event.preventDefault(); event.stopPropagation(); }}>
     {summary.latest && <StudyResume compact latest={summary.latest} onOpen={() => onResume(summary.latest!)} />}
     {summary.bookmark_count > 0 && <button className="study-bookmark-count" type="button"
-      title="查看此文件夹及子文件夹的书签" aria-label={`查看文件夹书签（${summary.bookmark_count}）`}
+      title="查看此文件夹及子文件夹的书签" aria-label={`查看文件夹书签（${summary.bookmark_count}）`} aria-haspopup="dialog"
       onClick={onBookmarks}><Bookmark size={13} /><span>书签 {summary.bookmark_count}</span></button>}
   </div>;
 }
@@ -55,7 +62,10 @@ export function StudyBookmarksDialog({ libraryId, scope, onClose, onSeek }: {
   const busyRef = useRef(false);
   const [error, setError] = useState("");
   const [removed, setRemoved] = useState<StudyBookmark | null>(null);
-  useModalFocus(true, dialog, close, () => { if (!busyRef.current) onClose(); });
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  const transition = useMotionTransition(.2);
+  useModalFocus(present, dialog, close, () => { if (!busyRef.current) onClose(); });
   useEffect(() => { if (creating || editing) editorInput.current?.focus(); }, [creating, editing]);
   const bookmarks = useQuery({
     queryKey: [...studyBookmarksKey(libraryId), scope.folderId ?? null, scope.videoId ?? null],
@@ -84,11 +94,17 @@ export function StudyBookmarksDialog({ libraryId, scope, onClose, onSeek }: {
     }
   };
   const editor = creating || editing;
-  return createPortal(<AnimatedOverlay className="modal-backdrop study-bookmarks-backdrop" role="presentation"
+  return createPortal(<AnimatedOverlay className="modal-backdrop study-bookmarks-backdrop" role="presentation" duration={.2} exitDuration={.16}
     onClick={event => { if (event.target === event.currentTarget && !busyRef.current) onClose(); }}>
-    <section ref={dialog} className="study-bookmarks-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+    <motion.section ref={dialog} className="study-bookmarks-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+      initial={{ opacity: 0, y: reduced ? 0 : 12, scale: reduced ? 1 : .985 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: reduced ? 0 : 8, scale: reduced ? 1 : .99, transition: { ...transition, duration: reduced ? 0 : .16 } }}
+      transition={transition}>
       <header className="dialog-heading">
-        <div><h2 id={titleId}><Bookmark size={18} />复习书签</h2><p>{scope.title}</p></div>
+        <span className="study-bookmarks-heading-icon"><Bookmark size={20} aria-hidden="true" /></span>
+        <div className="study-bookmarks-heading-copy"><h2 id={titleId}>复习书签</h2><p>{scope.title}</p></div>
+        {bookmarks.isSuccess && <span className="study-bookmarks-total">{bookmarks.data.length} 个书签</span>}
         <button ref={close} type="button" className="icon-button" title="关闭书签" aria-label="关闭书签" disabled={busy} onClick={onClose}><X size={18} /></button>
       </header>
       <div className="study-bookmarks-content">
@@ -104,6 +120,7 @@ export function StudyBookmarksDialog({ libraryId, scope, onClose, onSeek }: {
           <textarea ref={editorInput} id={noteId} value={note} maxLength={2000} rows={3} disabled={busy}
             placeholder="这个视频没看懂，下次再看看" onChange={event => setNote(event.target.value)} />
           <div className="study-bookmark-editor-actions">
+            <span className="study-bookmark-character-count">{note.length} / 2000</span>
             <button className="text-button compact" type="button" disabled={busy} onClick={() => { setCreating(false); setEditing(null); setError(""); }}>取消</button>
             <button className="primary-button compact" type="submit" disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}保存书签</button>
@@ -119,17 +136,25 @@ export function StudyBookmarksDialog({ libraryId, scope, onClose, onSeek }: {
           : bookmarks.isError ? <div className="study-bookmark-empty" role="alert"><span>书签读取失败</span>
             <button className="secondary-button compact" type="button" onClick={() => void bookmarks.refetch()}><RotateCcw size={14} />重试</button></div>
           : bookmarks.data?.length ? <ul className="study-bookmark-list">{bookmarks.data.map(bookmark => <li key={bookmark.id}>
-            <button type="button" className="study-bookmark-open" onClick={() => open(bookmark)} disabled={busy}>
-              <span className="study-bookmark-path">{bookmark.path?.map(folder => folder.name).join(" › ") || "视频库"}</span>
+            <button type="button" className="study-bookmark-open" onClick={() => open(bookmark)} disabled={busy}
+              title={bookmark.position_ms === null ? "打开视频" : `跳转到 ${formatTime(bookmark.position_ms)}`}>
+              <span className="study-bookmark-path"><FolderOpen size={12} aria-hidden="true" />
+                <span>{bookmark.path?.map(folder => folder.name).join(" › ") || "视频库"}</span></span>
               <span className="study-bookmark-reminder">
                 <span className="study-bookmark-field-label">我的提醒</span>
                 <span className={`study-bookmark-note${bookmark.note ? "" : " is-empty"}`}>{bookmark.note || "未填写提醒"}</span>
               </span>
-              <span className="study-bookmark-source">
-                <span className="study-bookmark-field-label">视频</span>
-                <span className="study-bookmark-video-name">{bookmark.display_name || bookmark.filename}</span>
+              <span className="study-bookmark-meta">
+                <span className="study-bookmark-source">
+                  <FileVideo size={13} aria-hidden="true" /><span className="study-bookmark-field-label">视频</span>
+                  <span className="study-bookmark-video-name">{bookmark.display_name || bookmark.filename}</span>
+                </span>
+                <span className="study-bookmark-time">
+                  <span className="study-bookmark-action" aria-hidden="true">{bookmark.position_ms === null ? "打开" : "跳转"}</span>
+                  <Play size={12} aria-hidden="true" />{bookmark.position_ms === null ? "整个视频" : formatTime(bookmark.position_ms)}
+                  <ArrowUpRight className="study-bookmark-jump-arrow" size={14} aria-hidden="true" />
+                </span>
               </span>
-              <span className="study-bookmark-time"><Play size={12} />{bookmark.position_ms === null ? "整个视频" : formatTime(bookmark.position_ms)}</span>
             </button>
             <div className="study-bookmark-tools">
               <button type="button" className="icon-button" title="编辑提醒" aria-label={`编辑书签：${bookmark.note || bookmark.display_name}`}
@@ -144,6 +169,6 @@ export function StudyBookmarksDialog({ libraryId, scope, onClose, onSeek }: {
         <button type="button" className="secondary-button compact" disabled={busy} onClick={() => { setCreating(true); setNote(""); setError(""); }}>
           <BookmarkPlus size={15} />添加书签</button>
       </footer>}
-    </section>
+    </motion.section>
   </AnimatedOverlay>, document.body);
 }

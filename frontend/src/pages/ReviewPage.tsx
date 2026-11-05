@@ -502,14 +502,14 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onStudyProgress={savedStudy.save}
             />
             {!mockMode && video.library_id && <div className="review-study-tools">
-              <button type="button" className="secondary-button compact" onClick={() => {
+              <button type="button" className="secondary-button compact" aria-haspopup="dialog" onClick={() => {
                 const time = getPlayerTime();
                 if (!timelineRef.current?.isReady() || time === undefined || !Number.isFinite(time)) {
                   setJumpTimeError("无法读取当前播放位置，请等待视频加载后重试"); return;
                 }
                 setBookmarkScope({ title: video.display_name, videoId, positionMs: Math.round(time * 1000), create: true });
               }}><BookmarkPlus size={15} />添加书签</button>
-              <button type="button" className="text-button compact" onClick={() => setBookmarkScope({
+              <button type="button" className="text-button compact" aria-haspopup="dialog" onClick={() => setBookmarkScope({
                 title: video.display_name, videoId,
               })}><Bookmark size={15} />本视频书签</button>
               {savedStudy.error && <span className="study-progress-error" role="status">续看记录同步失败
@@ -570,8 +570,9 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
         key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
         onCaptureFrame={captureFrame}
         backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}
-      {bookmarkScope && video.library_id && <StudyBookmarksDialog libraryId={video.library_id} scope={bookmarkScope}
-        onClose={() => setBookmarkScope(null)} onSeek={position => seekTo(position / 1000)} />}
+      <AnimatePresence>{bookmarkScope && video.library_id && <StudyBookmarksDialog key={`${video.library_id}:${videoId}`}
+        libraryId={video.library_id} scope={bookmarkScope}
+        onClose={() => setBookmarkScope(null)} onSeek={position => seekTo(position / 1000)} />}</AnimatePresence>
       <AnimatePresence>{notice && (
         <AnimatedPopup key="notice" duration={.18} className="toast" role="status">
           <CheckCircle2 size={17} /><span>{notice}</span>

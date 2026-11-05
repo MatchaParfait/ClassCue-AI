@@ -1279,7 +1279,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         {videoStudy && (videoStudy.position_ms !== null || videoStudy.bookmark_count > 0) && <div className="video-study-hints">
           {videoStudy.position_ms !== null && <span>{videoStudy.completed ? "上次看完" : `上次看到 ${formatTime(videoStudy.position_ms)}`}</span>}
           {videoStudy.bookmark_count > 0 && <button className="study-bookmark-count" type="button"
-            title={videoStudy.bookmark_note || "查看视频书签"} aria-label={`查看视频书签（${videoStudy.bookmark_count}）`}
+            title={videoStudy.bookmark_note || "查看视频书签"} aria-label={`查看视频书签（${videoStudy.bookmark_count}）`} aria-haspopup="dialog"
             onClick={() => setBookmarkScope({ title: video.display_name, videoId: video.id })}>
             <Bookmark size={13} /><span>{videoStudy.bookmark_note || `书签 ${videoStudy.bookmark_count}`}</span>
             {videoStudy.bookmark_note && <small>{videoStudy.bookmark_count}</small>}
@@ -1385,7 +1385,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           <StudyShareImportButton key={scope} libraryId={libraryId} active={active && !suspended} />
           <DeviceTransferButton key={`device-${scope}`} libraryId={libraryId} active={active && !suspended} selectedVideoIds={selections.root ?? []} />
           {libraryHistoryControls}
-          {libraryId && <button type="button" className="icon-button" title="全部复习书签" aria-label="全部复习书签"
+          {libraryId && <button type="button" className="icon-button" title="全部复习书签" aria-label="全部复习书签" aria-haspopup="dialog"
             onClick={() => setBookmarkScope({ title: "全部视频" })}><Bookmark size={16} /></button>}
           <label className="sort-control">
             <span>排序</span>
@@ -1447,7 +1447,7 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           breadcrumbs={folderBreadcrumbs}
           onNavigate={(id) => { clearDragState(); if (id) setFolderId(id); else closeFolder(); }}
           onCreateFolder={() => { setCreateError(null); setIsCreatingFolder(true); }}
-          toolbarActions={<>{libraryHistoryControls}{libraryId && <button type="button" className="icon-button" title="本文件夹书签" aria-label="本文件夹书签"
+          toolbarActions={<>{libraryHistoryControls}{libraryId && <button type="button" className="icon-button" title="本文件夹书签" aria-label="本文件夹书签" aria-haspopup="dialog"
             onClick={() => setBookmarkScope({ title: activeFolder?.name ?? "文件夹", folderId: parseFolderId(folderId) ?? undefined })}><Bookmark size={16} /></button>}
             {activeFolder && <Link className="secondary-button compact" to={`/study-materials?folder=${parseFolderId(folderId)}`}><BookOpen size={17} />本课程资料</Link>}</>}
           outsideDropLabel={activeFolder?.parentId ? "移至上一级文件夹" : "移至一级目录"}
@@ -1484,8 +1484,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
           {notice && <p className="library-folder-notice" role="status"><CheckCircle2 size={16} />{notice}</p>}
         </FolderWindow>
       )}
-      {bookmarkScope && libraryId && active && !suspended && <StudyBookmarksDialog key={`${bookmarkScope.folderId}:${bookmarkScope.videoId}`}
-        libraryId={libraryId} scope={bookmarkScope} onClose={() => setBookmarkScope(null)} />}
+      <AnimatePresence>{bookmarkScope && libraryId && active && !suspended && <StudyBookmarksDialog key={`${libraryId}:${bookmarkScope.folderId}:${bookmarkScope.videoId}`}
+        libraryId={libraryId} scope={bookmarkScope} onClose={() => setBookmarkScope(null)} />}</AnimatePresence>
       <AnimatePresence>
       {renamingFolder && active && !suspended && (
         <AnimatedOverlay key="rename" className="modal-backdrop" role="presentation" onClick={() => { if (!renameBusy) setRenamingFolder(null); }}>

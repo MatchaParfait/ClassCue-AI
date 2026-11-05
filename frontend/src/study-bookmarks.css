@@ -1,80 +1,144 @@
 .library-card.folder-card:has(.folder-study-hints) { flex-wrap: wrap; }
 .folder-study-hints {
   position: relative; z-index: 2; display: flex; flex: 1 0 100%; align-items: center;
-  flex-wrap: wrap; gap: 6px; min-width: 0; padding-top: 8px; margin-top: 2px;
+  flex-wrap: wrap; gap: 8px; min-width: 0; padding-top: 10px; margin-top: 6px;
   border-top: 1px solid color-mix(in srgb, var(--ui-accent-strong) 16%, transparent);
 }
 .study-resume {
-  display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%; width: 100%;
-  padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 8px;
+  display: flex; align-items: center; gap: 14px; min-width: 0; max-width: 100%; width: 100%;
+  box-sizing: border-box; padding: 14px 18px; border: 1px solid var(--ui-border); border-radius: 8px;
   background: var(--ui-surface); color: var(--ui-accent-strong); cursor: pointer; text-align: left;
 }
-.study-resume > span { display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; }
+.study-resume-icon { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; background: var(--ui-accent-soft); }
+.study-resume-copy { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.study-resume-title { display: flex; align-items: baseline; min-width: 0; gap: 10px; }
+.study-resume-path { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ui-muted); font-size: 11px; }
+.study-resume-path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-resume-position { display: grid; flex-shrink: 0; gap: 1px; justify-items: end; }
 .study-resume small { flex-shrink: 0; color: var(--ui-muted); font-size: 11px; }
-.study-resume strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.study-resume time { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.study-resume strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.study-resume time { font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.study-resume-arrow { color: var(--ui-muted); }
 .study-resume:hover { background: var(--ui-accent-soft); border-color: var(--ui-accent-strong); }
-.study-resume.is-compact { flex: 1 1 130px; width: auto; padding: 3px 5px; gap: 5px; border-color: transparent; background: transparent; }
-.study-resume.is-compact > span { gap: 5px; }
+.study-resume.is-compact { flex: 1 1 140px; width: auto; padding: 5px 6px; gap: 6px; border-color: transparent; background: transparent; }
+.study-resume.is-compact .study-resume-icon { flex-basis: 16px; width: 16px; height: 24px; background: transparent; }
+.study-resume.is-compact .study-resume-title { gap: 5px; }
 .study-resume.is-compact strong { font-size: 11px; font-weight: 500; }
-.study-resume.is-compact time { font-size: 11px; }
+.study-resume.is-compact time { font-size: 11px; font-weight: 400; }
 .study-resume.is-compact:hover { background: color-mix(in srgb, var(--ui-surface) 64%, transparent); }
 .study-bookmark-count {
   display: inline-flex; align-items: center; justify-content: flex-start; gap: 5px; min-width: 0; max-width: 100%;
-  padding: 4px 7px; border: 1px solid color-mix(in srgb, var(--ui-accent-strong) 20%, transparent);
+  padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--ui-accent-strong) 20%, transparent);
   border-radius: 6px; background: color-mix(in srgb, var(--ui-surface) 70%, transparent);
   color: var(--ui-accent-strong); font-size: 11px; line-height: 1.5; cursor: pointer;
 }
 .study-bookmark-count > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.study-bookmark-count small { font-variant-numeric: tabular-nums; }
+.study-bookmark-count small { flex-shrink: 0; min-width: 16px; padding-inline: 3px; border-radius: 4px; background: var(--ui-accent-soft); text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
 .study-bookmark-count:hover { background: var(--ui-accent-soft); border-color: var(--ui-accent-strong); }
-.library-study-resume { margin: 0 0 14px; }
-.folder-study-resume { margin-bottom: 14px; }
-.video-study-hints { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; padding: 0 0 8px; font-size: 11px; color: var(--ui-muted); }
+.library-study-resume { margin: 16px 0 8px; }
+.folder-study-resume { margin: 0 0 16px; }
+.video-study-hints { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; padding: 2px 0 10px; font-size: 11px; color: var(--ui-muted); }
 .video-study-hints .study-bookmark-count { flex: 0 1 auto; }
-.review-study-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 0; }
+.review-study-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; margin-bottom: 8px; border-bottom: 1px solid var(--ui-border); }
+.review-study-tools > button { min-height: 34px; }
 .study-progress-error { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 12px; color: var(--ui-red); }
 .study-progress-error .icon-button { min-height: 28px; min-width: 28px; padding: 4px; }
-.study-bookmarks-backdrop { z-index: 75; }
+.study-bookmarks-backdrop { z-index: 75; box-sizing: border-box; }
 .study-bookmarks-dialog {
-  display: flex; flex-direction: column; width: min(600px, 100%); max-height: min(720px, calc(100dvh - 40px));
+  display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(720px, calc(100dvh - 40px));
   min-width: 0; overflow: hidden; border: 1px solid var(--ui-border); border-radius: 8px;
-  background: var(--ui-surface); color: var(--ui-text); box-shadow: var(--ui-shadow-overlay);
+  background: var(--ui-surface); color: var(--ui-text);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ui-shadow-ink) 10%, transparent),
+    0 24px 64px color-mix(in srgb, var(--ui-shadow-ink) 12%, transparent);
 }
-.study-bookmarks-dialog > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--ui-border); }
-.study-bookmarks-dialog > header > div { min-width: 0; }
-.study-bookmarks-dialog h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+.study-bookmarks-dialog > header { display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--ui-border); }
+.study-bookmarks-heading-icon { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border-radius: 8px; background: var(--ui-accent-soft); color: var(--ui-accent-strong); }
+.study-bookmarks-heading-copy { flex: 1; min-width: 0; }
+.study-bookmarks-dialog h2 { font-size: 17px; }
 .study-bookmarks-dialog header p { color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 4px; }
-.study-bookmarks-content { overflow: auto; padding: 0 20px; overscroll-behavior: contain; }
-.study-bookmark-editor { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--ui-border); }
+.study-bookmarks-total { flex-shrink: 0; color: var(--ui-muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.study-bookmarks-dialog > header > .icon-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 6px; border-color: transparent; background: transparent; border-radius: 6px; }
+.study-bookmarks-dialog > header > .icon-button:hover { background: var(--ui-surface-soft); }
+.study-bookmarks-content { overflow: auto; min-height: 0; padding: 0 24px; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.study-bookmark-editor { display: grid; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--ui-border); }
 .study-bookmark-editor label { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; }
 .study-bookmark-editor label > span { color: var(--ui-muted); font-size: 12px; font-weight: 400; }
-.study-bookmark-editor textarea { resize: vertical; min-height: 78px; max-height: 220px; padding: 10px; border: 1px solid var(--ui-border); background: var(--ui-surface-raised); box-sizing: border-box; width: 100%; }
-.study-bookmark-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.study-bookmark-editor textarea { resize: vertical; min-height: 104px; max-height: 220px; padding: 12px; border: 1px solid var(--ui-border); background: var(--ui-surface-raised); box-sizing: border-box; width: 100%; line-height: 1.7; }
+.study-bookmark-editor textarea:focus { border-color: var(--ui-accent-strong); }
+.study-bookmark-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.study-bookmark-character-count { margin-right: auto; color: var(--ui-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .study-bookmark-list { list-style: none; padding: 0; margin: 0; }
-.study-bookmark-list li { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--ui-border); }
+.study-bookmark-list li { display: flex; align-items: flex-start; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--ui-border); }
 .study-bookmark-list li:last-child { border-bottom: 0; }
-.study-bookmark-open { display: grid; flex: 1; min-width: 0; gap: 5px; padding: 0; text-align: left; color: var(--ui-text); border: 0; background: transparent; cursor: pointer; }
-.study-bookmark-open:hover .study-bookmark-video-name { color: var(--ui-accent-strong); }
-.study-bookmark-path { font-size: 11px; color: var(--ui-muted); overflow-wrap: anywhere; }
-.study-bookmark-reminder { display: grid; min-width: 0; gap: 3px; margin: 5px 0 8px; }
+.study-bookmark-open { position: relative; isolation: isolate; display: grid; flex: 1; min-width: 0; gap: 12px; padding: 0; text-align: left; color: var(--ui-text); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.study-bookmark-open::before {
+  content: ""; position: absolute; z-index: -1; inset: -10px; pointer-events: none;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+  transition: background-color 180ms var(--ui-ease), border-color 180ms var(--ui-ease);
+}
+.study-bookmark-open:focus-visible { outline-offset: 10px; }
+.study-bookmark-open:focus-visible::before {
+  background: color-mix(in srgb, var(--ui-accent-soft) 64%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent-strong) 18%, transparent);
+}
+.study-bookmark-open:focus-visible .study-bookmark-time { background: var(--ui-accent-soft); }
+.study-bookmark-open:focus-visible .study-bookmark-action { opacity: 1; transform: translateX(0); }
+.study-bookmark-open:focus-visible .study-bookmark-jump-arrow { opacity: 1; transform: translate(2px, -2px); }
+.study-bookmark-open:active:not(:disabled) .study-bookmark-jump-arrow { transform: translate(3px, -3px); }
+.study-bookmark-path { display: flex; align-items: flex-start; gap: 6px; min-width: 0; font-size: 11px; line-height: 1.7; color: var(--ui-muted); overflow-wrap: anywhere; }
+.study-bookmark-path > svg { margin-top: 3px; }
+.study-bookmark-reminder { display: grid; min-width: 0; gap: 4px; }
 .study-bookmark-field-label { flex-shrink: 0; color: var(--ui-muted); font-size: 11px; font-weight: 400; line-height: 1.7; }
 .study-bookmark-note { color: var(--ui-text); font-size: 15px; font-weight: 600; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; }
 .study-bookmark-note.is-empty { color: var(--ui-muted); font-size: 13px; font-weight: 400; }
-.study-bookmark-source { display: flex; align-items: baseline; min-width: 0; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border); }
+.study-bookmark-meta { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--ui-border); }
+.study-bookmark-source { display: flex; flex: 1 1 180px; align-items: flex-start; min-width: 0; gap: 6px; color: var(--ui-muted); }
+.study-bookmark-source > svg { margin-top: 4px; }
 .study-bookmark-video-name { min-width: 0; color: var(--ui-muted); font-size: 12px; font-weight: 400; line-height: 1.7; overflow-wrap: anywhere; }
-.study-bookmark-time { display: inline-flex; align-items: center; gap: 5px; color: var(--ui-accent-strong); font-size: 12px; font-variant-numeric: tabular-nums; }
+.study-bookmark-time { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 3px 7px; margin: -2px -7px -2px 0; border-radius: 4px; color: var(--ui-accent-strong); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; transition: background-color 180ms var(--ui-ease); }
+.study-bookmark-action { opacity: 0; transform: translateX(-4px); font-size: 11px; font-weight: 400; transition: opacity 180ms var(--ui-ease), transform 180ms var(--ui-ease); }
+.study-bookmark-jump-arrow { opacity: .45; transition: opacity 180ms var(--ui-ease), transform 180ms var(--ui-ease); }
+@media (hover: hover) and (pointer: fine) {
+  .study-bookmark-open:hover:not(:disabled)::before {
+    background: color-mix(in srgb, var(--ui-accent-soft) 64%, transparent);
+    border-color: color-mix(in srgb, var(--ui-accent-strong) 18%, transparent);
+  }
+  .study-bookmark-open:hover:not(:disabled) .study-bookmark-time { background: var(--ui-accent-soft); }
+  .study-bookmark-open:hover:not(:disabled) .study-bookmark-action { opacity: 1; transform: translateX(0); }
+  .study-bookmark-open:hover:not(:disabled) .study-bookmark-jump-arrow { opacity: 1; transform: translate(2px, -2px); }
+}
+@media (hover: none), (pointer: coarse) {
+  .study-bookmark-action, .study-bookmark-jump-arrow { opacity: 1; transform: none; }
+}
 .study-bookmark-tools { display: flex; flex-shrink: 0; gap: 4px; }
-.study-bookmark-tools .icon-button { min-width: 28px; min-height: 28px; padding: 5px; border-color: transparent; background: transparent; }
+.study-bookmark-tools .icon-button { min-width: 32px; min-height: 32px; padding: 7px; margin-top: -5px; border-color: transparent; border-radius: 6px; background: transparent; }
+.study-bookmark-tools .icon-button:hover:not(:disabled) { background: var(--ui-surface-soft); }
+.study-bookmark-tools .danger-icon:hover:not(:disabled) { background: var(--ui-danger-soft); border-color: transparent; }
 .study-bookmark-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px 12px; font-size: 13px; color: var(--ui-muted); }
 .study-bookmark-removed { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--ui-muted); padding: 10px 0; }
-.study-bookmarks-footer { padding: 12px 20px; border-top: 1px solid var(--ui-border); }
+.study-bookmarks-footer { display: flex; justify-content: flex-end; padding: 14px 24px; border-top: 1px solid var(--ui-border); }
 @media (max-width: 520px) {
-  .study-resume > span { display: grid; gap: 1px; }
-  .study-resume.is-compact > span { display: flex; }
-  .study-bookmarks-dialog > header { padding: 14px; }
-  .study-bookmarks-content { padding-inline: 14px; }
-  .study-bookmark-list li { gap: 6px; }
+  .study-resume { gap: 10px; padding: 12px; }
+  .study-resume-title { display: grid; gap: 2px; }
+  .study-resume-icon { flex-basis: 30px; width: 30px; height: 30px; }
+  .study-resume.is-compact .study-resume-title { display: flex; }
+  .study-resume-arrow { display: none; }
+  .study-bookmarks-dialog > header { flex-wrap: wrap; padding: 16px; gap: 10px; }
+  .study-bookmarks-heading-copy { flex-basis: calc(100% - 114px); }
+  .study-bookmarks-total { order: 1; margin-left: 50px; }
+  .study-bookmarks-content { padding-inline: 16px; }
+  .study-bookmark-list li { gap: 10px; padding-block: 18px; }
   .study-bookmark-tools { flex-direction: column; }
+  .study-bookmark-tools .icon-button { min-width: 44px; min-height: 44px; margin-top: 0; }
+  .study-bookmark-tools .icon-button + .icon-button { margin-top: 4px; }
+  .study-bookmarks-dialog > header > .icon-button { min-width: 44px; min-height: 44px; width: 44px; height: 44px; }
+  .study-bookmark-editor-actions > button, .study-bookmarks-footer > button { min-height: 44px; }
+  .study-bookmarks-footer { padding: 12px 16px; }
   .study-progress-error { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .study-resume, .study-bookmark-count, .study-bookmark-time, .study-bookmark-open::before,
+  .study-bookmark-action, .study-bookmark-jump-arrow { transition: none; }
+  .study-bookmark-open .study-bookmark-action, .study-bookmark-open .study-bookmark-jump-arrow { transform: none; }
+  .study-bookmark-open:is(:hover, :focus-visible, :active):not(:disabled) :is(.study-bookmark-action, .study-bookmark-jump-arrow) { transform: none; }
 }
