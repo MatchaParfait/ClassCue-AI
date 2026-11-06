@@ -13,7 +13,7 @@ import { FireRedResourceProfile } from "./FireRedResourceStatus";
 import { useRecallSelection } from "../hooks/useRecallSelection";
 
 export function canSelectForProcessing(video: Video) {
-  return video.status !== "processing" && video.status !== "resource_paused";
+  return video.status !== "processing" && video.status !== "resource_paused" && !video.file_change_block_reason;
 }
 
 export const DEFAULT_LIBRARY_PROCESS_FORM: ProcessForm = {
@@ -22,10 +22,10 @@ export const DEFAULT_LIBRARY_PROCESS_FORM: ProcessForm = {
 
 export interface ProcessingFolder { id: number; name: string; videoCount: number }
 
-export function LibraryProcessing({ videos, folders, selectedIds, selectedFolderIds, onSelect, onSelectFolders, expanded, onExpand, active, blocked, pending, onPending, onSubmitted, form, onFormChange: setForm }: {
+export function LibraryProcessing({ videos, folders, selectedIds, selectedFolderIds, onSelect, onSelectFolders, expanded, onExpand, active, blocked, queued, pending, onPending, onSubmitted, form, onFormChange: setForm }: {
   videos: Video[]; selectedIds: number[]; onSelect: (ids: number[]) => void;
   folders: ProcessingFolder[]; selectedFolderIds: number[]; onSelectFolders: (ids: number[]) => void;
-  expanded: boolean; onExpand: (open: boolean) => void; active: boolean; blocked: boolean;
+  expanded: boolean; onExpand: (open: boolean) => void; active: boolean; blocked: boolean; queued: boolean;
   pending: boolean; onPending: (value: boolean) => void;
   onSubmitted: (jobId: string | number, count: number) => void;
   form: ProcessForm; onFormChange: Dispatch<SetStateAction<ProcessForm>>;
@@ -47,6 +47,7 @@ export function LibraryProcessing({ videos, folders, selectedIds, selectedFolder
   const hasCandidates = candidates.length + folderCandidates.length > 0;
   const allSelected = hasCandidates && selected.length === candidates.length && selectedFolders.length === folderCandidates.length;
   const disabled = pending || blocked;
+  const batchBlocked = queued && (selected.length > 1 || selectedFolders.length > 0);
   useLayoutEffect(() => {
     setDockHost(rootRef.current?.closest<HTMLElement>(".folder-window, .library-inner") ?? null);
   }, []);
@@ -115,7 +116,7 @@ export function LibraryProcessing({ videos, folders, selectedIds, selectedFolder
           mutation.reset(); onSelect([]); onSelectFolders([]); onExpand(false);
           selectAll.current?.focus({ preventScroll: true });
         }}>取消选择</button>
-        <button className="primary-button library-selection-dock-process" type="button" disabled={disabled}
+        <button className="primary-button library-selection-dock-process" type="button" disabled={disabled || batchBlocked}
           aria-expanded={expanded} aria-controls={optionsId} onClick={() => {
             mutation.reset();
             if (expanded) {
@@ -128,6 +129,7 @@ export function LibraryProcessing({ videos, folders, selectedIds, selectedFolder
           }}>{pending ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
           {pending ? "正在提交…" : `处理所选（${count}）`}</button>
         {blocked && <span className="library-selection-dock-blocked">请先完成或停止当前任务</span>}
+        {!blocked && batchBlocked && <span className="library-selection-dock-blocked">当前有任务，请单选视频加入队列</span>}
       </div>, dockHost,
     )}
     <Collapse open={expanded}><section id={optionsId} ref={optionsRef} tabIndex={-1} className="library-processing-options process-options-section" aria-label="视频处理选项">
@@ -159,14 +161,17 @@ export function LibraryProcessing({ videos, folders, selectedIds, selectedFolder
             <button type="button" className="icon-button" title="重新读取处理配置" aria-label="重新读取处理配置"
               onClick={() => { void selection.refetch(); void ai.refetch(); }}><RotateCcw size={15} /></button></div>}
           {mutation.error && <p className="field-error" role="alert"><AlertCircle size={15} />{mutation.error.message}</p>}
-          <button className="primary-button" type="button" disabled={disabled || count === 0 || selection.isPending || ai.isPending || Boolean(configError)}
+          {!blocked && queued && <p className="settings-hint" role="status">{batchBlocked
+            ? "当前有任务，请单选视频加入队列" : "前面的任务完成后，将自动开始处理此视频"}</p>}
+          <button className="primary-button" type="button" disabled={disabled || batchBlocked || count === 0 || selection.isPending || ai.isPending || Boolean(configError)}
             onClick={() => {
-              if (submitting.current || !count) return;
+              if (submitting.current || !count || batchBlocked) return;
               submitting.current = true;
               onPending(true);
               mutation.mutate({ ids: selected.map(video => video.id), folderIds: selectedFolders.map(folder => folder.id),
                 count, form, modelId: selection.data?.id });
-            }}>{pending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}{pending ? "正在提交…" : selectedFolders.length || count > 1 ? `开始批处理（${count}）` : "开始处理"}</button>
+            }}>{pending ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}{pending ? "正在提交…"
+              : selectedFolders.length || count > 1 ? `开始批处理（${count}）` : queued ? "加入处理队列" : "开始处理"}</button>
         </div>
         <ProcessingCompanion />
       </div>

@@ -35,26 +35,42 @@ describe("recall review navigation", () => {
     </QueryClientProvider>));
     try {
       render("medium_recall");
-      const drawers = container.querySelectorAll<HTMLDetailsElement>(".recall-mode-drawer");
+      const drawers = container.querySelectorAll<HTMLElement>(".recall-mode-drawer");
+      const disclosures = [...drawers].map(drawer => drawer.querySelector<HTMLButtonElement>(".recall-mode-toggle")!);
       expect(drawers).toHaveLength(2);
-      expect(drawers[0].open).toBe(false);
-      expect(drawers[0].querySelector("summary")?.textContent).toBe("默认召回中召回");
+      expect(disclosures[0].getAttribute("aria-expanded")).toBe("false");
+      expect(drawers[0].querySelector(".recall-mode-options")?.hasAttribute("hidden")).toBe(true);
       expect(drawers[0].querySelectorAll('[role="tab"]')).toHaveLength(3);
       expect(drawers[1].querySelectorAll('[role="tab"]')).toHaveLength(2);
       expect(container.querySelector(".question-mode")?.closest("details")).toBeNull();
       expect(container.querySelector(".question-mode button")?.textContent).toBe("题目提取0");
-      act(() => drawers[0].querySelector("summary")!.click());
-      expect(drawers[0].open).toBe(true);
+      const direct = drawers[0].querySelector<HTMLButtonElement>(".recall-mode-direct")!;
+      expect(direct.title).toBe("直接切换到中召回");
+      act(() => direct.click());
+      expect(change).toHaveBeenLastCalledWith("medium_recall");
+      expect(disclosures[0].getAttribute("aria-expanded")).toBe("false");
+      change.mockClear();
+      act(() => disclosures[0].click());
+      expect(disclosures[0].getAttribute("aria-expanded")).toBe("true");
+      expect(change).not.toHaveBeenCalled();
       const high = drawers[0].querySelector<HTMLButtonElement>('button[title="高召回"]')!;
       act(() => high.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
       expect(change).toHaveBeenLastCalledWith("medium_recall");
       expect(document.activeElement?.textContent).toBe("中召回0");
       act(() => high.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
       expect(change).toHaveBeenLastCalledWith("low_recall");
+      render("low_recall");
+      render("question_extraction");
+      expect(direct.title).toBe("直接切换到低召回");
+      act(() => direct.click());
+      expect(change).toHaveBeenLastCalledWith("low_recall");
+      act(() => high.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(disclosures[0].getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(disclosures[0]);
       render(custom);
       expect(drawers[1].classList.contains("is-current")).toBe(true);
       expect(drawers[1].querySelector(".recall-mode-current")?.textContent).toBe(name);
-      const customButton = drawers[1].querySelector<HTMLButtonElement>("button")!;
+      const customButton = drawers[1].querySelector<HTMLButtonElement>('[role="tab"]')!;
       expect(customButton.title).toBe(name);
       expect(customButton.textContent).toBe(`${name}1`);
       await act(async () => {
@@ -144,7 +160,7 @@ describe("recall review navigation", () => {
       act(() => container.querySelector<HTMLLabelElement>(".marker-time-editor label")!.click());
       expect(props.onSelectMarker).not.toHaveBeenCalled();
       render(<ReviewSidebar {...props} />);
-      act(() => (container.querySelector(".mode-switcher button") as HTMLButtonElement).click());
+      act(() => (container.querySelector('.mode-switcher [role="tab"]') as HTMLButtonElement).click());
       expect(change).toHaveBeenCalledWith("high_recall");
       render(<ReviewSidebar {...props} allMarkers={[
         ...markers, { ...markers[0], id: 2, analysis_mode: "strict_exam_intent" },

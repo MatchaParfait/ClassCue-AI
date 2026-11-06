@@ -276,9 +276,12 @@ function WorkbenchContents({ visible, scope, activeJobId, libraryId, workspaceSe
       <div hidden={!libraryActive}>
         <LibraryPage active={libraryActive} suspended={isPanel || !libraryActive} scope={scope}
           libraryId={libraryId} workspaceSettled={workspaceSettled} startupView={startupView} onStartupRestored={onStartupRestored}
-          onJob={onJob} processingBlocked={Boolean(currentTask && (!isTaskTerminal(currentTask) || currentTask.status === "resource_paused"))
+          onJob={onJob} processingBlocked={Boolean(currentTask && (currentTask.status === "resource_paused"
+            || (currentTask.job_type === "storage_migration" && !isTaskTerminal(currentTask))))
             || Boolean(paused.data?.some(item => item.status === "resource_paused"))}
-          fileChangeJobs={[...(currentTask ? [currentTask] : []), ...(paused.data ?? [])]}
+          processingQueued={Boolean(currentTask && !isTaskTerminal(currentTask))
+            || Boolean(recent.data?.some(item => !isTaskTerminal(item)))}
+          fileChangeJobs={[...(currentTask ? [currentTask] : []), ...(recent.data ?? []), ...(paused.data ?? [])]}
           routeFolderId={pageLocation.pathname.startsWith("/library/folder/") ? decodeURIComponent(pageLocation.pathname.split("/").at(-1)!) : null}
           onOpenPanel={open} />
       </div>
@@ -338,11 +341,11 @@ interface LibraryPageProps {
   active: boolean; suspended: boolean; scope: string; routeFolderId: string | null;
   libraryId?: string; workspaceSettled: boolean; startupView: StartupLibraryView | null; onStartupRestored: () => void;
   onOpenPanel: (path: string) => void;
-  onJob: (id: string | number) => void; processingBlocked: boolean;
+  onJob: (id: string | number) => void; processingBlocked: boolean; processingQueued: boolean;
   fileChangeJobs: Job[];
 }
 
-function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, startupView, onStartupRestored, routeFolderId, onOpenPanel, onJob, processingBlocked, fileChangeJobs }: LibraryPageProps) {
+function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, startupView, onStartupRestored, routeFolderId, onOpenPanel, onJob, processingBlocked, processingQueued, fileChangeJobs }: LibraryPageProps) {
   const showDragTextHints = useDragTextHints();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -663,13 +666,14 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
         setProcessingOptions((current) => ({ ...current, [key]: open }));
       }}
       active={active && !suspended && (parentId ? folderId === parentId : !folderId)}
-      blocked={processingBlocked} pending={processingPending} onPending={setProcessingPending}
+      blocked={processingBlocked} queued={processingQueued} pending={processingPending} onPending={setProcessingPending}
       onSubmitted={(id, count) => {
         onJob(id);
         setSelections((current) => ({ ...current, [key]: [] }));
         setFolderSelections(current => ({ ...current, [key]: [] }));
         setProcessingOptions((current) => ({ ...current, [key]: false }));
-        setNotice(count > 1 ? `已提交批处理，共 ${count} 个视频` : "已提交视频处理任务");
+        setNotice(count > 1 ? `已提交批处理，共 ${count} 个视频` : processingQueued
+          ? "已加入队列，前面的任务完成后自动开始" : "已提交视频处理任务");
       }} />;
   };
 
@@ -1204,7 +1208,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
     const renameBlockReason = videoFileChangeBlockReason(video, fileChangeJobs);
     const selectionKey = parentId ?? "root";
     const selected = (selections[selectionKey] ?? []).includes(video.id);
-    const processingDisabled = processingBlocked || processingPending || moving.has(video.id) || !canSelectForProcessing(video);
+    const processingDisabled = processingBlocked || processingPending || moving.has(video.id)
+      || Boolean(renameBlockReason) || !canSelectForProcessing(video);
     const hasSlides = Number(video.slide_count ?? 0) > 0;
     const ready = video.status === "review_ready";
     const preview = canOpenReview(video.status, Boolean(video.has_transcript));

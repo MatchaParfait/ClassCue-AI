@@ -317,7 +317,7 @@ describe("A/D marker navigation", () => {
     press("d");
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
     click(container.querySelectorAll(".status-filter button")[0]);
-    click(container.querySelectorAll(".mode-switcher button")[0]);
+    click(container.querySelectorAll('.mode-switcher [role="tab"]')[0]);
     press("d");
     expect(container.querySelector("video")!.currentTime).toBe(5);
     expect(markerButtons()[0].getAttribute("aria-current")).toBe("true");
@@ -507,7 +507,7 @@ describe("review visit state", () => {
     expect(markerButtons()).toHaveLength(1);
     expect(markerButtons()[0].textContent).toContain("Saved mastered point");
     click(filters[0]);
-    const modes = container.querySelectorAll(".mode-switcher button");
+    const modes = container.querySelectorAll('.mode-switcher [role="tab"]');
     click(modes[0]);
     expect(markerButtons()).toHaveLength(1);
     expect(container.querySelectorAll(".marker-item.is-viewed")).toHaveLength(0);

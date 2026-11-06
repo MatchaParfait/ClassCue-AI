@@ -22,9 +22,12 @@ export function RecallAnalysisPanel({ videoId, mode, label: customLabel }: { vid
   });
   const options = useQuery({
     queryKey: optionsKey, queryFn: () => getVideoProcessingOptions(videoId), staleTime: 0,
-    refetchInterval: query => query.state.data?.active_job && !isTaskTerminal(query.state.data.active_job) ? 1500 : false,
+    refetchInterval: query => query.state.data?.active_jobs?.some(job => !isTaskTerminal(job))
+      || (query.state.data?.active_job && !isTaskTerminal(query.state.data.active_job)) ? 1500 : false,
   });
-  const snapshot = options.data?.active_job ?? submitted;
+  const activeJobs = options.data?.active_jobs ?? (options.data?.active_job ? [options.data.active_job] : []);
+  const snapshot = activeJobs.find(job => job.analysis_modes?.includes(mode))
+    ?? (submitted?.analysis_modes?.includes(mode) ? submitted : null) ?? options.data?.active_job;
   const task = useTaskStatus(snapshot?.id ?? null);
   const job = task.data ?? snapshot;
   const running = Boolean(job && !isTaskTerminal(job));
@@ -37,7 +40,7 @@ export function RecallAnalysisPanel({ videoId, mode, label: customLabel }: { vid
   const refreshResults = () => {
     for (const queryKey of [
       runsKey, optionsKey, ["study", "markers", videoId], ["study", "video", videoId],
-      ["videos"], ["library"], ["library-status"],
+      ["videos"], ["library"], ["library-status"], ["recent-jobs"],
     ]) void queryClient.invalidateQueries({ queryKey });
   };
   useEffect(() => {
@@ -86,14 +89,15 @@ export function RecallAnalysisPanel({ videoId, mode, label: customLabel }: { vid
 
   const currentError = mutation.variables === mode ? mutation.error?.message : null;
   const failed = run?.status === "failed" || (currentJob && job && isTaskTerminal(job) && job.status !== "completed");
-  const busy = mutation.isPending || running;
+  const busy = mutation.isPending || (running && currentJob);
   const inProgress = running && currentJob;
   const runStuck = run?.status === "processing" && !running;
   return <div className="empty-state recall-analysis-state">
     {busy ? <LoaderCircle className="spin" size={20} /> : <Sparkles size={20} />}
     <strong>{inProgress ? `${label}${job?.status === "queued" ? "排队中" : "识别中"}`
       : failed ? `${label}上次识别未完成` : outdated ? `${label}规则已更新` : runStuck ? `${label}识别尚未结束` : `${label}尚未识别`}</strong>
-    <span>{busy ? inProgress ? (job?.message || `正在使用已保存字幕识别${resultNoun}。`) : "请等待当前任务完成，再追加此提取方案。"
+    <span>{busy ? inProgress ? (job?.message || (job?.status === "queued"
+      ? "已加入队列，前面的任务完成后自动开始。" : `正在使用已保存字幕识别${resultNoun}。`)) : "正在提交识别任务…"
       : "使用已保存字幕补充识别，无需重新转写；会额外使用 token。"}</span>
     {inProgress && <div className="job-progress" role="progressbar" aria-label={`${label}识别进度`}
       aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
@@ -108,7 +112,8 @@ export function RecallAnalysisPanel({ videoId, mode, label: customLabel }: { vid
         submitting.current = true;
         mutation.mutate(mode);
       }}>{busy ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
-      {mutation.isPending ? "正在提交…" : inProgress ? "正在识别…" : failed || runStuck ? `重试${label}识别` : outdated ? `重新识别${label}` : `识别${label}`}</button>
+      {mutation.isPending ? "正在提交…" : inProgress ? job?.status === "queued" ? "已加入队列" : "正在识别…"
+        : failed || runStuck ? `重试${label}识别` : outdated ? `重新识别${label}` : `识别${label}`}</button>
     {runStuck && <button className="text-button" type="button" onClick={() => { void runs.refetch(); void options.refetch(); }}>刷新识别状态</button>}
   </div>;
 }

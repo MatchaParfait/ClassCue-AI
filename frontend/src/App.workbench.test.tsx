@@ -31,6 +31,7 @@ vi.mock("./components/ProcessPage", () => ({
     const [params] = useSearchParams();
     return <div data-process-active={String(active)} data-guided={String(guided)} className="process-video-section process-options-section"><input aria-label="Process draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
       <span data-video-id>{params.get("videoId") ?? "new"}</span>
+      <span data-job-id>{params.get("jobId") ?? "none"}</span>
       <Link to="/settings?section=asr">修改 ASR</Link>
       <button onClick={() => onRegistered({ id: 3 } as Video)}>Register fixture</button>
       <button onClick={() => onJob("running")}>Start fixture</button></div>;
@@ -323,6 +324,30 @@ it("closing a running task panel never cancels it", async () => {
   click(button("关闭面板"));
   expect(api.cancelJob).not.toHaveBeenCalled();
   expect(window.location.pathname).toBe("/");
+});
+
+it("opens the chosen queued task and reuses the same video's processing draft when switching tasks", async () => {
+  const running = { id: "running-A", video_id: 1, status: "running", job_type: "video_analysis", message: "Analysis A" };
+  const queued = { id: "queued-B", video_id: 1, status: "queued", job_type: "video_analysis", message: "Analysis B" };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([running, queued]);
+  vi.mocked(api.getJob).mockImplementation(async id => id === running.id ? running : queued);
+  await mount("/tasks");
+  await settle(() => expect(container.querySelectorAll(".task-history-row")).toHaveLength(2));
+  click(container.querySelectorAll(".task-history-row")[1]);
+  await settle(() => expect(container.querySelector(".task-message")?.textContent).toBe("Analysis B"));
+  click([...container.querySelectorAll(".task-details button")].find(button => button.textContent === "打开处理详情")!);
+  await settle(() => expect(visibleScreen().querySelector("[data-job-id]")?.textContent).toBe("queued-B"));
+  const draft = visibleScreen().querySelector<HTMLInputElement>("input")!;
+  type(draft, "retained task options");
+  click(button("查看任务详情"));
+  await settle(() => expect(container.querySelectorAll(".task-history-row")).toHaveLength(2));
+  click(container.querySelectorAll(".task-history-row")[0]);
+  await settle(() => expect(container.querySelector(".task-message")?.textContent).toBe("Analysis A"));
+  click([...container.querySelectorAll(".task-details button")].find(button => button.textContent === "打开处理详情")!);
+  await settle(() => expect(visibleScreen().querySelector("[data-job-id]")?.textContent).toBe("running-A"));
+  expect(visibleScreen().querySelector("input")).toBe(draft);
+  expect(draft.value).toBe("retained task options");
+  expect(container.querySelectorAll("[data-process-active]")).toHaveLength(1);
 });
 
 it("defaults to the latest completed single-video task instead of an older batch", async () => {

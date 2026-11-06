@@ -21,7 +21,7 @@ import {
   Save,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   getJob,
   cancelJob,
@@ -61,15 +61,32 @@ const DEFAULT_FORM: ProcessForm = {
   forceRetranscribe: false,
 };
 
+interface ProcessRequest {
+  source: string;
+  videoId: number;
+  retry: boolean;
+  form: ProcessForm;
+  asrModelId?: string;
+}
+
+interface ResumeRequest {
+  source: string;
+  videoId: number;
+  jobId: string | number;
+}
+
 export function ProcessPage({ embedded = false, active = true, onClose, onJob, onRegistered, guided = false, videoId, onCompleted, onSettings }: {
   embedded?: boolean; active?: boolean; onClose?: () => void; onJob?: (id: string | number) => void; onRegistered?: (video: Video) => void;
   guided?: boolean; videoId?: number; onCompleted?: (video: Video, job: Job) => void;
   onSettings?: (section: "asr" | "ai") => void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialVideoId = videoId ?? Number(searchParams.get("videoId") ?? 0);
+  const requestedJobId = guided ? null : searchParams.get("jobId");
+  const requestedSelection = requestedJobId === null ? null : JSON.stringify([requestedJobId, location.key]);
   const [videoPath, setVideoPath] = useState("");
   const [filename, setFilename] = useState("");
   const [formOptions, setForm] = useState<ProcessForm>(DEFAULT_FORM);
@@ -80,7 +97,18 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     : setSavedRecallModes;
   const form = { ...formOptions, recallModes };
   const [registeredVideo, setRegisteredVideo] = useState<Video | null>(null);
-  const [jobId, setJobId] = useState<string | number | null>(null);
+  const [selectedTask, setSelectedTask] = useState<{ request: string | null; id: string | number | null }>(
+    () => ({ request: requestedSelection, id: requestedJobId }),
+  );
+  // Reopening an explicit task starts a new selection even in the same cached page.
+  const jobId = selectedTask.request === requestedSelection ? selectedTask.id : requestedJobId;
+  if (selectedTask.request !== requestedSelection) {
+    setSelectedTask({ request: requestedSelection, id: requestedJobId });
+  }
+  const setJobId = (id: string | number | null) => setSelectedTask({ request: requestedSelection, id });
+  const selectionSource = JSON.stringify([initialVideoId, requestedSelection, jobId]);
+  const currentSelection = useRef<string | null>(active ? selectionSource : null);
+  currentSelection.current = active ? selectionSource : null;
   const [pickerId, setPickerId] = useState<string | number | null>(null);
   const [openingPicker, setOpeningPicker] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
@@ -95,6 +123,13 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   const startButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { setSpaceOpen(true); setSpaceReturning(false); }, [jobId, spacePreference]);
   const hydratedExisting = useRef(false);
+  useEffect(() => {
+    if (!active || !requestedJobId || selectedTask.request !== requestedSelection
+      || selectedTask.id === null || String(selectedTask.id) === requestedJobId) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("jobId", String(selectedTask.id));
+    setSearchParams(next, { replace: true, state: location.state });
+  }, [active, requestedJobId, requestedSelection, selectedTask, searchParams, setSearchParams, location.state]);
 
   const existingVideo = useQuery({
     queryKey: ["process", "video", initialVideoId],
@@ -137,11 +172,12 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   });
 
   useEffect(() => {
+    if (requestedJobId !== null || jobId !== null) return;
     const activeJob = options.data?.active_job;
     if (activeJob && (activeJob.job_id ?? activeJob.id) !== undefined) {
       setJobId(activeJob.job_id ?? activeJob.id ?? null);
     }
-  }, [options.data]);
+  }, [options.data, requestedJobId, jobId]);
 
   const picker = useQuery({
     queryKey: ["picker", pickerId],
@@ -175,11 +211,16 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   }, [picker.data, queryClient]);
 
   const job = useTaskStatus(jobId, active);
+  const explicitJobSelected = requestedJobId !== null && String(jobId) === requestedJobId;
+  const taskVideoMismatch = explicitJobSelected && job.data && registeredVideo
+    && job.data.video_id !== registeredVideo.id;
+  const currentJob = job.data && (!explicitJobSelected || (registeredVideo && !taskVideoMismatch))
+    ? job.data : undefined;
   const terminalSeen = useRef("");
   const openedCompletedJob = useRef<string | number | null>(null);
 
   useEffect(() => {
-    const completed = job.data;
+    const completed = currentJob;
     if (!active || !registeredVideo || completed?.status !== "completed") return;
     if (completed.video_id != null && completed.video_id !== registeredVideo.id) return;
     const id = completed.job_id ?? completed.id;
@@ -194,10 +235,9 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     navigate(`/review/${registeredVideo.id}${query}`, {
       replace: true, state: { completedJobId: id, completedVideoId: registeredVideo.id },
     });
-  }, [active, job.data, registeredVideo?.id, registeredVideo?.library_id, navigate, onCompleted]);
+  }, [active, currentJob, registeredVideo?.id, registeredVideo?.library_id, navigate, onCompleted]);
 
   useEffect(() => {
-    const currentJob = job.data;
     if (!currentJob) return;
     if (isJobTerminal(currentJob)) {
       const identity = `${currentJob.id}:${currentJob.status}`;
@@ -222,7 +262,7 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
         }).catch(() => {});
       }
     }
-  }, [job.data, queryClient, registeredVideo?.id]);
+  }, [currentJob, queryClient, registeredVideo?.id]);
 
   const registerMutation = useMutation({
     mutationFn: () =>
@@ -261,26 +301,30 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     onError: (error) => setFormError(errorMessage(error)),
   });
 
-  const processMutation = useMutation<Job, Error, boolean>({
-    mutationFn: (retry = false) => {
-      if (!registeredVideo) throw new Error("请先登记视频");
+  const processMutation = useMutation<Job, Error, ProcessRequest>({
+    mutationFn: (request) => {
       const payload = {
-        ...buildProcessPayload(form),
-        asr_model_id: typeof options.data?.asr_model === "object" ? options.data.asr_model?.id : undefined,
+        ...buildProcessPayload(request.form),
+        asr_model_id: request.asrModelId,
       };
-      return retry ? retryVideo(registeredVideo.id, payload) : processVideo(registeredVideo.id, payload);
+      return request.retry ? retryVideo(request.videoId, payload) : processVideo(request.videoId, payload);
     },
-    onSuccess: (result) => {
-      queryClient.setQueryData(["jobs", result.job_id ?? result.id], { ...result, id: result.job_id ?? result.id }, { updatedAt: 0 });
-      setRegisteredVideo((current) => current ? { ...current, status: "processing" } : current);
+    onSuccess: (result, request) => {
+      queryClient.setQueryData(["jobs", result.job_id ?? result.id], {
+        ...result, id: result.job_id ?? result.id, video_id: result.video_id ?? request.videoId,
+      }, { updatedAt: 0 });
+      if (result.job_id ?? result.id) onJob?.(result.job_id ?? result.id);
+      void queryClient.invalidateQueries({ queryKey: ["videos"] });
+      if (currentSelection.current !== request.source) return;
+      setRegisteredVideo((current) => current?.id === request.videoId ? { ...current, status: "processing" } : current);
       setJobId(result.job_id ?? result.id ?? null);
       setStoppingJobId(null);
       setFormError(null);
       setNotice(guided ? "处理任务已提交" : "处理任务已提交，可切换页面，进度会自动恢复");
-      if (result.job_id ?? result.id) onJob?.(result.job_id ?? result.id);
-      void queryClient.invalidateQueries({ queryKey: ["videos"] });
     },
-    onError: (error) => setFormError(errorMessage(error)),
+    onError: (error, request) => {
+      if (currentSelection.current === request.source) setFormError(errorMessage(error));
+    },
   });
 
   const cancelMutation = useMutation({
@@ -294,20 +338,25 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     },
     onError: (error) => setFormError(errorMessage(error)),
   });
-  const resumeMutation = useMutation({
-    mutationFn: () => resumeJob(jobId!),
-    onSuccess: (result) => {
-      setJobId(result.job_id ?? result.id);
+  const resumeMutation = useMutation<Job, Error, ResumeRequest>({
+    mutationFn: (request) => resumeJob(request.jobId),
+    onSuccess: (result, request) => {
+      queryClient.setQueryData(["jobs", result.job_id ?? result.id], {
+        ...result, id: result.job_id ?? result.id, video_id: result.video_id ?? request.videoId,
+      }, { updatedAt: 0 });
       onJob?.(result.job_id ?? result.id);
+      if (currentSelection.current !== request.source) return;
+      setJobId(result.job_id ?? result.id);
       setStoppingJobId(null);
       setFormError(null);
     },
-    onError: (error) => setFormError(errorMessage(error)),
+    onError: (error, request) => {
+      if (currentSelection.current === request.source) setFormError(errorMessage(error));
+    },
   });
 
   const canRegister = Boolean(videoPath.trim()) && !registerMutation.isPending && !renameMutation.isPending;
   const validExtension = useMemo(() => hasVideoExtension(videoPath), [videoPath]);
-  const currentJob = job.data;
   const stopped = Boolean(currentJob && ["interrupted", "cancelled", "canceled"].includes(currentJob.status));
   useEffect(() => {
     if (active && stopped && !spaceOpen) startButton.current?.focus({ preventScroll: true });
@@ -324,7 +373,8 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
   const currentAsr = options.data?.asr_model ?? selection.data;
   const asrStatus = useAsrStatus(active && typeof currentAsr === "object" ? currentAsr : undefined);
   const isFireRed = typeof currentAsr === "object" && currentAsr?.engine === "firered";
-  const isProcessing = processMutation.isPending || Boolean(currentJob && !isJobTerminal(currentJob));
+  const isProcessing = processMutation.isPending || Boolean(currentJob && !isJobTerminal(currentJob))
+    || (explicitJobSelected && !currentJob);
   const showRetry = stopped || currentJob?.status === "failed" || registeredVideo?.status === "failed"
     || registeredVideo?.status === "resource_paused";
   const pickerBusy = openingPicker || pickerId !== null;
@@ -378,11 +428,21 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
       setFormError("请先登记视频");
       return;
     }
-    processMutation.mutate(Boolean(showRetry));
+    processMutation.mutate({
+      source: selectionSource, videoId: registeredVideo.id, retry: Boolean(showRetry), form,
+      asrModelId: typeof options.data?.asr_model === "object" ? options.data.asr_model?.id : undefined,
+    });
   };
 
   if (existingVideo.isLoading) {
     return <div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>正在读取视频信息…</span></div>;
+  }
+
+  if (taskVideoMismatch || (requestedJobId !== null && !(initialVideoId > 0))) {
+    return <main className="process-page"><div className="process-inner">
+      <p className="field-error" role="alert"><AlertCircle size={16} />任务与当前视频不匹配，请从任务中心重新打开。</p>
+      <Link className="secondary-button" to="/">返回视频库 <ArrowRight size={16} /></Link>
+    </div></main>;
   }
 
   if (existingVideo.isError && !registeredVideo && !hydratedExisting.current) {
@@ -399,7 +459,9 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
     onReview: () => { if (!guided && registeredVideo) navigate(`/review/${registeredVideo.id}`); },
     hideReview: guided,
     onSettings: onSettings ? () => onSettings("ai") : undefined,
-    onRetry: () => currentJob.status === "resource_paused" ? resumeMutation.mutate() : startProcess(),
+    onRetry: () => currentJob.status === "resource_paused"
+      ? resumeMutation.mutate({ source: selectionSource, videoId: registeredVideo!.id, jobId: currentJob.job_id ?? currentJob.id })
+      : startProcess(),
     onCancel: () => cancelMutation.mutate(currentJob.job_id ?? currentJob.id),
     cancelling: cancelMutation.isPending || stoppingJobId === (currentJob.job_id ?? currentJob.id),
     retrying: processMutation.isPending || resumeMutation.isPending,
@@ -555,7 +617,9 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
           <div className="section-heading compact">
             <div><p className="eyebrow">异步任务</p><h2><CharacterEye heading />当前任务状态</h2></div>
           </div>
-          {commands ? <JobStatus {...commands} /> : <div className="job-empty"><Clock3 size={18} /><span>正在读取任务状态…</span></div>}
+          {job.isError && !commands ? <p className="field-error" role="alert"><AlertCircle size={14} />任务状态读取失败。
+            <button className="text-button" type="button" onClick={() => void job.refetch()}>重新读取</button>
+          </p> : commands ? <JobStatus {...commands} /> : <div className="job-empty"><Clock3 size={18} /><span>正在读取任务状态…</span></div>}
         </section>}
       </div>
       <AnimatePresence>{notice && <AnimatedPopup duration={.18} className="toast" role="status"><CheckCircle2 size={17} /><span>{notice}</span><button type="button" onClick={() => setNotice(null)} aria-label="关闭提示">×</button></AnimatedPopup>}</AnimatePresence>

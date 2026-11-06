@@ -79,3 +79,10 @@ it("routes historical material tasks home while paused and restores their destin
   expect(taskDestination(job)).toBe("/materials");
   expect(taskDestination({ ...job, job_type: "batch_video_process" })).toBe("/batch-process");
 });
+
+it("preserves the selected single-video task and encodes its identifier", () => {
+  const job = { id: "queued/analysis + B", status: "queued", job_type: "video_analysis", video_id: 7 };
+  expect(taskDestination(job)).toBe("/process?videoId=7&jobId=queued%2Fanalysis%20%2B%20B");
+  expect(taskDestination({ ...job, id: 12 })).toBe("/process?videoId=7&jobId=12");
+  expect(taskDestination({ ...job, job_id: "canonical" })).toBe("/process?videoId=7&jobId=canonical");
+});

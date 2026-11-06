@@ -1,7 +1,7 @@
 import { useShortcuts, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedListItem, AnimatedQuote, Collapse, FadeRegion, SelectionIndicator, useEntryMotion, useSelectionScope } from "./Motion";
 import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Redo2, Save, Search, Star, Trash2, Undo2, X } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AnalysisRun, Marker, MarkerImportance, MarkerMode, RecallMode, ReviewFilter, ReviewStatus } from "../types";
 import { recallLabel, useRecallSchemes } from "../hooks/useRecallSchemes";
 import { formatTime, isManualQuestion, markerJumpTime } from "../utils";
@@ -140,6 +140,15 @@ export function ReviewSidebar({
     marker.analysis_mode === value && marker.review_status !== "excluded").length;
   const builtinSelected = RECALL_MODES.some(item => item.value === mode);
   const customSelected = customIds.includes(mode as RecallMode);
+  const [lastBuiltin, setLastBuiltin] = useState<MarkerMode>(builtinSelected ? mode : "medium_recall");
+  const [lastCustom, setLastCustom] = useState<MarkerMode | null>(customSelected ? mode : null);
+  useEffect(() => {
+    if (builtinSelected) setLastBuiltin(mode);
+    if (customSelected) setLastCustom(mode);
+  }, [mode, builtinSelected, customSelected]);
+  const builtinTarget = builtinSelected ? mode : lastBuiltin;
+  const customTarget = customSelected ? mode
+    : lastCustom && customIds.includes(lastCustom as RecallMode) ? lastCustom : customIds[0];
   const modeButton = (value: MarkerMode, name: string) => (
     <button key={value} role="tab" title={name} aria-selected={mode === value}
       className={mode === value ? "is-selected" : ""} type="button" onClick={() => onModeChange(value)}
@@ -204,26 +213,14 @@ export function ReviewSidebar({
       </div>
 
       <div className="mode-switcher mode-groups" role="group" aria-label="重点模式">
-        <details className={`recall-mode-drawer${builtinSelected ? " is-current" : ""}`}>
-          <summary>
-            <span className="recall-mode-group-label">默认召回</span>
-            <span className="recall-mode-current">{builtinSelected ? label(mode) : "3 种"}</span>
-            <ChevronDown size={15} aria-hidden="true" />
-          </summary>
-          <div className="recall-mode-options" role="tablist" aria-label="默认召回">
-            {RECALL_MODES.map(item => modeButton(item.value, item.label))}
-          </div>
-        </details>
-        {customIds.length > 1 ? <details className={`recall-mode-drawer${customSelected ? " is-current" : ""}`}>
-          <summary>
-            <span className="recall-mode-group-label">自定义</span>
-            <span className="recall-mode-current">{customSelected ? label(mode) : `${customIds.length} 个方案`}</span>
-            <ChevronDown size={15} aria-hidden="true" />
-          </summary>
-          <div className="recall-mode-options" role="tablist" aria-label="自定义召回">
-            {customIds.map(value => modeButton(value, label(value)))}
-          </div>
-        </details> : customIds.length === 1 && <div className="recall-mode-single" role="tablist" aria-label="自定义召回">
+        <ReviewModeGroup name="默认召回" optionsLabel="默认召回" targetLabel={label(builtinTarget)}
+          selected={builtinSelected} onSelect={() => onModeChange(builtinTarget)}>
+          {RECALL_MODES.map(item => modeButton(item.value, item.label))}
+        </ReviewModeGroup>
+        {customIds.length > 1 ? <ReviewModeGroup name="自定义" optionsLabel="自定义召回"
+          targetLabel={label(customTarget)} selected={customSelected} onSelect={() => onModeChange(customTarget)}>
+          {customIds.map(value => modeButton(value, label(value)))}
+        </ReviewModeGroup> : customIds.length === 1 && <div className="recall-mode-single" role="tablist" aria-label="自定义召回">
           {modeButton(customIds[0], label(customIds[0]))}
         </div>}
         <div className="recall-mode-single question-mode" role="tablist" aria-label="题目模式">
@@ -362,6 +359,39 @@ export function ReviewSidebar({
       )}
     </aside>
   );
+}
+
+function ReviewModeGroup({ name, optionsLabel, targetLabel, selected, onSelect, children }: {
+  name: string; optionsLabel: string; targetLabel: string; selected: boolean;
+  onSelect: () => void; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const optionsId = useId();
+  const toggle = useRef<HTMLButtonElement>(null);
+  return <div className={`recall-mode-drawer${selected ? " is-current" : ""}`}
+    onKeyDown={event => {
+      if (event.key !== "Escape" || !open) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      toggle.current?.focus();
+    }}>
+    <div className="recall-mode-heading">
+      <button className="recall-mode-direct" type="button" title={`直接切换到${targetLabel}`}
+        aria-label={`直接切换到${targetLabel}`} aria-pressed={selected} onClick={onSelect}>
+        <span className="recall-mode-group-label">{name}</span>
+        <span className="recall-mode-current">{targetLabel}</span>
+      </button>
+      <button ref={toggle} className="recall-mode-toggle" type="button"
+        title={`${open ? "收起" : "展开"}${optionsLabel}`} aria-label={`${open ? "收起" : "展开"}${optionsLabel}`}
+        aria-expanded={open} aria-controls={optionsId} onClick={() => setOpen(value => !value)}>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+    </div>
+    <div id={optionsId} className="recall-mode-options" role="tablist" aria-label={optionsLabel} hidden={!open}>
+      {children}
+    </div>
+  </div>;
 }
 
 function navigateModes(event: KeyboardEvent<HTMLButtonElement>) {

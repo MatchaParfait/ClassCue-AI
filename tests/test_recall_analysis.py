@@ -160,6 +160,87 @@ def test_additional_recall_rejects_double_submission(recall):
     assert wait(recall, first.json()["job_id"])["status"] == "completed"
 
 
+@pytest.mark.parametrize("endpoint", ["analysis", "process"])
+@pytest.mark.parametrize("first_fails", [False, True])
+def test_single_question_extraction_from_another_video_is_queued(recall, monkeypatch, endpoint, first_fails):
+    second_source = recall.store.path.parent / "second-lesson.mp4"
+    second_source.write_bytes(b"second-fixture-video")
+    second_id = recall.store.create_video("second-hash", second_source.name, str(second_source), "second.wav", 3000)
+    recall.store.mark_transcribed(second_id, [TranscriptSegment(1, 0, 3000, "第二个视频的题目素材。")])
+    recall.store.set_status(second_id, "review_ready")
+
+    gate, entered = Event(), Event()
+
+    def hold():
+        entered.set()
+        assert gate.wait(timeout=10)
+        if first_fails:
+            raise ValueError("fixture first extraction failed")
+
+    monkeypatch.setattr(api_main, "process_video_once",
+                        lambda store, video_id, judge, **kwargs: judge.analyze_video(store, video_id))
+    recall.outcomes.append(hold)
+    try:
+        first = recall.client.post(
+            f"/api/videos/{recall.video_id}/{endpoint}",
+            json={"analysis_mode": "question_extraction"},
+        )
+        assert first.status_code == 202
+        assert entered.wait(timeout=3)
+
+        second = recall.client.post(
+            f"/api/videos/{second_id}/{endpoint}",
+            json={"analysis_mode": "question_extraction"},
+        )
+        assert second.status_code == 202
+        queued = recall.client.get(f"/api/jobs/{second.json()['job_id']}").json()
+        assert queued["status"] == "queued"
+        assert queued["analysis_modes"] == ["question_extraction"]
+        assert "自动开始" in queued["message"]
+        assert recall.calls == [("question_extraction", "fixture-model")]
+        assert recall.client.post(f"/api/videos/{second_id}/{endpoint}",
+                                  json={"analysis_mode": "question_extraction"}).status_code == 409
+        options = recall.client.get(f"/api/videos/{second_id}/processing-options").json()
+        assert options["active_job"]["id"] == queued["id"]
+        assert options["active_jobs"][0]["status"] == "queued"
+    finally:
+        gate.set()
+
+    assert wait(recall, first.json()["job_id"])["status"] == ("failed" if first_fails else "completed")
+    assert wait(recall, second.json()["job_id"])["status"] == "completed"
+    assert recall.calls == [("question_extraction", "fixture-model")] * 2
+
+
+def test_cancel_queued_analysis_preserves_video_and_never_calls_model(recall):
+    gate, entered = Event(), Event()
+
+    def hold():
+        entered.set()
+        assert gate.wait(timeout=10)
+
+    recall.outcomes.append(hold)
+    try:
+        first = recall.client.post(f"/api/videos/{recall.video_id}/analysis",
+                                   json={"analysis_mode": "high_recall"})
+        assert entered.wait(timeout=3)
+        second = recall.client.post(f"/api/videos/{recall.video_id}/analysis",
+                                    json={"analysis_mode": "question_extraction"})
+        assert second.status_code == 202
+        active = recall.client.get(f"/api/videos/{recall.video_id}/processing-options").json()
+        assert {job["id"] for job in active["active_jobs"]} == {
+            first.json()["job_id"], second.json()["job_id"],
+        }
+        cancelled = recall.client.post(f"/api/jobs/{second.json()['job_id']}/cancel").json()
+        assert cancelled["status"] == "interrupted"
+        assert recall.store.get_analysis_run(recall.video_id, "question_extraction") is None
+        assert recall.store.get_video(recall.video_id)["status"] == "review_ready"
+    finally:
+        gate.set()
+    assert wait(recall, first.json()["job_id"])["status"] == "completed"
+    assert wait(recall, second.json()["job_id"])["status"] == "interrupted"
+    assert recall.calls == [("high_recall", "fixture-model")]
+
+
 def test_single_processing_runs_each_mode_and_retranscribes_only_once(recall, monkeypatch):
     seen = []
     def process(_store, _id, judge, **kwargs):

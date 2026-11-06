@@ -348,25 +348,297 @@ def test_static_frontend_has_spa_fallback_without_masking_api_errors_or_leaking_
         assert client.get("/__classroom/frontend-identity").json()["mode"] == "static"
 
 
-def test_shutdown_cancels_job_and_waits_for_idle_before_owned_launcher_stops(tmp_path, monkeypatch):
+def test_shutdown_cancels_whole_queue_and_waits_for_idle_before_owned_launcher_stops(tmp_path, monkeypatch):
     import classcue.desktop_runtime as desktop_runtime
     from scripts import start_frontend
     service = Services(tmp_path)
     service.origin = "http://127.0.0.1:8765"
     states = iter([
-        {"processing": True, "active_job_id": "job"},
-        {"processing": True, "active_job_id": "job"},
+        {"processing": True},
+        {"processing": True, "active_job_id": "queued-job"},
         {"processing": False},
     ])
     events = []
-    service.status = lambda: next(states)
-    monkeypatch.setattr(desktop_runtime, "http_json", lambda url, **kwargs: events.append(("cancel", url)))
+    def status():
+        state = next(states)
+        events.append(("status", state["processing"]))
+        return state
+    service.status = status
+    def cancel(url, **kwargs):
+        assert kwargs == {"method": "POST", "payload": {}}
+        events.append(("cancel", url))
+    monkeypatch.setattr(desktop_runtime, "http_json", cancel)
     monkeypatch.setattr(desktop_runtime.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(start_frontend, "main", lambda action: events.append(("launcher", action)) or 0)
-    service.stop(cancel=True)
+    progress = []
+    service.stop(cancel=True, progress=progress.append)
     assert events == [
-        ("cancel", "http://127.0.0.1:8765/api/jobs/job/cancel"), ("launcher", "stop"),
+        ("status", True), ("cancel", "http://127.0.0.1:8765/api/jobs/stop-all"),
+        ("status", True), ("status", False), ("launcher", "stop"),
     ]
+    assert progress == ["正在安全停止任务并保存进度…"]
+
+
+def test_cancel_shutdown_seals_queue_even_when_initially_idle(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
+    from scripts import start_frontend
+    service = Services(tmp_path)
+    service.origin = "http://127.0.0.1:8765"
+    events = []
+    def status():
+        events.append("status")
+        return {"processing": False}
+    service.status = status
+    monkeypatch.setattr(desktop_runtime, "http_json", lambda url, **_kwargs:
+                        events.append(url))
+    monkeypatch.setattr(start_frontend, "main", lambda action: events.append(action) or 0)
+    service.stop(cancel=True)
+    assert events == ["status", "http://127.0.0.1:8765/api/jobs/stop-all", "status", "stop"]
+
+
+@pytest.mark.parametrize("stop_reason", ["cancelled", "resource_pause"])
+def test_desktop_stop_all_reaches_real_api_and_never_starts_queued_job(
+    tmp_path, monkeypatch, stop_reason,
+):
+    from threading import Event
+    from urllib.parse import urlsplit
+    import api.main as api_main
+    import classcue.desktop_runtime as desktop_runtime
+    from classcue.processing_control import ProcessingCancelled, ResourcePaused
+    from classcue.video_store import VideoStore
+    from scripts import start_frontend
+
+    monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", tmp_path)
+    store = VideoStore(tmp_path / "jobs.db")
+    app = api_main.create_app(store)
+    jobs = app.state.jobs
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    first_video = store.create_video(
+        "first", "first.mp4", str(tmp_path / "first.mp4"), str(tmp_path / "first.wav"), 1000,
+    )
+    second_video = store.create_video(
+        "second", "second.mp4", str(tmp_path / "second.mp4"), str(tmp_path / "second.wav"), 1000,
+    )
+    store.set_status(first_video, "processing")
+    store.set_status(second_video, "ready")
+    store.set_analysis_run(first_video, "high_recall", "processing")
+    original_request = {"kind": "synthetic", "video_id": first_video}
+    resource = {"status": "recovering", "attempt": 1}
+    started, stop_seen, release = Event(), Event(), Event()
+    queued_started = Event()
+    events = []
+
+    def running(_update, cancelled):
+        started.set()
+        while not cancelled():
+            if release.wait(.01):
+                return
+        stop_seen.set()
+        assert release.wait(5)
+        if stop_reason == "resource_pause":
+            paused = ResourcePaused("synthetic shortage concurrent with desktop exit")
+            paused.resume_request = {"kind": "should-not-overwrite-cancelled-request"}
+            raise paused
+        raise ProcessingCancelled("synthetic desktop exit")
+
+    def local_http(url, *, method="GET", payload=None, **_kwargs):
+        path = urlsplit(url).path
+        response = client.request(method, path, json=payload)
+        if response.status_code >= 400:
+            raise HTTPError(url, response.status_code, response.text, {}, None)
+        if path == "/api/jobs/stop-all":
+            assert response.json() == {"status": "stopping"}
+            assert stop_seen.wait(5)
+            assert store.get_job(first_id)["status"] == "running"
+            assert store.get_job(second_id)["status"] == "interrupted"
+            assert events == []
+            events.append("stop-all")
+        return response.json()
+
+    def progress(_message):
+        assert stop_seen.is_set() and not queued_started.is_set()
+        assert events[-1] == "stop-all"
+        events.append("saving")
+        release.set()
+        first_future.result(timeout=5)
+
+    def stop_launcher(action):
+        assert action == "stop"
+        assert not queued_started.is_set()
+        assert not store.list_active_jobs()
+        assert [store.get_job(job_id)["status"] for job_id in (first_id, second_id)] == [
+            "interrupted", "interrupted",
+        ]
+        assert store.get_video(first_video)["status"] == "failed"
+        assert store.get_analysis_run(first_video, "high_recall")["status"] == "failed"
+        assert store.get_video(second_video)["status"] == "ready"
+        assert json.loads(store.get_job(first_id)["resource_json"]) == resource
+        assert json.loads(store.get_job(first_id)["request_json"]) == original_request
+        assert not store.list_paused_jobs()
+        events.append("launcher")
+        return 0
+
+    try:
+        health = client.get("/api/health").json()
+        desktop_runtime.atomic_json(tmp_path / ".runtime" / "frontend_state.json", {
+            "library_id": health["library_id"], "instance_id": health["instance_id"],
+        })
+        first_id = jobs.submit("test", first_video, running, request=original_request)
+        assert started.wait(5)
+        first_future = jobs._futures[first_id]
+        store.update_job(first_id, resource_json=json.dumps(resource))
+        second_id = jobs.submit("test", second_video, lambda *_args: queued_started.set(), allow_queue=True)
+        assert store.get_job(second_id)["status"] == "queued"
+        monkeypatch.setattr(desktop_runtime, "http_json", local_http)
+        monkeypatch.setattr(start_frontend, "main", stop_launcher)
+        service = Services(tmp_path)
+        service.origin = "http://127.0.0.1:8765"
+        service.stop(cancel=True, progress=progress, timeout=5)
+        assert service.instance_id == health["instance_id"]
+        assert events == ["stop-all", "saving", "launcher"]
+        with pytest.raises(RuntimeError, match="关闭"):
+            jobs.submit("test", None, lambda *_args: queued_started.set(), allow_queue=True)
+    finally:
+        release.set()
+        jobs.shutdown(wait=True)
+        client.close()
+
+
+@pytest.mark.parametrize("reservation", ["storage_migrating", "updating"])
+def test_stop_all_rechecks_reservation_after_request_passes_middleware(
+    tmp_path, monkeypatch, reservation,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import api.main as api_main
+    from classcue.video_store import VideoStore
+
+    monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", tmp_path)
+    app = api_main.create_app(VideoStore(tmp_path / "jobs.db"))
+    jobs = app.state.jobs
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    entered_endpoint = Event()
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/jobs/stop-all")
+    endpoint = route.dependant.call
+
+    def mark_endpoint_entered():
+        entered_endpoint.set()
+        return endpoint()
+
+    route.dependant.call = mark_endpoint_entered
+    try:
+        with ThreadPoolExecutor(max_workers=1) as requests:
+            with jobs._lock:
+                response = requests.submit(client.post, "/api/jobs/stop-all")
+                assert entered_endpoint.wait(5)
+                # Simulate a reservation winning the lock after middleware's check.
+                getattr(app.state, reservation).set()
+            assert response.result(timeout=5).status_code == 409
+        assert not jobs._closing
+    finally:
+        getattr(app.state, reservation).clear()
+        jobs.shutdown(wait=True)
+        client.close()
+
+
+def test_stop_all_idle_reservation_blocks_update_install_and_keeps_polling_idle(tmp_path, monkeypatch):
+    import api.main as api_main
+    from classcue.video_store import VideoStore
+
+    monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("CLASSROOM_UPDATE_TOKEN", "synthetic-update-token")
+    app = api_main.create_app(VideoStore(tmp_path / "jobs.db"))
+    jobs = app.state.jobs
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    monkeypatch.setattr(app.state.update_center, "reserve_install", lambda:
+                        pytest.fail("An exit reservation must block update installation"))
+    try:
+        assert client.post("/api/jobs/stop-all").status_code == 200
+        assert jobs.is_running()
+        assert client.get("/api/library/status").json()["processing"] is False
+        assert client.post("/api/updates/prepare-install", headers={
+            "Authorization": "Bearer synthetic-update-token",
+        }).status_code == 409
+        assert not app.state.updating.is_set()
+    finally:
+        jobs.shutdown(wait=True)
+        client.close()
+
+
+def test_cross_origin_stop_all_request_never_seals_job_queue(tmp_path, monkeypatch):
+    import api.main as api_main
+    from classcue.video_store import VideoStore
+
+    monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", tmp_path)
+    app = api_main.create_app(VideoStore(tmp_path / "jobs.db"))
+    jobs = app.state.jobs
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    try:
+        assert client.post("/api/jobs/stop-all", headers={
+            "Origin": "https://untrusted.example",
+        }).status_code == 403
+        assert not jobs._closing
+    finally:
+        jobs.shutdown(wait=True)
+        client.close()
+
+
+def test_cancel_shutdown_checks_service_identity_before_mutating_jobs(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
+    from scripts import start_frontend
+    service = Services(tmp_path)
+    service.status = lambda: (_ for _ in ()).throw(RuntimeError("服务身份已变化"))
+    monkeypatch.setattr(desktop_runtime, "http_json", lambda *_args, **_kwargs:
+                        pytest.fail("Must verify service identity before cancelling jobs"))
+    monkeypatch.setattr(start_frontend, "main", lambda _action:
+                        pytest.fail("Unverified services must not be stopped"))
+    with pytest.raises(RuntimeError, match="服务身份"):
+        service.stop(cancel=True)
+
+
+def test_stop_all_migration_conflict_never_authorizes_launcher_shutdown(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
+    from scripts import start_frontend
+    service = Services(tmp_path)
+    service.origin = "http://127.0.0.1:8765"
+    service.status = lambda: {"processing": True}
+    # An HTTP response must remain authoritative even if the socket later closes.
+    service.can_close_offline = lambda: True
+    def reject(url, **_kwargs):
+        raise HTTPError(url, 409, "Storage migration in progress", {}, None)
+    monkeypatch.setattr(desktop_runtime, "http_json", reject)
+    monkeypatch.setattr(start_frontend, "main", lambda _action:
+                        pytest.fail("Migration conflicts must preserve the owned service"))
+    with pytest.raises(HTTPError) as error:
+        service.stop(cancel=True)
+    assert error.value.code == 409
+
+
+def test_stop_all_uncertain_connection_never_authorizes_launcher_shutdown(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
+    from scripts import start_frontend
+    service = Services(tmp_path)
+    service.origin = "http://127.0.0.1:8765"
+    service.status = lambda: {"processing": True}
+    service.can_close_offline = lambda: False
+    monkeypatch.setattr(desktop_runtime, "http_json", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(TimeoutError("unreachable")))
+    monkeypatch.setattr(start_frontend, "main", lambda _action:
+                        pytest.fail("A timeout must not authorize launcher shutdown"))
+    with pytest.raises(TimeoutError):
+        service.stop(cancel=True)
+
+
+def test_stop_all_wait_timeout_preserves_launcher_and_worker(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
+    from scripts import start_frontend
+    service = Services(tmp_path)
+    service.status = lambda: {"processing": True}
+    monkeypatch.setattr(desktop_runtime, "http_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(start_frontend, "main", lambda _action:
+                        pytest.fail("A worker still saving progress must not be terminated"))
+    with pytest.raises(RuntimeError, match="任务仍在安全停止"):
+        service.stop(cancel=True, timeout=0)
 
 
 def test_desktop_start_uses_launcher_resolved_port(tmp_path, monkeypatch):
@@ -384,9 +656,12 @@ def test_desktop_start_uses_launcher_resolved_port(tmp_path, monkeypatch):
 
 
 def test_busy_shutdown_without_explicit_cancel_never_stops_service(tmp_path, monkeypatch):
+    import classcue.desktop_runtime as desktop_runtime
     from scripts import start_frontend
     service = Services(tmp_path)
     service.status = lambda: {"processing": True}
+    monkeypatch.setattr(desktop_runtime, "http_json", lambda *_args, **_kwargs:
+                        pytest.fail("Must not cancel jobs without explicit cancellation"))
     monkeypatch.setattr(start_frontend, "main", lambda _action: pytest.fail("Must not stop a running task"))
     with pytest.raises(RuntimeError):
         service.stop()

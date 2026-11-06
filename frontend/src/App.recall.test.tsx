@@ -73,7 +73,7 @@ async function flushCheck(check: () => void, timeout = 3000) {
   }, { timeout });
 }
 async function selectMode(index: number) {
-  act(() => (container.querySelectorAll(".mode-switcher button")[index] as HTMLButtonElement).click());
+  act(() => (container.querySelectorAll('.mode-switcher [role="tab"]')[index] as HTMLButtonElement).click());
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 180)); });
 }
 
@@ -173,6 +173,32 @@ it("restores an existing job after reloading and offers retry on failure", async
   runs[1] = { ...runs[1], status: "failed" };
   await flushCheck(() => expect(button("重试高召回识别")?.disabled).toBe(false));
   expect(container.textContent).toContain("上次识别未完成");
+});
+
+it("restores the queued job for the selected mode and never resubmits it", async () => {
+  const running: Job = { id: "other-mode", video_id: 1, status: "running", analysis_modes: ["low_recall"] };
+  job = { id: "extra", video_id: 1, status: "queued", analysis_modes: ["high_recall"] };
+  vi.mocked(api.getVideoProcessingOptions).mockResolvedValue({ active_job: running, active_jobs: [running, job] });
+  vi.mocked(api.getJob).mockImplementation(async id => ({ ...(id === running.id ? running : job) }));
+  await mount();
+  await selectMode(0);
+  await flushCheck(() => expect(container.textContent).toContain("高召回排队中"));
+  expect(button("已加入队列")?.disabled).toBe(true);
+  expect(container.textContent).toContain("前面的任务完成后自动开始");
+  expect(api.analyzeVideoRecall).not.toHaveBeenCalled();
+  job = { ...job, status: "running", progress: 40 };
+  await flushCheck(() => expect(container.textContent).toContain("高召回识别中"));
+});
+
+it("allows another recall mode to join the queue while an existing mode runs", async () => {
+  const running: Job = { id: "other-mode", video_id: 1, status: "running", analysis_modes: ["low_recall"] };
+  vi.mocked(api.getVideoProcessingOptions).mockResolvedValue({ active_job: running, active_jobs: [running] });
+  vi.mocked(api.getJob).mockImplementation(async id => ({ ...(id === running.id ? running : job) }));
+  await mount();
+  await selectMode(0);
+  await flushCheck(() => expect(button("识别高召回")?.disabled).toBe(false));
+  act(() => button("识别高召回")!.click());
+  await flushCheck(() => expect(api.analyzeVideoRecall).toHaveBeenCalledWith(1, "high_recall"));
 });
 
 it("reports state loading failures instead of assuming the mode was never processed", async () => {

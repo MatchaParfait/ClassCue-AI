@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, useLocation, useNavigationType } from "react-router-dom";
+import { Link, MemoryRouter, useLocation, useNavigationType } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { ProcessPage } from "./ProcessPage";
 import { RECALL_SELECTION_KEY } from "../hooks/useRecallSelection";
+import type { Job } from "../types";
 
 vi.mock("../api/client", () => ({
   getThumbnailUrl: (video: { id: number }) => `/api/videos/${video.id}/thumbnail`,
@@ -153,7 +154,8 @@ it("uses local medium recall in the guide without overwriting the user's saved r
 function RouteProbe() {
   const location = useLocation();
   const type = useNavigationType();
-  return <output data-testid="route" data-path={location.pathname + location.search} data-navigation={type}>{JSON.stringify(location.state)}</output>;
+  return <output data-testid="route" data-path={location.pathname + location.search} data-navigation={type}
+    data-navigation-key={location.key}>{JSON.stringify(location.state)}</output>;
 }
 
 it("opens the completed video immediately without awaiting metadata, preserving library and requesting playback", async () => {
@@ -197,6 +199,203 @@ it("does not steal navigation from another page and handles completion once on r
   expect(container.querySelector('[data-testid="route"]')?.getAttribute('data-path')).toBe('/process?videoId=1');
   renderActive(true);
   await settle(() => expect(container.querySelector('[data-testid="route"]')?.getAttribute('data-path')).toBe('/review/1'));
+});
+
+it("keeps the explicitly selected queued task when video options arrive later and stops only that task", async () => {
+  const options = await api.getVideoProcessingOptions(1);
+  let finishOptions!: (value: typeof options) => void;
+  vi.mocked(api.getVideoProcessingOptions).mockImplementation(() => new Promise(resolve => { finishOptions = resolve; }));
+  const selected = { id: "queued-B", video_id: 1, status: "queued", message: "Selected queued analysis" };
+  vi.mocked(api.getJob).mockResolvedValue(selected);
+  vi.mocked(api.cancelJob).mockResolvedValue({ ...selected, status: "cancelled" });
+  act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=queued-B"]}><ProcessPage /></MemoryRouter>
+  </QueryClientProvider>));
+  await settle(() => expect(container.textContent).toContain(selected.message));
+  await act(async () => finishOptions({ ...options, active_job: { id: "running-A", video_id: 1, status: "running" } }));
+  await settle(() => expect(container.textContent).toContain("FireRedASR2-AED"));
+  expect(api.getJob).not.toHaveBeenCalledWith("running-A");
+  act(() => container.querySelector<HTMLButtonElement>(".stop-job-button")!.click());
+  await settle(() => expect(api.cancelJob).toHaveBeenCalledWith("queued-B"));
+});
+
+it("switches tasks within the cached processing page for the same video", async () => {
+  vi.mocked(api.getJob).mockImplementation(async id => ({
+    id, video_id: 1, status: "queued", message: `Task ${id}`,
+  }));
+  vi.mocked(api.cancelJob).mockImplementation(async id => ({ id, video_id: 1, status: "cancelled" }));
+  act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=A"]}>
+      <ProcessPage /><Link data-switch-task to="/process?videoId=1&jobId=B">Select B</Link>
+    </MemoryRouter>
+  </QueryClientProvider>));
+  await settle(() => expect(container.textContent).toContain("Task A"));
+  const videoInfo = container.querySelector(".video-info-selected");
+  act(() => container.querySelector<HTMLAnchorElement>("[data-switch-task]")!.click());
+  await settle(() => expect(container.textContent).toContain("Task B"));
+  expect(container.querySelector(".video-info-selected")).toBe(videoInfo);
+  act(() => container.querySelector<HTMLButtonElement>(".stop-job-button")!.click());
+  await settle(() => expect(api.cancelJob).toHaveBeenCalledWith("B"));
+});
+
+it.each([99, undefined])("rejects an explicit task whose video binding is %s without exposing its commands", async binding => {
+  vi.mocked(api.getJob).mockResolvedValue({ id: "foreign", video_id: binding, status: "completed" });
+  act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=foreign"]}><ProcessPage /><RouteProbe /></MemoryRouter>
+  </QueryClientProvider>));
+  await settle(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain("任务与当前视频不匹配"));
+  expect(container.querySelector(".stop-job-button")).toBeNull();
+  expect(container.querySelector(".process-start-button")).toBeNull();
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1&jobId=foreign");
+  expect(api.cancelJob).not.toHaveBeenCalled();
+});
+
+it("reports an unreadable explicit task and retries it without falling back to another active task", async () => {
+  vi.mocked(api.getJob).mockRejectedValueOnce(new Error("Task missing"))
+    .mockResolvedValue({ id: "selected", video_id: 1, status: "queued", message: "Selected recovered task" });
+  await mount("/process?videoId=1&jobId=selected");
+  await settle(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain("任务状态读取失败"));
+  expect(container.querySelector<HTMLButtonElement>(".process-start-button")?.disabled).toBe(true);
+  expect(container.querySelector(".stop-job-button")).toBeNull();
+  act(() => container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click());
+  await settle(() => expect(container.textContent).toContain("Selected recovered task"));
+  expect(vi.mocked(api.getJob).mock.calls.every(([id]) => id === "selected")).toBe(true);
+});
+
+it("follows a new submission from an explicit failed task without restoring the old active task", async () => {
+  const options = await api.getVideoProcessingOptions(1);
+  const failed = { id: "old", video_id: 1, status: "failed" };
+  vi.mocked(api.getVideoProcessingOptions).mockResolvedValue({ ...options, active_job: failed });
+  vi.mocked(api.getJob).mockImplementation(async id => id === "old" ? failed
+    : { id, video_id: 1, status: "queued", message: "New selected request" });
+  vi.mocked(api.retryVideo).mockResolvedValue({ id: "new", video_id: 1, status: "queued" });
+  await mount("/process?videoId=1&jobId=old");
+  await settle(() => expect(container.querySelector(".job-failed")).not.toBeNull());
+  start();
+  await settle(() => expect(container.textContent).toContain("New selected request"));
+  await settle(() => expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path"))
+    .toBe("/process?videoId=1&jobId=new"));
+  act(() => client.setQueryData(["process", "options", 1], { ...options, active_job: failed }));
+  expect(container.textContent).toContain("New selected request");
+});
+
+it("follows a resumed task from an explicit paused task while preserving the new task selection", async () => {
+  const paused = { id: "paused", video_id: 1, status: "resource_paused" };
+  vi.mocked(api.getJob).mockImplementation(async id => id === "paused" ? paused
+    : { id, video_id: 1, status: "queued", message: "Resumed selected request" });
+  vi.mocked(api.resumeJob).mockResolvedValue({ id: "resumed", video_id: 1, status: "queued" });
+  await mount("/process?videoId=1&jobId=paused");
+  await settle(() => expect(container.querySelector(".job-resource_paused")).not.toBeNull());
+  const resume = [...container.querySelectorAll<HTMLButtonElement>(".process-job-commands button")]
+    .find(button => button.textContent?.includes("继续处理"));
+  act(() => resume!.click());
+  await settle(() => expect(api.resumeJob).toHaveBeenCalledWith("paused"));
+  await settle(() => expect(container.textContent).toContain("Resumed selected request"));
+  await settle(() => expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path"))
+    .toBe("/process?videoId=1&jobId=resumed"));
+});
+
+it.each(["resume", "retry"] as const)("does not let a delayed %s response replace another selected task", async action => {
+  const source = { id: "A", video_id: 1, status: action === "resume" ? "resource_paused" : "failed", message: "Task A" };
+  const other = { id: "B", video_id: 1, status: "queued", message: "Task B" };
+  const created = { id: "new-A", video_id: 1, status: "queued", message: "New task A" };
+  vi.mocked(api.getJob).mockImplementation(async id => id === "A" ? source : id === "B" ? other : created);
+  let finish!: (value: Job) => void;
+  const pending = new Promise<Job>(resolve => { finish = resolve; });
+  if (action === "resume") vi.mocked(api.resumeJob).mockReturnValue(pending);
+  else vi.mocked(api.retryVideo).mockReturnValue(pending);
+  vi.mocked(api.cancelJob).mockResolvedValue({ ...other, status: "cancelled" });
+  const onJob = vi.fn();
+  act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=A"]}>
+      <ProcessPage onJob={onJob} /><Link data-select-b to="/process?videoId=1&jobId=B">Select B</Link><RouteProbe />
+    </MemoryRouter>
+  </QueryClientProvider>));
+  await settle(() => expect(container.textContent).toContain("Task A"));
+  const command = [...container.querySelectorAll<HTMLButtonElement>(".process-job-commands button")]
+    .find(button => button.textContent?.includes(action === "resume" ? "继续处理" : "重试任务"));
+  act(() => command!.click());
+  await settle(() => expect(action === "resume" ? api.resumeJob : api.retryVideo).toHaveBeenCalledTimes(1));
+  act(() => container.querySelector<HTMLAnchorElement>("[data-select-b]")!.click());
+  await settle(() => expect(container.textContent).toContain("Task B"));
+  await act(async () => finish(created));
+  await settle(() => expect(onJob).toHaveBeenCalledWith("new-A"));
+  expect(client.getQueryData(["jobs", "new-A"])).toMatchObject(created);
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1&jobId=B");
+  expect(container.textContent).toContain("Task B");
+  expect(container.textContent).not.toContain("New task A");
+  act(() => container.querySelector<HTMLButtonElement>(".stop-job-button")!.click());
+  await settle(() => expect(api.cancelJob).toHaveBeenCalledWith("B"));
+});
+
+it.each(["resume", "retry"] as const)("reopens the original task after %s creates a replacement and another task was selected", async action => {
+  const source = { id: "A", video_id: 1, status: action === "resume" ? "resource_paused" : "failed", message: "Original task A" };
+  const other = { id: "B", video_id: 1, status: "queued", message: "Task B" };
+  const created = { id: "replacement", video_id: 1, status: "queued", message: "Replacement task A" };
+  vi.mocked(api.getJob).mockImplementation(async id => id === "A" ? source : id === "B" ? other : created);
+  vi.mocked(api.resumeJob).mockResolvedValue(created);
+  vi.mocked(api.retryVideo).mockResolvedValue(created);
+  act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=A"]}>
+      <ProcessPage /><Link data-select-b to="/process?videoId=1&jobId=B">Select B</Link>
+      <Link data-select-a to="/process?videoId=1&jobId=A">Select A</Link><RouteProbe />
+    </MemoryRouter>
+  </QueryClientProvider>));
+  await settle(() => expect(container.textContent).toContain("Original task A"));
+  const command = [...container.querySelectorAll<HTMLButtonElement>(".process-job-commands button")]
+    .find(button => button.textContent?.includes(action === "resume" ? "继续处理" : "重试任务"));
+  act(() => command!.click());
+  await settle(() => expect(container.textContent).toContain("Replacement task A"));
+  await settle(() => expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path"))
+    .toBe("/process?videoId=1&jobId=replacement"));
+  act(() => container.querySelector<HTMLAnchorElement>("[data-select-b]")!.click());
+  await settle(() => expect(container.textContent).toContain("Task B"));
+  act(() => container.querySelector<HTMLAnchorElement>("[data-select-a]")!.click());
+  await settle(() => expect(container.textContent).toContain("Original task A"));
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1&jobId=A");
+  expect(container.textContent).not.toContain("Replacement task A");
+});
+
+it.each([
+  ["resume", "hidden"], ["retry", "hidden"], ["resume", "reopened"], ["retry", "reopened"],
+] as const)("keeps explicit A when a pending %s finishes %s after leaving its cached page", async (action, timing) => {
+  const source = { id: "A", video_id: 1, status: action === "resume" ? "resource_paused" : "failed", message: "Original task A" };
+  const created = { id: "replacement", video_id: 1, status: "queued", message: "Replacement task A" };
+  vi.mocked(api.getJob).mockImplementation(async id => id === "A" ? source : created);
+  let finish!: (value: Job) => void;
+  const pending = new Promise<Job>(resolve => { finish = resolve; });
+  if (action === "resume") vi.mocked(api.resumeJob).mockReturnValue(pending);
+  else vi.mocked(api.retryVideo).mockReturnValue(pending);
+  const onJob = vi.fn();
+  const renderActive = (active: boolean) => act(() => root.render(<QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={["/process?videoId=1&jobId=A"]}>
+      <ProcessPage active={active} onJob={onJob} />
+      <Link data-reopen-a to="/process?videoId=1&jobId=A">Open original A</Link><RouteProbe />
+    </MemoryRouter>
+  </QueryClientProvider>));
+  renderActive(true);
+  await settle(() => expect(container.textContent).toContain("Original task A"));
+  const originalNavigation = container.querySelector('[data-testid="route"]')?.getAttribute("data-navigation-key");
+  const command = [...container.querySelectorAll<HTMLButtonElement>(".process-job-commands button")]
+    .find(button => button.textContent?.includes(action === "resume" ? "继续处理" : "重试任务"));
+  act(() => command!.click());
+  await settle(() => expect(action === "resume" ? api.resumeJob : api.retryVideo).toHaveBeenCalledTimes(1));
+  renderActive(false);
+  if (timing === "reopened") {
+    act(() => container.querySelector<HTMLAnchorElement>("[data-reopen-a]")!.click());
+    expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-navigation-key")).not.toBe(originalNavigation);
+    renderActive(true);
+  }
+  await act(async () => finish(created));
+  await settle(() => expect(onJob).toHaveBeenCalledWith("replacement"));
+  expect(client.getQueryData(["jobs", "replacement"])).toMatchObject(created);
+  if (timing === "hidden") renderActive(true);
+  await settle(() => expect(container.textContent).toContain("Original task A"));
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1&jobId=A");
+  act(() => container.querySelector<HTMLAnchorElement>("[data-reopen-a]")!.click());
+  await settle(() => expect(container.textContent).toContain("Original task A"));
+  expect(container.querySelector('[data-testid="route"]')?.getAttribute("data-path")).toBe("/process?videoId=1&jobId=A");
+  expect(container.textContent).not.toContain("Replacement task A");
 });
 
 function currentAiLabel() {

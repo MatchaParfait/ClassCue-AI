@@ -548,6 +548,9 @@ class JobManager:
         self._futures: dict[str, Future[Any]] = {}
         self._cancel_events: dict[str, Event] = {}
         self._pause_events: dict[str, Event] = {}
+        self._deferred: dict[str, tuple] = {}
+        self._redispatched: set[str] = set()
+        self._resuming: set[str] = set()
         self._closing = False
         self.before_submit = lambda _kind: None
 
@@ -601,7 +604,7 @@ class JobManager:
 
     def is_running(self) -> bool:
         with self._lock:
-            return bool(self._cancel_events or self.provider.get().list_active_jobs())
+            return bool(self._closing or self._cancel_events or self.provider.get().list_active_jobs())
 
     def _record_failure(self, store, job_id: str, exc: BaseException, **context) -> None:
         log_exception(LOGGER, "Background job failed", exc=exc, job_id=job_id, **context)
@@ -628,21 +631,28 @@ class JobManager:
         request: dict | None = None,
         *,
         job_id: str | None = None,
+        allow_queue: bool = False,
+        resume_from: str | None = None,
     ) -> str:
         with self._lock:
             if self._closing:
                 raise RuntimeError("后端正在关闭，不能启动新任务。")
             self.before_submit(job_type)
             store = self.provider.get()
-            if self._cancel_events or store.list_active_jobs():
+            occupied = bool(self._cancel_events or store.list_active_jobs())
+            if not allow_queue and not resume_from and occupied:
                 raise RuntimeError("已有任务正在运行，请等待当前任务完成。")
             job_id = job_id or uuid.uuid4().hex
             try:
                 store.create_job(job_id, job_type, video_id)
                 if request:
                     store.update_job(job_id, request_json=json.dumps(request, ensure_ascii=False))
+                if occupied:
+                    store.update_job(job_id, message="排队中，等待前面的任务完成后自动开始")
                 self._cancel_events[job_id] = Event()
                 self._pause_events[job_id] = Event()
+                if resume_from:
+                    self._resuming.add(job_id)
                 model_id = (request or {}).get("model_id") or (request or {}).get("options", {}).get("asr_model_id")
                 future = self.executor.submit(
                     self._run, job_id, operation, store, job_type, video_id, model_id,
@@ -653,6 +663,7 @@ class JobManager:
                 self._futures.pop(job_id, None)
                 self._cancel_events.pop(job_id, None)
                 self._pause_events.pop(job_id, None)
+                self._resuming.discard(job_id)
                 self._record_failure(store, job_id, exc, stage="submitting", job_type=job_type)
                 raise
 
@@ -668,6 +679,7 @@ class JobManager:
         model_id: str | None = None,
     ) -> None:
         current_stage = "starting"
+        deferred = False
 
         def should_cancel() -> bool:
             return cancel_event.is_set()
@@ -694,7 +706,21 @@ class JobManager:
         try:
             store = store if store is not None else self.provider.get()
             cancel_event = self._cancel_events[job_id]
-            store.update_job(job_id, status="running", stage=current_stage, started_at=self._timestamp())
+            with self._lock:
+                checkpoint()
+                # Release the worker while resource recovery waits for user input.
+                # A resumed task gets priority over tasks already in the executor.
+                if job_id not in self._resuming and (
+                    self._resuming or store.list_paused_jobs()
+                    or (self._redispatched and job_id not in self._redispatched)
+                ):
+                    self._deferred[job_id] = (job_id, operation, store, job_type, video_id, model_id)
+                    store.update_job(job_id, message="排队中，等待资源暂停的任务继续或停止")
+                    self._redispatched.discard(job_id)
+                    deferred = True
+                    return
+                store.update_job(job_id, status="running", stage=current_stage, message="正在准备处理",
+                                 started_at=self._timestamp())
 
             def report_resource(resource):
                 nonlocal current_stage
@@ -744,30 +770,33 @@ class JobManager:
                 finished_at=self._timestamp(),
             )
         except (ResourcePaused, ProcessingCancelled) as exc:
-            try:
-                if isinstance(exc, ResourcePaused):
-                    store.update_job(
-                        job_id, status="resource_paused", stage="resource_paused",
-                        message="资源不足，进度已保存，等待继续", error_message=redact_text(exc),
-                        request_json=json.dumps(exc.resume_request, ensure_ascii=False) if exc.resume_request else None,
-                        finished_at=self._timestamp(),
+            with self._lock:
+                if isinstance(exc, ResourcePaused) and should_cancel():
+                    exc = ProcessingCancelled("用户已请求停止处理")
+                try:
+                    if isinstance(exc, ResourcePaused):
+                        store.update_job(
+                            job_id, status="resource_paused", stage="resource_paused",
+                            message="资源不足，进度已保存，等待继续", error_message=redact_text(exc),
+                            request_json=json.dumps(exc.resume_request, ensure_ascii=False) if exc.resume_request else None,
+                            finished_at=self._timestamp(),
+                        )
+                    else:
+                        row = store.get_job(job_id)
+                        paused = isinstance(exc, PreparationPaused)
+                        store.update_job(
+                            job_id, status="interrupted", stage="download_paused" if paused else "interrupted",
+                            message="下载已暂停，已保留文件和续传记录" if paused else "已停止处理",
+                            error_message="" if paused else redact_text(exc),
+                            finished_at=self._timestamp(),
+                        )
+                        if row and row["video_id"] is not None and row["status"] != "queued":
+                            store.mark_interrupted_video_failed(int(row["video_id"]))
+                except Exception as write_error:
+                    log_exception(
+                        LOGGER, "Could not persist job interruption", exc=write_error,
+                        job_id=job_id, reason=type(exc).__name__,
                     )
-                else:
-                    row = store.get_job(job_id)
-                    paused = isinstance(exc, PreparationPaused)
-                    store.update_job(
-                        job_id, status="interrupted", stage="download_paused" if paused else "interrupted",
-                        message="下载已暂停，已保留文件和续传记录" if paused else "已停止处理",
-                        error_message="" if paused else redact_text(exc),
-                        finished_at=self._timestamp(),
-                    )
-                    if row and row["video_id"] is not None:
-                        store.mark_interrupted_video_failed(int(row["video_id"]))
-            except Exception as write_error:
-                log_exception(
-                    LOGGER, "Could not persist job interruption", exc=write_error,
-                    job_id=job_id, reason=type(exc).__name__,
-                )
         except Exception as exc:
             self._record_failure(
                 store, job_id, exc, job_type=job_type, video_id=video_id,
@@ -775,9 +804,48 @@ class JobManager:
             )
         finally:
             with self._lock:
+                if not deferred:
+                    self._deferred.pop(job_id, None)
+                    self._futures.pop(job_id, None)
+                    self._cancel_events.pop(job_id, None)
+                    self._pause_events.pop(job_id, None)
+                    self._resuming.discard(job_id)
+                    self._redispatched.discard(job_id)
+                    self._dispatch_deferred()
+
+    def _dispatch_deferred(self) -> None:
+        if self._closing or self._resuming or self._redispatched or not self._deferred:
+            return
+        store = self.provider.get()
+        if store.list_paused_jobs():
+            return
+        for job_id in [key for key in self._cancel_events if key in self._deferred]:
+            args = self._deferred.pop(job_id)
+            try:
+                self._redispatched.add(job_id)
+                self._futures[job_id] = self.executor.submit(self._run, *args)
+            except Exception as exc:
+                self._redispatched.discard(job_id)
                 self._futures.pop(job_id, None)
                 self._cancel_events.pop(job_id, None)
                 self._pause_events.pop(job_id, None)
+                self._record_failure(store, job_id, exc, stage="dispatching")
+
+    def stop_all(self) -> None:
+        with self._lock:
+            store = self.provider.get()
+            with store.connect() as connection:
+                rows = connection.execute(
+                    "SELECT id, job_type FROM processing_jobs WHERE status IN "
+                    "('queued', 'running', 'resource_paused', 'awaiting_api')"
+                ).fetchall()
+            if any(row["job_type"] == "storage_migration" for row in rows):
+                raise ValueError("目录迁移会自动完成或恢复原设置，请等待迁移结束")
+            self._closing = True
+            for event in self._cancel_events.values():
+                event.set()
+            for row in rows:
+                self.cancel(str(row["id"]))
 
     def pause_preparation(self, job_id: str) -> dict[str, object]:
         with self._lock:
@@ -815,10 +883,11 @@ class JobManager:
                 self.provider.get().update_job(job_id, status="interrupted", stage="interrupted",
                                                message="已停止暂停的队列，缓存仍保留",
                                                finished_at=self._timestamp())
+                self._dispatch_deferred()
                 return self._row_payload(self.provider.get().get_job(job_id), self.provider.get())
 
             future = self._futures.get(job_id)
-            if future is not None and future.cancel():
+            if job_id in self._deferred or (future is not None and future.cancel()):
                 try:
                     video_id = row["video_id"]
                     self.provider.get().update_job(
@@ -828,12 +897,16 @@ class JobManager:
                         message="已停止排队任务",
                         finished_at=self._timestamp(),
                     )
-                    if video_id is not None:
+                    if video_id is not None and row["status"] != "queued":
                         self.provider.get().mark_interrupted_video_failed(int(video_id))
                 finally:
                     self._futures.pop(job_id, None)
                     self._cancel_events.pop(job_id, None)
                     self._pause_events.pop(job_id, None)
+                    self._deferred.pop(job_id, None)
+                    self._resuming.discard(job_id)
+                    self._redispatched.discard(job_id)
+                    self._dispatch_deferred()
             else:
                 self.provider.get().update_job(
                     job_id,
@@ -1398,12 +1471,14 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "service": "classroom-video-study", "instance_id": instance_id, "version": VERSION,
         }
 
-    def video_file_change_locks() -> tuple[dict[int, str], str | None]:
+    def video_file_change_locks(*, exclude_job_id: str | None = None) -> tuple[dict[int, str], str | None]:
         store = provider.get()
         locked = {}
         if storage_migrating.is_set():
             return locked, "目录正在迁移，请等待迁移完成后修改文件名"
         for row in [*store.list_active_jobs(), *store.list_paused_jobs()]:
+            if str(row["id"]) == exclude_job_id:
+                continue
             if row["job_type"] == "storage_migration":
                 return locked, "目录正在迁移，请等待迁移完成后修改文件名"
             reason = ("该视频被资源暂停任务占用，请继续或停止任务后修改文件名"
@@ -2668,14 +2743,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def get_processing_options(video_id: int) -> dict[str, object]:
         video = _video_or_404(provider.get(), video_id)
         ai = ai_settings_payload()
-        active_job = next(
-            (
-                JobManager._row_payload(row, provider.get())
-                for row in [*provider.get().list_active_jobs(), *provider.get().list_paused_jobs()]
-                if row["video_id"] is not None and int(row["video_id"]) == video_id
-            ),
-            None,
-        )
+        active_jobs = [
+            JobManager._row_payload(row, provider.get())
+            for row in [*provider.get().list_active_jobs(), *provider.get().list_paused_jobs()]
+            if row["video_id"] is not None and int(row["video_id"]) == video_id
+        ]
         return {
             "video_id": video_id,
             "asr_model": asr_snapshot(selected_model_id()),
@@ -2692,7 +2764,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "llm_request_concurrency": ai["request_concurrency"],
             "reasoning_effort": ai["reasoning_effort"],
             "status": video["status"],
-            "active_job": active_job,
+            "active_job": active_jobs[0] if active_jobs else None,
+            "active_jobs": active_jobs,
         }
 
     def process_operation(
@@ -2786,7 +2859,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
         return operation
 
-    def submit_batch_state(state: dict, options: VideoProcessPayload, *, restore=False) -> str:
+    def submit_batch_state(state: dict, options: VideoProcessPayload, *, restore=False,
+                           resume_from: str | None = None) -> str:
         options = freeze_processing_options(options, restore=restore)
         options = options.model_copy(update={"asr_model_id": options.asr_model_id or selected_model_id()})
         if not state["entries"]:
@@ -2804,7 +2878,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         try:
             return jobs.submit(
                 "batch_video_process", None, batch_operation(state, options, job_id),
-                request=state, job_id=job_id,
+                request=state, job_id=job_id, resume_from=resume_from,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2903,15 +2977,19 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "errors": [],
         }
 
-    def start_video_process(video_id: int, options: VideoProcessPayload, *, restore=False) -> dict[str, object]:
+    def start_video_process(video_id: int, options: VideoProcessPayload, *, restore=False,
+                            resume_from: str | None = None) -> dict[str, object]:
         # Validate the video and submit under the same lock as delete/undo so a
         # video cannot disappear between the check and job creation.
         with jobs._lock:
             options = freeze_processing_options(options, restore=restore)
             video_store = provider.get()
             video = _video_or_404(video_store, video_id)
-            if video["status"] == "processing":
-                raise HTTPException(status_code=409, detail="该视频正在处理中")
+            locked, global_reason = video_file_change_locks(exclude_job_id=resume_from)
+            if video["status"] == "processing" or video_id in locked or global_reason:
+                raise HTTPException(status_code=409, detail=global_reason or "该视频已在任务队列中，请完成或停止后重试")
+            if any(str(row["id"]) != resume_from for row in video_store.list_paused_jobs()):
+                raise HTTPException(status_code=409, detail="请先继续或停止资源暂停的任务")
             options = options.model_copy(update={"asr_model_id": options.asr_model_id or selected_model_id()})
             if options.force_retranscribe or not video_store.get_segments(video_id):
                 try:
@@ -2921,7 +2999,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             try:
                 job_id = jobs.submit("video_process", video_id, process_operation(video_id, options), request={
                     "kind": "single", "video_id": video_id, "options": options.model_dump(),
-                })
+                }, allow_queue=True, resume_from=resume_from)
             except RuntimeError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"job_id": job_id, "video_id": video_id, "status": "queued", "analysis_modes": options.analysis_modes,
@@ -2941,6 +3019,29 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             if not store.get_segments(video_id):
                 raise HTTPException(status_code=409, detail="字幕尚未就绪，请先完成转写")
             options = freeze_processing_options(VideoProcessPayload(analysis_mode=payload.analysis_mode))
+            locked, global_reason = video_file_change_locks()
+            if global_reason:
+                raise HTTPException(status_code=409, detail=global_reason)
+            if store.list_paused_jobs():
+                raise HTTPException(status_code=409, detail="请先继续或停止资源暂停的任务")
+            active_jobs = store.list_active_jobs()
+            same_video_jobs = [active for active in active_jobs if active["video_id"] == video_id]
+            if (video_id in locked and not same_video_jobs) or any(
+                active["job_type"] != "video_analysis" for active in same_video_jobs
+            ):
+                raise HTTPException(status_code=409, detail="该视频已在任务队列中，请完成或停止后重试")
+            for active in same_video_jobs:
+                if active["job_type"] != "video_analysis":
+                    continue
+                try:
+                    active_options = json.loads(active["request_json"] or "{}").get("options", {})
+                except (TypeError, ValueError):
+                    active_options = {}
+                active_modes = active_options.get("analysis_modes") or (
+                    [active_options["analysis_mode"]] if active_options.get("analysis_mode") else []
+                )
+                if payload.analysis_mode in active_modes:
+                    raise HTTPException(status_code=409, detail="该召回方案已在队列中，请等待当前任务完成")
             previous = store.get_analysis_run(video_id, payload.analysis_mode)
             requested_revision = options.analysis_schemes.get(payload.analysis_mode, {}).get("revision", 0)
             if previous and previous["status"] == "completed" and previous["scheme_revision"] == requested_revision:
@@ -2974,7 +3075,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 job_id = jobs.submit("video_analysis", video_id, operation, request={
                     "kind": "analysis", "video_id": video_id,
                     "options": options.model_dump(),
-                })
+                }, allow_queue=True)
             except RuntimeError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"job_id": job_id, "video_id": video_id, "status": "queued", "analysis_modes": [mode]}
@@ -3064,6 +3165,17 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def recent_jobs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, object]]:
         return jobs.recent(limit)
 
+    @api.post("/api/jobs/stop-all")
+    def stop_all_jobs() -> dict[str, str]:
+        with jobs._lock:
+            if storage_migrating.is_set() or updating.is_set():
+                raise HTTPException(status_code=409, detail="正在迁移目录或准备更新，请等待完成后退出")
+            try:
+                jobs.stop_all()
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "stopping"}
+
     @api.post("/api/jobs/{job_id}/retry", status_code=202)
     def retry_batch(job_id: str) -> dict:
         with jobs._lock:
@@ -3120,13 +3232,15 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                     if index is not None:
                         state["entries"][index]["status"] = "skipped"
                 if any(entry["status"] not in {"completed", "skipped", "failed"} for entry in state["entries"]):
-                    new_id = submit_batch_state(state, options.model_copy(update={"force_retranscribe": False}), restore=True)
+                    new_id = submit_batch_state(state, options.model_copy(update={"force_retranscribe": False}),
+                                                restore=True, resume_from=job_id)
                     result = {"job_id": new_id, "status": "queued"}
                 else:
                     jobs.cancel(job_id)
                     return job_payload_or_404(job_id)
             elif request_data.get("kind") == "single" and not skip:
-                result = start_video_process(int(request_data["video_id"]), options, restore=True)
+                result = start_video_process(int(request_data["video_id"]), options, restore=True,
+                                             resume_from=job_id)
             else:
                 raise HTTPException(status_code=400, detail="该任务没有可恢复的队列")
             provider.get().update_job(job_id, status="interrupted", stage="resumed", message="已创建续跑任务")

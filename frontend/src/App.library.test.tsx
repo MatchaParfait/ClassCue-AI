@@ -740,7 +740,8 @@ describe("library video rename", () => {
       expect(card("video-2").querySelector<HTMLButtonElement>(".library-card-rename")?.disabled).toBe(false);
     });
     expect(card("video-1").querySelector(".library-card-rename")?.getAttribute("title")).toContain("任务");
-    expect(card("video-2").querySelector<HTMLButtonElement>(".library-card-process")?.disabled).toBe(true);
+    expect(card("video-1").querySelector<HTMLButtonElement>(".library-card-process")?.disabled).toBe(true);
+    expect(card("video-2").querySelector<HTMLButtonElement>(".library-card-process")?.disabled).toBe(status === "resource_paused");
     click(card("video-2").querySelector(".library-card-rename"));
     setVideoFilename("other-renamed.mp4");
     submitVideoFilename();
@@ -1263,6 +1264,33 @@ describe("folder selection for processing", () => {
 });
 
 describe("library selection and processing", () => {
+  it("allows another single video to queue while a task is running", async () => {
+    const running: Job = { id: "running", video_id: 1, job_type: "video_analysis",
+      status: "running", progress: 30, analysis_modes: ["question_extraction"] };
+    vi.mocked(getRecentJobs).mockResolvedValue([running]);
+    vi.mocked(getJob).mockImplementation(async id => id === "running"
+      ? running : { id, video_id: 2, status: "queued", progress: 0 });
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App />));
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(container.querySelector(".task-indicator")?.textContent).toContain("处理中");
+    });
+    expect(card("video-1").querySelector<HTMLButtonElement>(".library-card-process")?.disabled).toBe(true);
+    expect(card("video-2").querySelector<HTMLButtonElement>(".library-card-process")?.disabled).toBe(false);
+    selectVideo(2);
+    await openLibraryOptions();
+    expect(container.querySelector(".library-processing-options button.primary-button")?.textContent).toContain("加入处理队列");
+    submitLibraryProcessing();
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(processVideo).toHaveBeenCalledWith(2, expect.any(Object));
+      expect(container.textContent).toContain("已加入队列");
+    });
+    expect(processSelectedVideos).not.toHaveBeenCalled();
+  });
+
   it("adds a contextual bottom bar without removing the original processing button", async () => {
     expect(container.querySelector(".library-selection-dock")).toBeNull();
     expect(container.querySelector(".library-selection-process")).not.toBeNull();

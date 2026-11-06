@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from threading import Event
 import time
 from types import SimpleNamespace
 
@@ -204,6 +205,58 @@ def test_api_resource_pause_survives_restart_and_resumes_without_new_input(store
         wait_for(client, resumed.json()["job_id"], "completed")
         assert seen[0][1] == seen[1][1]
         assert client.get(f"/api/jobs/{job_id}").json()["status"] == "interrupted"
+
+
+def test_api_single_resume_precedes_already_queued_video(store, monkeypatch):
+    configure_judge(monkeypatch)
+    ids = [store.create_video(str(index), f"{index}.mp4", f"{index}.mp4", "audio.wav", 1000)
+           for index in range(2)]
+    started, allow_pause, resumed_started, finish_resume = Event(), Event(), Event(), Event()
+    seen = []
+
+    def process(_store, video_id, _judge, **kwargs):
+        seen.append((video_id, kwargs["qwen_options"]))
+        if video_id == ids[0] and len(seen) == 1:
+            started.set()
+            assert allow_pause.wait(5)
+            _store.set_status(video_id, "resource_paused")
+            raise ResourcePaused("synthetic resource shortage")
+        if video_id == ids[0]:
+            resumed_started.set()
+            assert finish_resume.wait(5)
+        return "completed", 1
+
+    monkeypatch.setattr(api_main, "process_video_once", process)
+    app = api_main.create_app(store)
+    with TestClient(app) as client:
+        try:
+            first = client.post(f"/api/videos/{ids[0]}/process", json={
+                "asr_model_id": "qwen3-asr-1.7b", "qwen_options": {"mode": "low-resource"},
+            })
+            assert first.status_code == 202
+            assert started.wait(5)
+            second = client.post(f"/api/videos/{ids[1]}/process",
+                                 json={"asr_model_id": "qwen3-asr-1.7b"})
+            assert second.status_code == 202
+            second_id = second.json()["job_id"]
+            allow_pause.set()
+            wait_for(client, first.json()["job_id"], "resource_paused")
+            app.state.jobs.executor.submit(lambda: None).result(timeout=5)
+            assert second_id in app.state.jobs._deferred
+            resumed = client.post(f"/api/jobs/{first.json()['job_id']}/resume", json={})
+            assert resumed.status_code == 202
+            assert resumed_started.wait(5)
+            assert [video_id for video_id, _options in seen] == [ids[0], ids[0]]
+            assert client.get(f"/api/jobs/{second_id}").json()["status"] == "queued"
+            finish_resume.set()
+            wait_for(client, resumed.json()["job_id"], "completed")
+            wait_for(client, second_id, "completed")
+            assert [video_id for video_id, _options in seen] == [ids[0], ids[0], ids[1]]
+            assert seen[0][1] == seen[1][1]
+            assert client.get(f"/api/jobs/{first.json()['job_id']}").json()["stage"] == "resumed"
+        finally:
+            allow_pause.set()
+            finish_resume.set()
 
 
 def test_api_batch_pause_can_skip_current_and_keep_remaining_queue(store, monkeypatch):

@@ -13,6 +13,7 @@ import socket
 import errno
 from threading import Event, Lock, Thread, Timer
 import time
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
@@ -198,14 +199,14 @@ class Services:
 
     def stop(self, *, cancel=False, progress=lambda _message: None, timeout=180):
         state = self.shutdown_status()
-        if state.get("processing"):
-            if not cancel:
-                raise RuntimeError("仍有处理任务，请先停止任务或选择后台继续。")
-            job_id = state.get("active_job_id")
-            if not job_id:
-                raise RuntimeError("无法确认正在处理的任务，请回到主窗口查看。")
+        if state.get("processing") and not cancel:
+            raise RuntimeError("仍有处理任务，请先停止任务或选择后台继续。")
+        if cancel:
+            # Seal submissions and cancel the whole queue before stopping workers.
             try:
-                http_json(f"{self.origin}/api/jobs/{job_id}/cancel", method="POST", payload={})
+                http_json(f"{self.origin}/api/jobs/stop-all", method="POST", payload={})
+            except HTTPError:
+                raise
             except OSError:
                 if not self.can_close_offline():
                     raise

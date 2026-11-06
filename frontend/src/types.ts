@@ -456,6 +456,7 @@ export interface ProcessingOptions {
   ai_service?: unknown;
   ai_service_name?: string;
   active_job?: Job | null;
+  active_jobs?: Job[];
   [key: string]: unknown;
 }
 
