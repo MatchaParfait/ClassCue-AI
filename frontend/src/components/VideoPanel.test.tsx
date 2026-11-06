@@ -362,12 +362,10 @@ describe("video subtitles and player controls", () => {
     act(() => button("取消静音").click());
     expect(videoRef.current?.muted).toBe(false);
     expect(videoRef.current?.volume).toBe(0.5);
-    const speed = container.querySelector<HTMLSelectElement>(".player-speed")!;
-    expect([...speed.options].map(option => option.value)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "2", "2.5", "3"]);
-    act(() => {
-      speed.value = "1.5";
-      speed.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    act(() => button("播放速度").click());
+    const options = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    expect(options.map(option => option.textContent)).toEqual(["0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x", "2.5x", "3x"]);
+    act(() => options[4].click());
     expect(videoRef.current?.playbackRate).toBe(1.5);
   });
 
@@ -613,6 +611,225 @@ describe("secondary camera and primary timeline", () => {
   });
 });
 
+
+function playerKey(target: EventTarget, key: string, type = "keydown", options: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...options });
+  act(() => { target.dispatchEvent(event); });
+  return event;
+}
+
+it("controls playback and holds from the page without first focusing the video", () => {
+  vi.useFakeTimers();
+  try {
+    mount(); loadMetadata();
+    expect(document.activeElement).not.toBe(container.querySelector(".video-frame"));
+    expect(playerKey(document.body, " ").defaultPrevented).toBe(true);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+    expect(playerKey(document.body, " ", "keydown", { repeat: true }).defaultPrevented).toBe(true);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+    Object.defineProperty(videoRef.current!, "paused", { configurable: true, value: false });
+    playerKey(document.body, " ");
+    expect(videoRef.current!.pause).toHaveBeenCalledOnce();
+    videoRef.current!.playbackRate = 2;
+    playerKey(document.body, "ArrowRight");
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.playbackRate).toBe(3);
+    playerKey(window, "ArrowRight", "keyup");
+    expect(videoRef.current!.playbackRate).toBe(2);
+    expect(videoRef.current!.currentTime).toBe(0);
+    playerKey(document.body, "ArrowRight");
+    playerKey(window, "ArrowRight", "keyup");
+    expect(videoRef.current!.currentTime).toBe(5);
+    playerKey(document.body, "ArrowLeft");
+    expect(videoRef.current!.currentTime).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+it("returns video control after choosing a speed with the mouse, including the unchanged speed", () => {
+  vi.useFakeTimers();
+  try {
+    mount(); loadMetadata();
+    for (const label of ["2x", "2x"]) {
+      const trigger = button("播放速度");
+      act(() => {
+        trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+        trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      });
+      const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+        .find(item => item.textContent === label)!;
+      act(() => item.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(document.activeElement).toBe(container.querySelector(".video-frame"));
+      expect(videoRef.current!.playbackRate).toBe(2);
+      playerKey(document.activeElement!, "ArrowRight");
+      act(() => vi.advanceTimersByTime(320));
+      expect(videoRef.current!.playbackRate).toBe(3);
+      playerKey(window, "ArrowRight", "keyup");
+      expect(videoRef.current!.playbackRate).toBe(2);
+      expect(videoRef.current!.currentTime).toBe(0);
+    }
+  } finally { vi.useRealTimers(); }
+});
+
+it("keeps speed menu keyboard navigation local, closes on Escape and Tab, and preserves tab focus", () => {
+  mount(); loadMetadata();
+  const trigger = button("播放速度");
+  playerKey(document.body, "Tab");
+  act(() => trigger.focus());
+  playerKey(trigger, "ArrowDown");
+  expect(document.activeElement?.getAttribute("aria-checked")).toBe("true");
+  playerKey(document.activeElement!, "ArrowRight");
+  expect(document.activeElement?.textContent).toBe("1.25x");
+  playerKey(document.activeElement!, "ArrowDown");
+  expect(document.activeElement?.textContent).toBe("2x");
+  playerKey(document.activeElement!, "ArrowUp");
+  expect(document.activeElement?.textContent).toBe("1.25x");
+  expect(videoRef.current!.currentTime).toBe(0);
+  expect(videoRef.current!.playbackRate).toBe(1);
+  act(() => (document.activeElement as HTMLElement).click());
+  expect(videoRef.current!.playbackRate).toBe(1.25);
+  expect(document.activeElement).toBe(trigger);
+  expect(playerKey(trigger, " ").defaultPrevented).toBe(false);
+  expect(videoRef.current!.play).not.toHaveBeenCalled();
+  act(() => trigger.click());
+  playerKey(document.activeElement!, "Escape");
+  expect(container.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  act(() => trigger.click());
+  playerKey(document.activeElement!, "Tab");
+  expect(container.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+it.each(["selection", "Escape"])("keeps keyboard control after a mouse-opened speed menu closes via %s", closeBy => {
+  mount(); loadMetadata();
+  const trigger = button("播放速度");
+  act(() => {
+    trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  });
+  if (closeBy === "selection") {
+    playerKey(document.activeElement!, "ArrowRight");
+    playerKey(document.activeElement!, "Enter");
+    act(() => (document.activeElement as HTMLElement).click());
+    expect(videoRef.current!.playbackRate).toBe(1.25);
+  } else {
+    playerKey(document.activeElement!, "Escape");
+  }
+  expect(container.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(playerKey(trigger, " ").defaultPrevented).toBe(false);
+  expect(videoRef.current!.play).not.toHaveBeenCalled();
+  act(() => trigger.click());
+  expect(container.querySelector('[role="menu"]')).not.toBeNull();
+});
+
+it("yields page shortcuts to inputs, menus and dialogs even when the video is playing", () => {
+  vi.useFakeTimers();
+  try {
+    mount(); loadMetadata();
+    Object.defineProperty(videoRef.current!, "paused", { configurable: true, value: false });
+    for (const markup of [
+      '<input aria-label="Search">', '<textarea></textarea>', '<div contenteditable="true"></div>',
+      '<div role="dialog" aria-modal="true"><button>Action</button></div>',
+      '<div class="audio-channel-popover"><button>Audio</button></div>',
+      '<div role="listbox"><div role="option">Option</div></div>',
+    ]) {
+      const surface = document.createElement("div");
+      surface.innerHTML = markup;
+      document.body.append(surface);
+      const target = surface.querySelector("button, input, textarea, [contenteditable]") ?? document.body;
+      expect(playerKey(target, " ").defaultPrevented).toBe(false);
+      expect(playerKey(target, "ArrowRight").defaultPrevented).toBe(false);
+      act(() => vi.advanceTimersByTime(400));
+      playerKey(window, "ArrowRight", "keyup");
+      expect(videoRef.current!.playbackRate).toBe(1);
+      expect(videoRef.current!.currentTime).toBe(0);
+      surface.remove();
+    }
+    expect(videoRef.current!.pause).not.toHaveBeenCalled();
+    act(() => button("播放速度").click());
+    expect(playerKey(document.body, " ").defaultPrevented).toBe(false);
+    expect(playerKey(document.body, "ArrowRight").defaultPrevented).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+it("uses video shortcuts after mouse control clicks while preserving deliberate keyboard control focus", () => {
+  mount(); loadMetadata();
+  const mute = button("静音");
+  act(() => {
+    mute.focus();
+    mute.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    mute.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  });
+  expect(document.activeElement).toBe(container.querySelector(".video-frame"));
+  expect(playerKey(document.activeElement!, " ").defaultPrevented).toBe(true);
+  expect(videoRef.current!.play).toHaveBeenCalledOnce();
+  playerKey(document.body, "Tab");
+  act(() => button("播放").focus());
+  expect(playerKey(document.activeElement!, " ").defaultPrevented).toBe(false);
+  expect(videoRef.current!.play).toHaveBeenCalledOnce();
+});
+
+it("closes the speed menu on outside clicks without stealing input focus", () => {
+  mount(); loadMetadata();
+  act(() => button("播放速度").click());
+  const input = document.createElement("input");
+  document.body.append(input);
+  try {
+    act(() => {
+      input.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      input.focus();
+    });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(playerKey(input, " ").defaultPrevented).toBe(false);
+    expect(videoRef.current!.play).not.toHaveBeenCalled();
+  } finally { input.remove(); }
+});
+
+it("keeps shortcuts working on mouse-focused page actions and does not consume IME events", () => {
+  mount(); loadMetadata();
+  const action = document.createElement("button");
+  document.body.append(action);
+  try {
+    act(() => {
+      action.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      action.focus();
+    });
+    expect(playerKey(action, " ", "keydown", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(playerKey(action, " ").defaultPrevented).toBe(true);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+    playerKey(document.body, "Tab");
+    expect(playerKey(action, " ").defaultPrevented).toBe(false);
+    expect(videoRef.current!.play).toHaveBeenCalledOnce();
+  } finally { action.remove(); }
+});
+
+it("cancels a page hold on input focus and ignores hidden players and already handled events", () => {
+  vi.useFakeTimers();
+  try {
+    mount(); loadMetadata();
+    playerKey(document.body, "ArrowRight");
+    act(() => vi.advanceTimersByTime(320));
+    expect(videoRef.current!.playbackRate).toBe(3);
+    const input = document.createElement("input");
+    document.body.append(input);
+    act(() => input.focus());
+    expect(videoRef.current!.playbackRate).toBe(1);
+    playerKey(window, "ArrowRight", "keyup");
+    expect(videoRef.current!.currentTime).toBe(0);
+    input.remove();
+    const before = vi.mocked(videoRef.current!.play).mock.calls.length;
+    container.hidden = true;
+    expect(playerKey(document.body, " ").defaultPrevented).toBe(false);
+    container.hidden = false;
+    const handled = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    handled.preventDefault();
+    act(() => document.body.dispatchEvent(handled));
+    expect(videoRef.current!.play).toHaveBeenCalledTimes(before);
+  } finally { vi.useRealTimers(); }
+});
 
 it("updates player shortcuts immediately without firing while editing controls or focusing subtitles", () => {
   mount();

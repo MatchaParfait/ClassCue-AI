@@ -1,8 +1,8 @@
 import { useShortcuts, matchesShortcut, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedPopup, useEntryMotion } from "./Motion";
-import { useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, Type, Volume2, VolumeX } from "lucide-react";
-import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState } from "react";
+import { Captions, Check, ChevronDown, Maximize, Minimize, Pause, Play, RotateCcw, Type, Volume2, VolumeX } from "lucide-react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import type { SecondaryView, Subtitle, Video } from "../types";
 import { getStreamUrl } from "../api/client";
 import { formatTime } from "../utils";
@@ -39,6 +39,12 @@ interface VideoPanelProps {
 }
 
 const PREFERENCES_KEY = "classroom-player-subtitles";
+const PLAYER_INPUTS = 'input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [data-shortcut-recorder], .video-caption, .review-tabs, [role="tablist"], [role="menu"], [role="listbox"], [role="dialog"]';
+const PLAYER_POPOVERS = '.audio-channel-popover, .subtitle-settings-popover, .secondary-view-popover, .player-speed-menu, [role="dialog"], [role="menu"], [role="listbox"]';
+
+function isPlayerHidden(element: Element) {
+  return Boolean(element.closest('[hidden], [inert], [aria-hidden="true"]'));
+}
 
 function holdKey(event: { code: string; key: string }): string {
   return event.code || event.key.toLowerCase();
@@ -128,6 +134,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const keyboardLongPressKey = useRef<string | null>(null);
   const keyboardLongPressDelta = useRef<number | null>(null);
   const keyboardLongPressRestore = useRef<{ rate: number; wasPaused: boolean } | null>(null);
+  const keyboardNavigation = useRef(true);
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
 
@@ -420,7 +427,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     }
     restoreLongPressPlayback(restore);
   };
-  const beginKeyboardLongPress = (event: KeyboardEvent<HTMLDivElement>) => {
+  const beginKeyboardLongPress = (event: globalThis.KeyboardEvent) => {
     if (event.repeat || keyboardLongPressKey.current !== null || longPressPointerId.current !== null) return;
     keyboardLongPressKey.current = holdKey(event);
     keyboardLongPressDelta.current = 5;
@@ -467,22 +474,58 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       cancel();
     };
   }, [progressKey, videoRef]);
-  const playerKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || event.nativeEvent.isComposing || (event.target as HTMLElement).closest("button, input, select, textarea, [contenteditable], [role='group']")) return;
+  const playerKeyboard = (event: globalThis.KeyboardEvent) => {
+    const frame = frameRef.current;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!frame || isPlayerHidden(frame) || document.visibilityState === "hidden"
+      || event.defaultPrevented || event.isComposing || target?.closest(PLAYER_INPUTS)
+      || (keyboardNavigation.current && target?.closest('button, a, [role="button"], summary'))
+      || [...document.querySelectorAll(PLAYER_POPOVERS)].some(element => !isPlayerHidden(element))) return;
     if (event.repeat) {
-      if (matchesShortcut(event.nativeEvent, shortcuts, "seekBack") || matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) event.preventDefault();
+      if ((["playPause", "seekBack", "seekForward", "mute", "subtitles", "fullscreen"] as const)
+        .some(action => matchesShortcut(event, shortcuts, action))) event.preventDefault();
       return;
     }
-    if (matchesShortcut(event.nativeEvent, shortcuts, "playPause")) { event.preventDefault(); void togglePlay(); }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "seekBack")) { event.preventDefault(); seek(currentTime - 5); }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "seekForward")) {
+    if (matchesShortcut(event, shortcuts, "playPause")) { event.preventDefault(); void togglePlay(); }
+    else if (matchesShortcut(event, shortcuts, "seekBack")) { event.preventDefault(); seek(getPrimaryTime() - 5); }
+    else if (matchesShortcut(event, shortcuts, "seekForward")) {
       event.preventDefault();
       beginKeyboardLongPress(event);
     }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "mute")) { event.preventDefault(); toggleMute(); }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "subtitles") && subtitles.length) { event.preventDefault(); toggleSubtitles(); }
-    else if (matchesShortcut(event.nativeEvent, shortcuts, "fullscreen")) { event.preventDefault(); void toggleFullscreen(); }
+    else if (matchesShortcut(event, shortcuts, "mute")) { event.preventDefault(); toggleMute(); }
+    else if (matchesShortcut(event, shortcuts, "subtitles") && subtitles.length) { event.preventDefault(); toggleSubtitles(); }
+    else if (matchesShortcut(event, shortcuts, "fullscreen")) { event.preventDefault(); void toggleFullscreen(); }
   };
+  const keyboardHandler = useRef(playerKeyboard);
+  keyboardHandler.current = playerKeyboard;
+  useEffect(() => {
+    const key = (event: globalThis.KeyboardEvent) => keyboardHandler.current(event);
+    const modality = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Tab" || (event.target instanceof Element && event.target.closest('[role="menu"]'))) {
+        keyboardNavigation.current = true;
+        finishKeyboardLongPress(false);
+      }
+    };
+    const pointer = (event: PointerEvent) => {
+      keyboardNavigation.current = false;
+      if (event.target instanceof Element && event.target.closest('button, input, select, textarea, [role="dialog"], [role="menu"]')) {
+        finishKeyboardLongPress(false);
+      }
+    };
+    const focus = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.closest(PLAYER_INPUTS)) finishKeyboardLongPress(false);
+    };
+    document.addEventListener("keydown", modality, true);
+    document.addEventListener("pointerdown", pointer, true);
+    document.addEventListener("focusin", focus);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", modality, true);
+      document.removeEventListener("pointerdown", pointer, true);
+      document.removeEventListener("focusin", focus);
+      document.removeEventListener("keydown", key);
+    };
+  }, [progressKey]);
 
   return (
     <section className="video-section">
@@ -492,7 +535,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
         </div>
         <span className="source-badge">{video.status === "review_ready" ? "可复习" : "字幕可查看"}</span>
       </div>
-      <div ref={frameRef} className="video-frame" tabIndex={0} aria-label="视频播放器" onKeyDown={playerKeyboard}
+      <div ref={frameRef} className="video-frame" tabIndex={0} aria-label="视频播放器"
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) finishKeyboardLongPress(false);
         }}
@@ -616,7 +659,11 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
           <DraggableSubtitle key={`${progressKey}:${captionReset}`} text={preferences.enabled ? activeSubtitle?.text ?? "" : ""} fontSize={preferences.fontSize} />
         )}
         {playbackError && <div className="video-playback-error" role="status">{playbackError}</div>}
-        <div className="player-controls">
+        <div className="player-controls" onClick={event => {
+          const button = (event.target as Element).closest(".player-control");
+          if (event.detail > 0 && button && !button.hasAttribute("aria-expanded")
+            && !button.closest(PLAYER_POPOVERS)) focusPlayer();
+        }}>
           <input
             className="player-progress"
             type="range"
@@ -652,6 +699,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
                 setVolume(next);
                 setMuted(next === 0);
               }}
+              onPointerUp={event => { if (event.button === 0) focusPlayer(); }}
             />
             <span className="player-time">
               <span>{formatTime(currentTime * 1000)}</span><span className="player-time-separator"> / </span><span>{formatTime(duration * 1000)}</span>
@@ -694,19 +742,12 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
                 </AnimatedPopup>
               )}</AnimatePresence>
             </div>
-            <select
-              className="player-speed"
-              aria-label="播放速度"
-              title="播放速度"
-              value={playbackRate}
-              onChange={(event) => {
+            <PlaybackSpeedControl rate={playbackRate} onClose={focusPlayer}
+              onChange={rate => {
                 if (!videoRef.current) return;
-                videoRef.current.playbackRate = Number(event.target.value);
-                setPlaybackRate(Number(event.target.value));
-              }}
-            >
-              {[0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map((rate) => <option key={rate} value={rate}>{rate}x</option>)}
-            </select>
+                videoRef.current.playbackRate = rate;
+                setPlaybackRate(rate);
+              }} />
             <button className="player-control" type="button" aria-label={fullscreen ? "退出全屏" : "全屏"} title={shortcutTitle(fullscreen ? "退出全屏" : "全屏", shortcuts, "fullscreen")} aria-keyshortcuts={shortcutAria(shortcuts, "fullscreen")} onClick={() => void toggleFullscreen()}>
               {fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}
             </button>
@@ -726,4 +767,61 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       </div>
     </section>
   );
+}
+
+function PlaybackSpeedControl({ rate, onChange, onClose }: {
+  rate: number; onChange: (rate: number) => void; onClose: () => void;
+}) {
+  const id = useId();
+  const container = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const rates = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3];
+  const close = (keyboard: boolean) => {
+    setOpen(false);
+    if (keyboard) trigger.current?.focus({ preventScroll: true });
+    else onClose();
+  };
+  useEffect(() => {
+    if (!open) return;
+    container.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+    const outside = (event: PointerEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+  return <div ref={container} className="player-speed-control" onBlur={event => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+  }} onKeyDown={event => {
+    if (event.key === "Escape" && open) {
+      event.preventDefault(); event.stopPropagation(); close(true);
+    }
+  }}>
+    <button ref={trigger} className="player-speed" type="button" aria-label="播放速度" title="播放速度"
+      aria-haspopup="menu" aria-expanded={open} aria-controls={id}
+      onClick={event => { if (open) close(event.detail === 0); else setOpen(true); }}
+      onKeyDown={event => {
+        if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
+      }}>
+      <span>{rate}x</span><ChevronDown size={13} aria-hidden="true" />
+    </button>
+    {open && <div id={id} className="player-speed-menu" role="menu" aria-label="播放速度" onKeyDown={event => {
+      if (event.key === "Tab") { close(true); return; }
+      const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+        : event.key === "ArrowDown" ? (index + 2) % items.length
+        : event.key === "ArrowUp" ? (index - 2 + items.length) % items.length
+        : event.key === "ArrowRight" ? (index + 1) % items.length
+        : event.key === "ArrowLeft" ? (index - 1 + items.length) % items.length : null;
+      if (next !== null) { event.preventDefault(); event.stopPropagation(); items[next]?.focus(); }
+    }}>
+      {rates.map(value => <button key={value} type="button" role="menuitemradio"
+        aria-checked={rate === value} tabIndex={rate === value ? 0 : -1}
+        onClick={event => { onChange(value); close(event.detail === 0); }}>
+        <span>{value}x</span>{rate === value && <Check size={13} aria-hidden="true" />}
+      </button>)}
+    </div>}
+  </div>;
 }

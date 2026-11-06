@@ -9,12 +9,12 @@ export const shortcutDefinitions = [
   { id: "nextMarker", label: "下一个考点", group: "复习", defaults: ["D"], hint: "跳转到当前列表中的下一个考点。" },
   { id: "captureTime", label: "保存考点跳转时间", group: "复习", defaults: ["S"], hint: "用当前播放位置更新最近选中的考点跳转时间。" },
   { id: "createQuestion", label: "新增手动题目定位", group: "复习", defaults: ["W"], hint: "在当前播放位置新增独立的手动题目定位。" },
-  { id: "playPause", label: "播放 / 暂停", group: "播放器", defaults: ["Space", "K"], hint: "播放器获得焦点时生效。" },
-  { id: "seekBack", label: "后退 5 秒", group: "播放器", defaults: ["ArrowLeft"], hint: "播放器获得焦点时生效。" },
-  { id: "seekForward", label: "前进 5 秒", group: "播放器", defaults: ["ArrowRight"], hint: "播放器获得焦点时生效。" },
-  { id: "mute", label: "静音 / 取消静音", group: "播放器", defaults: ["M"], hint: "播放器获得焦点时生效。" },
-  { id: "subtitles", label: "显示 / 隐藏字幕", group: "播放器", defaults: ["C"], hint: "播放器获得焦点且有字幕时生效。" },
-  { id: "fullscreen", label: "进入 / 退出全屏", group: "播放器", defaults: ["F"], hint: "播放器获得焦点时生效。" },
+  { id: "playPause", label: "播放 / 暂停", group: "播放器", defaults: ["Space", "K"], hint: "复习页默认控制视频；输入、菜单或键盘操作控件时让出。" },
+  { id: "seekBack", label: "后退 5 秒", group: "播放器", defaults: ["ArrowLeft"], hint: "复习页默认控制视频；输入、菜单或键盘操作控件时让出。" },
+  { id: "seekForward", label: "前进 5 秒", group: "播放器", defaults: ["ArrowRight"], hint: "短按前进，长按临时 3 倍速；输入、菜单或键盘操作控件时让出。" },
+  { id: "mute", label: "静音 / 取消静音", group: "播放器", defaults: ["M"], hint: "复习页默认控制视频；输入、菜单或键盘操作控件时让出。" },
+  { id: "subtitles", label: "显示 / 隐藏字幕", group: "播放器", defaults: ["C"], hint: "复习页有字幕时生效；输入、菜单或键盘操作控件时让出。" },
+  { id: "fullscreen", label: "进入 / 退出全屏", group: "播放器", defaults: ["F"], hint: "复习页默认控制视频；输入、菜单或键盘操作控件时让出。" },
 ] as const;
 export type ShortcutId = typeof shortcutDefinitions[number]["id"];
 export type ShortcutMap = Record<ShortcutId, string[]>;

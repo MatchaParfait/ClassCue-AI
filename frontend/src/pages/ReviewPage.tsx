@@ -388,7 +388,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input[type="range"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) return;
       if (target?.closest('input:not([type="range"]), [data-shortcut-recorder], .video-caption, .review-tabs, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')
-        || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, .secondary-view-popover, [role="dialog"][aria-modal="true"]')]
+        || [...document.querySelectorAll('.audio-channel-popover, .subtitle-settings-popover, .secondary-view-popover, .player-speed-menu, [role="dialog"][aria-modal="true"]')]
           .some((element) => !element.closest('[aria-hidden="true"], [inert], [hidden]'))) return;
       if (action === "undoReview" || action === "redoReview") {
         if (isShortcutInput(event.target) || !(action === "redoReview" ? redoHistoryRef : undoHistoryRef).current.length || undoingRef.current
