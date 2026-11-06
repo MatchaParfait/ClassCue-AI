@@ -840,8 +840,24 @@ export function setSecondaryViewOffset(videoId: number, offsetMs: number): Promi
   });
 }
 
+export function setSecondaryViewAudio(videoId: number, usePrimaryAudio: boolean): Promise<SecondaryView> {
+  return request(`/api/videos/${videoId}/secondary-view`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ use_primary_audio: usePrimaryAudio }),
+  });
+}
+
 export async function removeSecondaryView(videoId: number): Promise<void> {
   await request(`/api/videos/${videoId}/secondary-view`, { method: "DELETE" });
+}
+
+export function startSecondaryAlignment(videoId: number): Promise<{ job_id: string; status: string }> {
+  return request(`/api/videos/${videoId}/secondary-view/alignment`, { method: "POST" });
+}
+
+export function changeSecondaryAlignment(videoId: number, jobId: string, action: "apply" | "undo"): Promise<SecondaryView> {
+  return request(`/api/videos/${videoId}/secondary-view/alignment/${encodeURIComponent(jobId)}/${action}`,
+    { method: "POST" });
 }
 
 export async function renameVideoFile(videoId: number, filename: string): Promise<Video> {

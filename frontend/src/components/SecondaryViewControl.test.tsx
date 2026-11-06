@@ -1,9 +1,14 @@
-import { act } from "react";
+import { act, useState, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { SecondaryViewControl } from "./SecondaryViewControl";
 import type { SecondaryView, Video } from "../types";
+
+vi.mock("./Motion", () => ({
+  AnimatePresence: ({ children }: { children: ReactNode }) => children,
+  AnimatedPopup: ({ children, ...props }: ComponentProps<"div">) => <div {...props}>{children}</div>,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -36,6 +41,7 @@ afterEach(() => {
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function mount(view: SecondaryView | null = null, videoId = 1) {
@@ -156,4 +162,62 @@ it("keeps switching an existing secondary view independent of file selection", a
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="切换到副视角"]')!.click());
   expect(onSwitch).toHaveBeenCalledOnce();
   expect(api.createPicker).not.toHaveBeenCalled();
+});
+
+it("saves the main-audio option without changing the saved offset", async () => {
+  const view = { ...secondary, offset_ms: 5000 };
+  vi.spyOn(api, "setSecondaryViewAudio").mockResolvedValue({ ...view, use_primary_audio: true });
+  await mount(view);
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="副视角设置"]')!.click());
+  await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(api.setSecondaryViewAudio).toHaveBeenCalledWith(1, true);
+  expect(onChange).toHaveBeenCalledWith({ ...view, use_primary_audio: true });
+});
+
+function AlignmentPlayer() {
+  const [view, setView] = useState<SecondaryView | null>(secondary);
+  return <SecondaryViewControl videoId={1} demo={false} secondary={view} active={false} switching={false}
+    onChange={next => { onChange(next); setView(next); }} onSwitch={onSwitch} />;
+}
+
+it("updates the player when alignment finishes with settings closed", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getSecondaryView).mockResolvedValue(secondary);
+  vi.spyOn(api, "startSecondaryAlignment").mockResolvedValue({ job_id: "alignment", status: "queued" });
+  vi.spyOn(api, "getJob").mockResolvedValue({ id: "alignment", status: "running" });
+  await act(async () => root.render(<AlignmentPlayer />));
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="副视角设置"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="自动对齐"]')!.click());
+  act(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  await act(async () => vi.advanceTimersByTime(500));
+  expect(container.querySelector('[aria-label="自动对齐"]')).toBeNull();
+
+  const aligned = { ...secondary, offset_ms: 8000, alignment_job_id: "alignment" };
+  vi.mocked(api.getSecondaryView).mockResolvedValue(aligned);
+  vi.mocked(api.getJob).mockResolvedValue({ id: "alignment", status: "completed",
+    alignment: { outcome: "applied", offset_ms: 8000, message: "已自动对齐", evidence: [] } });
+  onChange.mockClear();
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(onChange).toHaveBeenLastCalledWith(aligned);
+  const count = vi.mocked(api.getJob).mock.calls.length;
+  await act(async () => vi.advanceTimersByTime(3000));
+  expect(api.getJob).toHaveBeenCalledTimes(count);
+});
+
+it("keeps the running task and cancellation available after changing the audio option", async () => {
+  vi.useFakeTimers();
+  vi.mocked(api.getSecondaryView).mockResolvedValue(secondary);
+  vi.spyOn(api, "startSecondaryAlignment").mockResolvedValue({ job_id: "alignment", status: "queued" });
+  vi.spyOn(api, "getJob").mockResolvedValue({ id: "alignment", status: "running" });
+  vi.spyOn(api, "setSecondaryViewAudio").mockResolvedValue({
+    ...secondary, use_primary_audio: true, alignment_job_id: "alignment",
+  });
+  vi.spyOn(api, "cancelJob").mockResolvedValue({ id: "alignment", status: "interrupted" });
+  await act(async () => root.render(<AlignmentPlayer />));
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="副视角设置"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="自动对齐"]')!.click());
+  await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="自动对齐"]')!.disabled).toBe(true);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="取消自动对齐"]')!.click());
+  expect(api.cancelJob).toHaveBeenCalledWith("alignment");
 });

@@ -13,6 +13,11 @@ let videoRef: ReturnType<typeof createRef<HTMLVideoElement>>;
 let router: AudioChannelRouter;
 
 beforeEach(() => {
+  const preferences = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => preferences.get(key) ?? null,
+    setItem: (key: string, value: string) => preferences.set(key, value),
+  });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal("AudioContext", vi.fn());
   vi.stubGlobal("AudioWorkletNode", vi.fn());
@@ -40,6 +45,42 @@ async function select(value: string) {
 }
 
 describe("audio channel control", () => {
+  it("restores the latest denoise choice when playback starts and remembers turning it off", async () => {
+    const denoise = () => container.querySelector<HTMLButtonElement>('[aria-label="实时降噪"]')!;
+    await act(async () => denoise().click());
+    expect(localStorage.getItem("classroom-player-denoise")).toBe("true");
+    await act(async () => root.render(null));
+    vi.mocked(createAudioChannelRouter).mockClear();
+    await act(async () => root.render(<video ref={videoRef} />));
+    await act(async () => root.render(<><video ref={videoRef} /><AudioChannelControl videoRef={videoRef} /></>));
+    expect(createAudioChannelRouter).not.toHaveBeenCalled();
+    await act(async () => videoRef.current!.dispatchEvent(new Event("play")));
+    expect(denoise().getAttribute("aria-pressed")).toBe("true");
+    await act(async () => denoise().click());
+    expect(localStorage.getItem("classroom-player-denoise")).toBe("false");
+    await act(async () => root.render(null));
+    vi.mocked(createAudioChannelRouter).mockClear();
+    await act(async () => root.render(<><video ref={videoRef} /><AudioChannelControl videoRef={videoRef} /></>));
+    await act(async () => videoRef.current!.dispatchEvent(new Event("play")));
+    expect(createAudioChannelRouter).not.toHaveBeenCalled();
+  });
+
+  it("reuses each media source after switching between main audio and video audio", async () => {
+    const audioRef = createRef<HTMLAudioElement>();
+    const render = (primary: boolean) => root.render(
+      <><video ref={videoRef} /><audio ref={audioRef} />
+        <AudioChannelControl videoRef={primary ? audioRef : videoRef} /></>,
+    );
+    await act(async () => render(false));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="实时降噪"]')!.click());
+    await act(async () => render(true));
+    await act(async () => audioRef.current!.dispatchEvent(new Event("play")));
+    await act(async () => render(false));
+    await act(async () => videoRef.current!.dispatchEvent(new Event("play")));
+    expect(createAudioChannelRouter).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[aria-label="实时降噪"]')!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("does not touch native audio until a mapping is selected", () => {
     open();
     expect(container.querySelectorAll("input[type=radio]")).toHaveLength(3);

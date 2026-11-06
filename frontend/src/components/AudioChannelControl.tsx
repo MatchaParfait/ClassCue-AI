@@ -9,11 +9,23 @@ const CHANNEL_OPTIONS = [
   { value: "right", label: "右声道 → 双声道" },
 ] as const;
 
-export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVideoElement> }) {
+const DENOISE_KEY = "classroom-player-denoise";
+function readDenoisePreference(fallback = false) {
+  try { return localStorage.getItem(DENOISE_KEY) === "true"; }
+  catch { return fallback; }
+}
+
+export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLMediaElement> }) {
   const id = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const routerRef = useRef<AudioChannelRouter | null>(null);
+  const routers = useRef(new Map<HTMLMediaElement, Promise<AudioChannelRouter>>());
+  const activeElement = useRef<HTMLMediaElement | null>(null);
+  const preferredDenoise = useRef(readDenoisePreference());
+  const denoiseActive = useRef(false);
+  const restoreAudio = useRef<() => void>(() => undefined);
+  const modeRef = useRef<AudioChannelMode>("original");
   const aliveRef = useRef(false);
   const busyRef = useRef(false);
   const [open, setOpen] = useState(false);
@@ -30,7 +42,17 @@ export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVide
   useEffect(() => {
     aliveRef.current = true;
     const element = videoRef.current;
+    activeElement.current = element;
+    routerRef.current = null;
+    denoiseActive.current = false;
+    setDenoising(false);
     const resumeAudio = () => {
+      preferredDenoise.current = readDenoisePreference(preferredDenoise.current);
+      if (!busyRef.current && ((denoiseSupported && preferredDenoise.current !== denoiseActive.current)
+        || (!routerRef.current && (modeRef.current !== "original" || (element && routers.current.has(element)))))) {
+        void setDenoise(preferredDenoise.current && denoiseSupported);
+        return;
+      }
       void routerRef.current?.resume().catch(() => {
         if (aliveRef.current) {
           setError("声道映射暂时无法启用，请重试");
@@ -38,18 +60,44 @@ export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVide
         }
       });
     };
+    restoreAudio.current = resumeAudio;
+    if (element && !element.paused) resumeAudio();
     element?.addEventListener("play", resumeAudio);
     return () => {
       aliveRef.current = false;
       element?.removeEventListener("play", resumeAudio);
       // Strict Mode and Fast Refresh immediately reattach the same captured media element.
       queueMicrotask(() => {
+        if (aliveRef.current && activeElement.current !== element && element) {
+          void routers.current.get(element)?.then(router => {
+            if (activeElement.current !== element) return router.setDenoise(false);
+          }).catch(() => undefined);
+        }
         if (aliveRef.current) return;
-        routerRef.current?.dispose();
+        for (const pending of routers.current.values()) {
+          void pending.then(router => router.dispose()).catch(() => undefined);
+        }
+        routers.current.clear();
         routerRef.current = null;
       });
     };
   }, [videoRef]);
+
+  const getRouter = async (element: HTMLMediaElement) => {
+    let pending = routers.current.get(element);
+    const existing = Boolean(pending);
+    if (!pending) {
+      pending = createAudioChannelRouter(element, message => {
+        if (activeElement.current === element) handleDenoiseError(message);
+      });
+      routers.current.set(element, pending);
+      void pending.catch(() => routers.current.delete(element));
+    }
+    const router = await pending;
+    if (existing) await router.resume();
+    if (aliveRef.current && activeElement.current === element) routerRef.current = router;
+    return router;
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -78,16 +126,17 @@ export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVide
     setError(null);
     try {
       if (!routerRef.current && next !== "original") {
-        routerRef.current = await createAudioChannelRouter(element, handleDenoiseError);
+        await getRouter(element);
       } else {
         await routerRef.current?.resume();
       }
       if (!aliveRef.current) {
-        routerRef.current?.dispose();
         routerRef.current = null;
         return;
       }
+      if (activeElement.current !== element) return;
       routerRef.current?.setMode(next);
+      modeRef.current = next;
       setMode(next);
       setOpen(false);
       buttonRef.current?.focus();
@@ -96,16 +145,18 @@ export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVide
     } finally {
       busyRef.current = false;
       if (aliveRef.current) setBusy(false);
+      if (aliveRef.current && activeElement.current !== element) restoreAudio.current();
     }
   };
 
   const handleDenoiseError = (message: string) => {
     if (!aliveRef.current) return;
     setDenoising(false);
+    denoiseActive.current = false;
     setDenoiseError(message);
   };
 
-  const toggleDenoise = async () => {
+  const setDenoise = async (enabled: boolean) => {
     const element = videoRef.current;
     if (!element || busyRef.current) return;
     busyRef.current = true;
@@ -113,27 +164,31 @@ export function AudioChannelControl({ videoRef }: { videoRef: RefObject<HTMLVide
     setDenoiseBusy(true);
     setDenoiseError(null);
     try {
-      if (!routerRef.current) {
-        routerRef.current = await createAudioChannelRouter(element, handleDenoiseError);
-      } else {
-        await routerRef.current.resume();
+      const router = await getRouter(element);
+      if (!aliveRef.current || activeElement.current !== element) return;
+      router.setMode(modeRef.current);
+      await router.setDenoise(enabled);
+      if (aliveRef.current && activeElement.current === element) {
+        denoiseActive.current = enabled;
+        setDenoising(enabled);
       }
-      if (!aliveRef.current) {
-        routerRef.current.dispose();
-        routerRef.current = null;
-        return;
-      }
-      await routerRef.current.setDenoise(!denoising);
-      if (aliveRef.current) setDenoising(!denoising);
     } catch {
-      handleDenoiseError("降噪暂时无法启用，已保留原声，请重试");
+      if (activeElement.current === element) handleDenoiseError("降噪暂时无法启用，已保留原声，请重试");
     } finally {
       busyRef.current = false;
       if (aliveRef.current) {
         setBusy(false);
         setDenoiseBusy(false);
       }
+      if (aliveRef.current && activeElement.current !== element) restoreAudio.current();
     }
+  };
+
+  const toggleDenoise = () => {
+    const enabled = !denoising;
+    preferredDenoise.current = enabled;
+    try { localStorage.setItem(DENOISE_KEY, String(enabled)); } catch { /* Optional preference. */ }
+    return setDenoise(enabled);
   };
 
   return (

@@ -19,7 +19,7 @@ from classcue.asr_models import (
     OPERATION_LOCK, ROOT, component_paths, delete_model, download_model, get_model,
     model_operation, selected_model_id, selected_firered_device, selected_paraformer_device,
     selected_nano_device, selected_dolphin_device, require_firered_gpu,
-    require_selectable_model,
+    require_selectable_model, model_is_downloaded,
 )
 from classcue.core import TranscriptSegment
 from classcue.asr_cpu import cpu_thread_policy, worker_creationflags
@@ -673,6 +673,7 @@ def transcribe_audio(
     should_stop: Callable[[], bool] | None = None,
     qwen_options=None,
     cache_directory: str | Path | None = None,
+    prepared_only: bool = False,
 ) -> tuple[list[TranscriptSegment], int]:
     global _loaded_key, _loaded_model, _loaded_session
     try:
@@ -686,11 +687,27 @@ def transcribe_audio(
             except ValueError as exc:
                 raise ASRSetupError(str(exc)) from exc
         try:
-            prepare_asr_model(selected.id, progress)
+            if prepared_only:
+                require_prepared_asr_model(selected.id)
+            else:
+                prepare_asr_model(selected.id, progress)
         except ProcessingCancelled:
             raise
         except Exception as exc:
             raise ASRSetupError(f"{selected.label} 准备失败：{exc}") from exc
+        if prepared_only and selected.engine in {"qwen", "firered"}:
+            device = selected_firered_device() if selected.engine == "firered" else "gpu"
+            key = (selected.id, "alignment-worker", device)
+            if _loaded_key != key:
+                unload_model()
+                _loaded_model = QwenWorker() if selected.engine == "qwen" else FireRedWorker(device=device)
+                _loaded_key = key
+            _loaded_session = _SESSION.get()
+            try:
+                return _loaded_model.transcribe(audio_path, component_paths(selected.id), progress, should_stop)
+            except BaseException as error:
+                unload_model(primary_error=error)
+                raise
         if selected.engine == "qwen":
             from classcue.qwen_resilience import QwenOptions, run_qwen
             unload_model()
@@ -764,6 +781,19 @@ def transcribe_audio(
                 unload_model(primary_error=error)
                 raise
         return _transcribe_whisper(audio_path, selected.id, progress, should_stop)
+
+
+def require_prepared_asr_model(model_id: str) -> None:
+    model = require_selectable_model(model_id)
+    ready = {
+        "qwen": runtime_is_ready,
+        "firered": firered_runtime_is_ready,
+        "paraformer": lambda: paraformer_runtime_is_ready(device=selected_paraformer_device()),
+        "dolphin": lambda: dolphin_runtime_is_ready(device=selected_dolphin_device()),
+        "nano": lambda: nano_runtime_is_ready(device=selected_nano_device()),
+    }
+    if not model_is_downloaded(model.id) or (model.engine in ready and not ready[model.engine]()):
+        raise ASRSetupError("自动对齐仅使用已准备的模型，请先在设置中准备当前 ASR 模型")
 
 
 def _transcribe_whisper(audio_path, model_id, progress, should_stop=None):

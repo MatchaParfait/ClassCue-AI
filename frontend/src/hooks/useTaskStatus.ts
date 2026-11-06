@@ -46,6 +46,7 @@ export function taskTypeLabel(job: Job) {
   return ({
     batch_video_process: job.import_only ? "批量导入" : "批量处理",
     video_process: "视频处理", video_transcribe: "重新转写",
+    secondary_view_align: "副视角自动对齐",
     question_analysis: "题目分析", question_visual: "题图复核",
     material_preprocess: "资料整理",
     asr_prepare: "模型准备", asr_download_cleanup: "下载清理",

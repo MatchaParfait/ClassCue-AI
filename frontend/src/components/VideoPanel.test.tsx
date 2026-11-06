@@ -3,7 +3,7 @@ import { waitForExit } from "../test/waitForExit";
 import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Subtitle, Video } from "../types";
+import type { SecondaryView, Subtitle, Video } from "../types";
 import { VideoPanel } from "./VideoPanel";
 import type { SearchSeek } from "../searchNavigation";
 import { ReviewTabsProvider } from "./ReviewTabs";
@@ -425,7 +425,7 @@ describe("video subtitles and player controls", () => {
 
 describe("secondary camera and primary timeline", () => {
   const secondary = { video_id: 2, filename: "camera.mp4", duration_ms: 120000, offset_ms: 5000 };
-  async function mountSecondary(view = secondary) {
+  async function mountSecondary(view: SecondaryView = secondary) {
     vi.mocked(api.getSecondaryView).mockResolvedValue(view);
     await act(async () => mount());
     loadMetadata();
@@ -435,6 +435,79 @@ describe("secondary camera and primary timeline", () => {
     act(() => button("切换到副视角").click());
     loadMetadata(120);
   }
+
+  it.each([5000, -5000])("borrows main audio on the primary clock with offset %s and syncs rate and mute", async offset => {
+    await mountSecondary({ ...secondary, offset_ms: offset, use_primary_audio: true });
+    changeCamera();
+    const element = videoRef.current!;
+    const audio = container.querySelector("audio")!;
+    Object.defineProperty(audio, "readyState", { configurable: true, value: 4 });
+    act(() => audio.dispatchEvent(new Event("loadedmetadata")));
+    expect(element.currentTime).toBe(20 + offset / 1000);
+    expect(audio.currentTime).toBe(20);
+    expect(element.muted).toBe(true);
+    expect(audio.muted).toBe(false);
+    expect(audio.getAttribute("src")).toContain("/1/stream");
+    act(() => {
+      element.playbackRate = 3;
+      element.dispatchEvent(new Event("ratechange"));
+      timelineRef.current!.seekTo(30);
+      element.dispatchEvent(new Event("seeked"));
+    });
+    expect(audio.playbackRate).toBe(3);
+    expect(audio.currentTime).toBe(30);
+    act(() => button("静音").click());
+    expect(audio.muted).toBe(true);
+    act(() => button("取消静音").click());
+    expect(audio.muted).toBe(false);
+    const slider = container.querySelector<HTMLInputElement>('[aria-label="音量"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "0");
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(audio.volume).toBe(0);
+    act(() => button("取消静音").click());
+    expect(element.volume).toBe(.5);
+    expect(audio.volume).toBe(.5);
+    act(() => button("切换到主视角").click());
+    loadMetadata();
+    expect(element.muted).toBe(false);
+    expect(audio.getAttribute("src")).toBeNull();
+  });
+
+  it("pauses borrowed audio while the picture is buffering or seeking and resumes it with the picture", async () => {
+    await mountSecondary({ ...secondary, use_primary_audio: true });
+    changeCamera();
+    const element = videoRef.current!;
+    const audio = container.querySelector("audio")!;
+    let paused = true;
+    Object.defineProperty(audio, "paused", { configurable: true, get: () => paused });
+    Object.defineProperty(audio, "readyState", { configurable: true, value: 4 });
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    Object.defineProperty(element, "readyState", { configurable: true, value: 4 });
+    const play = vi.spyOn(audio, "play").mockImplementation(async () => { paused = false; });
+    const pause = vi.spyOn(audio, "pause").mockImplementation(() => { paused = true; });
+    await act(async () => element.dispatchEvent(new Event("playing")));
+    expect(play).toHaveBeenCalledOnce();
+    act(() => element.dispatchEvent(new Event("waiting")));
+    expect(pause).toHaveBeenCalledOnce();
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(play).toHaveBeenCalledOnce();
+    await act(async () => element.dispatchEvent(new Event("playing")));
+    expect(play).toHaveBeenCalledTimes(2);
+    Object.defineProperty(element, "seeking", { configurable: true, value: true });
+    act(() => element.dispatchEvent(new Event("seeking")));
+    expect(paused).toBe(true);
+    Object.defineProperty(element, "seeking", { configurable: true, value: false });
+    element.currentTime = 35;
+    await act(async () => element.dispatchEvent(new Event("seeked")));
+    expect(audio.currentTime).toBe(30);
+    expect(paused).toBe(false);
+    Object.defineProperty(element, "paused", { configurable: true, value: true });
+    act(() => element.dispatchEvent(new Event("pause")));
+    expect(paused).toBe(true);
+  });
 
   it("switches at mapped time, preserves playback settings and keeps primary duration", async () => {
     await mountSecondary();

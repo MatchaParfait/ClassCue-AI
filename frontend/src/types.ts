@@ -62,10 +62,21 @@ export interface VideoLibraryFolder {
 }
 
 export interface SecondaryView {
+  alignment_job_id?: string | null;
+  use_primary_audio?: boolean | number;
   video_id: number;
   filename: string;
   duration_ms: number;
   offset_ms: number;
+}
+
+export interface SecondaryAlignment {
+  outcome: "applied" | "candidate" | "no_match" | "conflict" | "stale" | "undone";
+  offset_ms: number | null;
+  message: string;
+  segments_checked?: number;
+  evidence: Array<{ primary_text: string; secondary_text: string; primary_ms: number; secondary_ms: number;
+    offset_ms: number; score: number }>;
 }
 
 export interface VideoLibraryState {
@@ -363,6 +374,7 @@ export interface AiSettings {
 }
 
 export interface JobStatus {
+  alignment?: SecondaryAlignment | null;
   id: number | string;
   status: "queued" | "running" | "completed" | "failed" | "interrupted" | string;
   stage?: string;

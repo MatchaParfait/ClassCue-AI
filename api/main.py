@@ -96,6 +96,8 @@ from api.materials import router as materials_router
 from api.study_materials import router as study_materials_router
 from api.study_bookmarks import router as study_bookmarks_router
 from api.upload_io import run_upload_io
+from api.secondary_alignment import router as secondary_alignment_router
+from classcue.secondary_alignment_service import latest_alignment
 from api.dsh_bridge import router as dsh_bridge_router
 from classcue.video_library import recover_managed_rename, register_managed_video, rename_managed_video, video_filename
 from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
@@ -332,6 +334,13 @@ class SecondaryViewOffsetPayload(BaseModel):
 
 class SecondaryViewPayload(SecondaryViewOffsetPayload):
     secondary_video_id: int = Field(gt=0, le=MAX_SQLITE_INTEGER, strict=True)
+
+
+class SecondaryViewSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    offset_ms: int | None = Field(default=None, ge=-MAX_SQLITE_INTEGER, le=MAX_SQLITE_INTEGER, strict=True)
+    use_primary_audio: bool | None = Field(default=None, strict=True)
 
 
 class FolderRenamePayload(BaseModel):
@@ -579,6 +588,8 @@ class JobManager:
             "cleanup": json.loads(row["cleanup_json"]) if row["cleanup_json"] else None,
             "migration": json.loads(row["request_json"] or "{}").get("migration"),
             "model_id": json.loads(row["request_json"] or "{}").get("model_id"),
+            **({"alignment": json.loads(row["request_json"] or "{}").get("alignment", {}).get("result")}
+               if row["job_type"] == "secondary_view_align" else {}),
             "analysis_modes": options.get("analysis_modes") or ([options["analysis_mode"]] if options.get("analysis_mode") else []),
             "analysis_schemes": {key: {field: value.get(field) for field in ("id", "name", "base_mode", "revision")}
                                  for key, value in options.get("analysis_schemes", {}).items()},
@@ -790,7 +801,8 @@ class JobManager:
                             error_message="" if paused else redact_text(exc),
                             finished_at=self._timestamp(),
                         )
-                        if row and row["video_id"] is not None and row["status"] != "queued":
+                        if (row and row["video_id"] is not None and row["status"] != "queued"
+                                and row["job_type"] != "secondary_view_align"):
                             store.mark_interrupted_video_failed(int(row["video_id"]))
                 except Exception as write_error:
                     log_exception(
@@ -897,7 +909,7 @@ class JobManager:
                         message="已停止排队任务",
                         finished_at=self._timestamp(),
                     )
-                    if video_id is not None and row["status"] != "queued":
+                    if video_id is not None and row["status"] != "queued" and row["job_type"] != "secondary_view_align":
                         self.provider.get().mark_interrupted_video_failed(int(video_id))
                 finally:
                     self._futures.pop(job_id, None)
@@ -1189,6 +1201,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     api.include_router(materials_router(provider, jobs))
     api.include_router(study_materials_router(provider, jobs))
     api.include_router(study_bookmarks_router(provider))
+    api.include_router(secondary_alignment_router(provider, jobs, storage_migrating.is_set))
     api.include_router(dsh_bridge_router(provider))
     api.include_router(update_router(update_center, jobs, provider, storage_migrating, updating))
     api.state.update_center = update_center
@@ -1486,6 +1499,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                       else "该视频在处理任务或批次队列中，请完成或停止任务后修改文件名")
             if row["video_id"] is not None:
                 locked[int(row["video_id"])] = reason
+            if row["job_type"] == "secondary_view_align":
+                snapshot = json.loads(row["request_json"] or "{}").get("alignment", {}).get("snapshot", {})
+                if snapshot.get("secondary_id"):
+                    locked[int(snapshot["secondary_id"])] = reason
             if row["job_type"] != "batch_video_process":
                 continue
             try:
@@ -2581,12 +2598,21 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    def secondary_view_response(store: VideoStore, video_id: int) -> dict[str, object] | None:
+        view = store.get_secondary_view(video_id)
+        if not view:
+            return None
+        result = _row_to_dict(view)
+        latest = latest_alignment(store, video_id, view["video_id"])
+        if latest:
+            result["alignment_job_id"] = latest["id"]
+        return result
+
     @api.get("/api/videos/{video_id}/secondary-view")
     def get_secondary_view(video_id: int) -> dict[str, object] | None:
         store = provider.get()
         _video_or_404(store, video_id)
-        view = store.get_secondary_view(video_id)
-        return _row_to_dict(view) if view else None
+        return secondary_view_response(store, video_id)
 
     @api.put("/api/videos/{video_id}/secondary-view")
     def put_secondary_view(video_id: int, payload: SecondaryViewPayload) -> dict[str, object]:
@@ -2602,18 +2628,18 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 store.set_secondary_view(video_id, payload.secondary_video_id, payload.offset_ms)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return _row_to_dict(store.get_secondary_view(video_id))
+            return secondary_view_response(store, video_id)
 
     @api.patch("/api/videos/{video_id}/secondary-view")
-    def patch_secondary_view(video_id: int, payload: SecondaryViewOffsetPayload) -> dict[str, object]:
+    def patch_secondary_view(video_id: int, payload: SecondaryViewSettingsPayload) -> dict[str, object]:
         with jobs._lock:
             store = provider.get()
             _video_or_404(store, video_id)
             try:
-                store.set_secondary_view_offset(video_id, payload.offset_ms)
+                store.set_secondary_view_offset(video_id, payload.offset_ms, payload.use_primary_audio)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            return _row_to_dict(store.get_secondary_view(video_id))
+            return secondary_view_response(store, video_id)
 
     @api.delete("/api/videos/{video_id}/secondary-view")
     def delete_secondary_view(video_id: int) -> dict[str, bool]:

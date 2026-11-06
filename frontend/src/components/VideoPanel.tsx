@@ -77,6 +77,8 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const lastStudySave = useRef(0);
   const [secondary, setSecondary] = useState<SecondaryView | null>(null);
   const [secondaryActive, setSecondaryActive] = useState(false);
+  const primaryAudioRef = useRef<HTMLAudioElement>(null);
+  const usePrimaryAudio = secondaryActive && Boolean(secondary?.use_primary_audio);
   const [switching, setSwitching] = useState(false);
   const mainDuration = useRef(0);
   const secondaryDuration = useRef(0);
@@ -121,6 +123,8 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const audioSettings = useRef({ volume, muted });
+  audioSettings.current = { volume, muted };
   const [playbackRate, setPlaybackRate] = useState(1);
   const [longPressing, setLongPressing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -154,7 +158,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     }
     pendingSource.current = pendingSource.current
       ? { ...pendingSource.current, time, resume }
-      : { time, resume, rate: element.playbackRate, volume: element.volume, muted: element.muted };
+      : { time, resume, rate: element.playbackRate, volume: element.volume, muted: usePrimaryAudio ? muted : element.muted };
     // Source changes can emit pause/timeupdate with an empty timeline.
     element.pause();
     mapping.current = { active, offset };
@@ -221,6 +225,63 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     secondaryDuration.current = view?.duration_ms ? view.duration_ms / 1000 : 0;
     setSecondary(view);
   };
+
+  useEffect(() => {
+    const audio = primaryAudioRef.current;
+    if (audio) { audio.volume = volume; audio.muted = muted; }
+  }, [volume, muted]);
+
+  useEffect(() => {
+    const element = videoRef.current;
+    const audio = primaryAudioRef.current;
+    if (!element || !audio) return;
+    element.muted = usePrimaryAudio || audioSettings.current.muted;
+    if (!usePrimaryAudio) return;
+    let disposed = false;
+    let frame = 0;
+    let starting = false;
+    let failed = false;
+    let buffering = false;
+    const sync = () => {
+      if (disposed) return;
+      const settings = audioSettings.current;
+      if (audio.volume !== settings.volume) audio.volume = settings.volume;
+      if (audio.muted !== settings.muted) audio.muted = settings.muted;
+      if (audio.playbackRate !== element.playbackRate) audio.playbackRate = element.playbackRate;
+      const time = getPrimaryTime();
+      if (audio.readyState >= 1 && Math.abs(audio.currentTime - time) > .12) audio.currentTime = time;
+      if (buffering || element.paused || element.ended || element.seeking || element.readyState < 3 || pendingSource.current) {
+        if (!audio.paused) audio.pause();
+      } else if (audio.paused && !starting && !failed) {
+        starting = true;
+        void audio.play().catch(() => {
+          failed = true;
+          if (!disposed) setPlaybackError("主视频音频暂时无法播放，请点击播放重试。");
+        }).finally(() => { starting = false; });
+      }
+    };
+    const stop = () => { buffering = true; audio.pause(); };
+    const resume = () => { buffering = false; failed = false; sync(); };
+    const events = ["play", "playing", "pause", "seeking", "seeked", "timeupdate", "ratechange", "ended"];
+    events.forEach(name => element.addEventListener(name, sync));
+    element.addEventListener("waiting", stop);
+    element.addEventListener("playing", resume);
+    element.addEventListener("play", resume);
+    audio.addEventListener("loadedmetadata", sync);
+    const tick = () => { sync(); frame = requestAnimationFrame(tick); };
+    sync();
+    frame = requestAnimationFrame(tick);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      events.forEach(name => element.removeEventListener(name, sync));
+      element.removeEventListener("waiting", stop);
+      element.removeEventListener("playing", resume);
+      element.removeEventListener("play", resume);
+      audio.removeEventListener("loadedmetadata", sync);
+      audio.pause();
+    };
+  }, [usePrimaryAudio, switching, videoRef]);
 
   useEffect(() => {
     restoredRef.current = false;
@@ -347,10 +408,10 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const toggleMute = () => {
     const element = videoRef.current;
     if (!element) return;
-    const silent = element.muted || element.volume === 0;
+    const silent = usePrimaryAudio ? muted || volume === 0 : element.muted || element.volume === 0;
     if (element.volume === 0) element.volume = 0.5;
-    element.muted = !silent;
-    setMuted(element.muted);
+    element.muted = usePrimaryAudio || !silent;
+    setMuted(!silent);
     setVolume(element.volume);
   };
 
@@ -549,6 +610,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
           ref={videoRef}
           className={`video-player${longPressing ? " is-long-pressing" : ""}`}
           playsInline
+          muted={usePrimaryAudio || muted}
           autoPlay={autoPlay && !restoredRef.current && !switching}
           crossOrigin="anonymous"
           preload="metadata"
@@ -572,7 +634,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
               }
               element.playbackRate = pending.rate;
               element.volume = pending.volume;
-              element.muted = pending.muted;
+              element.muted = usePrimaryAudio || pending.muted;
               element.currentTime = Math.max(0, Math.min(seconds, target));
               pendingSource.current = null;
               setSwitching(false);
@@ -627,7 +689,10 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
               setPlaybackError("副视角已结束，已切回主视角继续播放。");
             } else { setPlaying(false); saveProgress(event.currentTarget); }
           }}
-          onVolumeChange={(event) => { setVolume(event.currentTarget.volume); setMuted(event.currentTarget.muted); }}
+          onVolumeChange={(event) => {
+            setVolume(event.currentTarget.volume);
+            if (!usePrimaryAudio) setMuted(event.currentTarget.muted);
+          }}
           onRateChange={(event) => setPlaybackRate(event.currentTarget.playbackRate)}
           onError={() => {
             if (mapping.current.active) {
@@ -654,6 +719,11 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
         >
           你的浏览器不支持视频播放。
         </video>
+        <audio ref={primaryAudioRef} hidden crossOrigin="anonymous" preload="metadata"
+          src={usePrimaryAudio ? getStreamUrl(videoId, demo) : undefined}
+          onError={() => {
+            if (usePrimaryAudio) setPlaybackError("主视频音频加载失败，请检查视频文件或连接。");
+          }} />
         {longPressing && <div className="video-long-press-indicator" role="status" aria-live="polite">3x</div>}
         {subtitles.length > 0 && (
           <DraggableSubtitle key={`${progressKey}:${captionReset}`} text={preferences.enabled ? activeSubtitle?.text ?? "" : ""} fontSize={preferences.fontSize} />
@@ -695,7 +765,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
                 if (!videoRef.current) return;
                 const next = Number(event.target.value);
                 videoRef.current.volume = next;
-                videoRef.current.muted = next === 0;
+                videoRef.current.muted = usePrimaryAudio || next === 0;
                 setVolume(next);
                 setMuted(next === 0);
               }}
@@ -705,7 +775,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
               <span>{formatTime(currentTime * 1000)}</span><span className="player-time-separator"> / </span><span>{formatTime(duration * 1000)}</span>
             </span>
             <div className="player-toolbar-spacer" />
-            <AudioChannelControl videoRef={videoRef} />
+            <AudioChannelControl videoRef={usePrimaryAudio ? primaryAudioRef : videoRef} />
             <button
               className={`player-control${preferences.enabled && subtitles.length ? " is-active" : ""}`}
               type="button"

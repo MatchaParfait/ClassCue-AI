@@ -60,6 +60,21 @@ def test_secondary_view_rejects_self_missing_and_invalid_offsets(secondary_libra
     assert client.get("/api/videos/999/secondary-view").status_code == 404
 
 
+def test_secondary_audio_choice_persists_independently_of_offset(secondary_library):
+    client, store, ids = secondary_library
+    endpoint = f"/api/videos/{ids[0]}/secondary-view"
+    assert client.put(endpoint, json={"secondary_video_id": ids[1], "offset_ms": 5000}).status_code == 200
+    result = client.patch(endpoint, json={"use_primary_audio": True})
+    assert result.status_code == 200
+    assert result.json()["offset_ms"] == 5000
+    assert result.json()["use_primary_audio"] == 1
+    assert VideoStore(store.path).get_secondary_view(ids[0])["use_primary_audio"] == 1
+    assert client.patch(endpoint, json={"offset_ms": -2000}).json()["use_primary_audio"] == 1
+    for invalid in ("true", 1):
+        assert client.patch(endpoint, json={"use_primary_audio": invalid}).status_code == 422
+    assert client.patch(endpoint, json={"use_primary_audio": False}).json()["offset_ms"] == -2000
+
+
 def test_remove_secondary_view_preserves_both_recordings_and_resets_new_offset(secondary_library):
     client, store, ids = secondary_library
     endpoint = f"/api/videos/{ids[0]}/secondary-view"
@@ -77,10 +92,12 @@ def test_recycle_and_undo_restore_secondary_association(secondary_library, tmp_p
     client, store, ids = secondary_library
     endpoint = f"/api/videos/{ids[0]}/secondary-view"
     client.put(endpoint, json={"secondary_video_id": ids[1], "offset_ms": 1234})
+    client.patch(endpoint, json={"use_primary_audio": True})
     store.trash_video(ids[deleted_index], tmp_path / "videos" / ".recycle_bin")
     assert store.get_secondary_view(ids[0]) is None
     store.undo_latest_recycle(tmp_path / "videos" / ".recycle_bin")
     assert client.get(endpoint).json()["offset_ms"] == 1234
+    assert client.get(endpoint).json()["use_primary_audio"] == 1
 
 
 @pytest.fixture

@@ -248,6 +248,9 @@ class VideoStore:
             )
             self._migrate_video_metadata(connection)
             slide_columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_slides)")}
+            secondary_columns = {row["name"] for row in connection.execute("PRAGMA table_info(video_secondary_views)")}
+            if "use_primary_audio" not in secondary_columns:
+                connection.execute("ALTER TABLE video_secondary_views ADD COLUMN use_primary_audio INTEGER NOT NULL DEFAULT 0")
             for column, definition in (
                 ("visible_from_ms", "INTEGER"),
                 ("visible_until_ms", "INTEGER"),
@@ -899,7 +902,7 @@ class VideoStore:
     def get_secondary_view(self, video_id: int) -> sqlite3.Row | None:
         with self.connect() as connection:
             return connection.execute(
-                "SELECT s.secondary_video_id AS video_id, s.offset_ms, v.filename, v.duration_ms "
+                "SELECT s.secondary_video_id AS video_id, s.offset_ms, s.use_primary_audio, v.filename, v.duration_ms "
                 "FROM video_secondary_views s JOIN videos v ON v.id = s.secondary_video_id "
                 "WHERE s.video_id = ?", (video_id,),
             ).fetchone()
@@ -914,10 +917,12 @@ class VideoStore:
                 "offset_ms = excluded.offset_ms", (video_id, secondary_video_id, offset_ms),
             )
 
-    def set_secondary_view_offset(self, video_id: int, offset_ms: int) -> None:
+    def set_secondary_view_offset(self, video_id: int, offset_ms: int | None, use_primary_audio: bool | None = None) -> None:
         with self.connect() as connection:
             if not connection.execute(
-                "UPDATE video_secondary_views SET offset_ms = ? WHERE video_id = ?", (offset_ms, video_id),
+                "UPDATE video_secondary_views SET offset_ms = COALESCE(?, offset_ms), "
+                "use_primary_audio = COALESCE(?, use_primary_audio) WHERE video_id = ?",
+                (offset_ms, use_primary_audio, video_id),
             ).rowcount:
                 raise ValueError("尚未导入副视角视频")
 
@@ -1431,10 +1436,10 @@ class VideoStore:
                 # Restore links only when both recordings still exist, preserving later choices.
                 for view in related.get("video_secondary_views", []):
                     connection.execute(
-                        "INSERT OR IGNORE INTO video_secondary_views(video_id, secondary_video_id, offset_ms) "
-                        "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM videos WHERE id = ?) "
+                        "INSERT OR IGNORE INTO video_secondary_views(video_id, secondary_video_id, offset_ms, use_primary_audio) "
+                        "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM videos WHERE id = ?) "
                         "AND EXISTS (SELECT 1 FROM videos WHERE id = ?)",
-                        (view["video_id"], view["secondary_video_id"], view["offset_ms"],
+                        (view["video_id"], view["secondary_video_id"], view["offset_ms"], view.get("use_primary_audio", 0),
                          view["video_id"], view["secondary_video_id"]),
                     )
                 # Undo recreates these rows and their files; keeping the queued
@@ -2748,9 +2753,23 @@ class VideoStore:
 
     def mark_jobs_interrupted(self) -> int:
         with self.connect() as connection:
+            for alignment in connection.execute(
+                "SELECT id, request_json FROM processing_jobs WHERE job_type = 'secondary_view_align' "
+                "AND status IN ('queued', 'running')"
+            ).fetchall():
+                try:
+                    result = json.loads(alignment["request_json"] or "{}").get("alignment", {}).get("result", {})
+                except (ValueError, AttributeError):
+                    continue
+                if result.get("outcome") == "applied":
+                    connection.execute(
+                        "UPDATE processing_jobs SET status = 'completed', stage = 'completed', progress = 1, "
+                        "message = '已自动对齐，可撤销', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (alignment["id"],),
+                    )
             rows = connection.execute(
                 "SELECT video_id FROM processing_jobs WHERE status IN ('queued', 'running') "
-                "AND video_id IS NOT NULL"
+                "AND video_id IS NOT NULL AND job_type != 'secondary_view_align'"
             ).fetchall()
             batch_rows = connection.execute(
                 "SELECT request_json FROM processing_jobs "

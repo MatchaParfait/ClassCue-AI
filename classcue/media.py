@@ -47,3 +47,44 @@ def extract_audio(video_path: str | Path, audio_path: str | Path, *, should_stop
                 for resampled in frames:
                     wav_file.writeframes(resampled.to_ndarray().tobytes())
     return source_duration
+
+
+def read_audio_window(video_path, start: float, end: float, *, decoded_budget: float, should_stop=None):
+    """Read a bounded mono window, preserving media time and audio-track gaps."""
+    import av
+    import numpy as np
+    from classcue.processing_control import ProcessingCancelled
+
+    samples = np.zeros(max(0, round((end - start) * 16000)), dtype=np.float32)
+    charged = 0.
+    exhausted = False
+    with av.open(str(video_path)) as container:
+        stream = next(iter(container.streams.audio), None)
+        if stream is None:
+            raise ValueError("副视频没有可读取的音轨")
+        origin = float(container.start_time or 0) / av.time_base
+        container.seek(max(0, int((start + origin) / stream.time_base)), stream=stream, backward=True)
+        resampler = av.AudioResampler(format="fltp", layout="mono", rate=16000)
+        for frame in container.decode(stream):
+            if should_stop and should_stop():
+                raise ProcessingCancelled("已停止自动对齐")
+            charged += frame.samples / frame.sample_rate
+            if charged > decoded_budget:
+                exhausted = True
+                break
+            if frame.pts is None:
+                raise ValueError("副视频音轨缺少可靠时间戳")
+            if float(frame.pts * frame.time_base) - origin >= end:
+                break
+            for converted in resampler.resample(frame):
+                if converted.pts is None:
+                    raise ValueError("副视频音轨缺少可靠时间戳")
+                absolute = float(converted.pts * converted.time_base) - origin
+                left = round((absolute - start) * 16000)
+                data = converted.to_ndarray().reshape(-1)
+                source = max(0, -left)
+                target = max(0, left)
+                count = min(len(data) - source, len(samples) - target)
+                if count > 0:
+                    samples[target:target + count] = data[source:source + count]
+    return samples, charged, exhausted

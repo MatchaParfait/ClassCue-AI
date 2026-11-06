@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeftRight, Check, LoaderCircle, SlidersHorizontal, Trash2 } from "lucide-react";
-import { createPicker, getSecondaryView, importSecondaryView, pollPicker, removeSecondaryView, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
+import { ArrowLeftRight, Check, LoaderCircle, SlidersHorizontal, Trash2, Undo2 } from "lucide-react";
+import { createPicker, getSecondaryView, importSecondaryView, pollPicker, removeSecondaryView, setSecondaryViewAudio, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import type { SecondaryView } from "../types";
 import { AnimatePresence, AnimatedPopup } from "./Motion";
+import { SecondaryAlignmentControl, useSecondaryAlignment } from "./SecondaryAlignmentControl";
 
 interface Props {
   videoId: number;
@@ -32,6 +33,7 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
   const [open, setOpen] = useState(false);
   const [offset, setOffset] = useState("0");
   const [error, setError] = useState<string | null>(null);
+  const alignment = useSecondaryAlignment({ videoId, secondary, onChange });
 
   useEffect(() => {
     alive.current = true;
@@ -127,9 +129,26 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
               disabled={busy || switching} onChange={event => setOffset(event.target.value)} />
             <button className="secondary-view-button secondary-view-save" type="submit" aria-label="保存时间偏移" title="保存时间偏移"
               disabled={!validOffset || busy || switching || offsetMs === secondary.offset_ms}><Check size={15} /></button>
+            {offsetMs !== secondary.offset_ms && <button type="button" className="secondary-view-button secondary-view-save"
+              aria-label="恢复未保存的时间偏移" title="恢复未保存的时间偏移" disabled={busy || switching}
+              onClick={() => setOffset(String(secondary.offset_ms / 1000))}><Undo2 size={14} /></button>}
           </div>
         </form>
         <span className="secondary-view-mapping">副视角时间 = 主视频时间 {secondary.offset_ms < 0 ? "-" : "+"} {Math.abs(secondary.offset_ms) / 1000} 秒</span>
+        <SecondaryAlignmentControl alignment={alignment}
+          disabled={demo || busy || switching || loading || !validOffset || offsetMs !== secondary.offset_ms}
+        />
+        <label className="secondary-view-audio-option">
+          <input type="checkbox" checked={Boolean(secondary.use_primary_audio)} disabled={busy || switching}
+            onChange={event => {
+              const enabled = event.target.checked;
+              void run(async () => {
+                const view = await setSecondaryViewAudio(videoId, enabled);
+                if (alive.current && videoIdRef.current === videoId) onChangeRef.current(view);
+              });
+            }} />
+          <span>使用主视频音频</span>
+        </label>
         <button className="secondary-view-remove" type="button" aria-label="删除副视角" title="删除副视角关联，保留视频文件"
           disabled={busy || switching} onClick={() => void run(async () => {
             await removeSecondaryView(videoId);
