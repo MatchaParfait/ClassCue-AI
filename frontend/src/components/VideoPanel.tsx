@@ -129,6 +129,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const [longPressing, setLongPressing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [primaryAudioError, setPrimaryAudioError] = useState<string | null>(null);
   const [captionReset, setCaptionReset] = useState(0);
   const longPressTimer = useRef<number | null>(null);
   const longPressPointerId = useRef<number | null>(null);
@@ -141,6 +142,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const keyboardNavigation = useRef(true);
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
+  const visiblePlaybackError = playbackError ?? (usePrimaryAudio ? primaryAudioError : null);
 
   const publishTime = (time: number) => {
     lastPrimaryTime.current = time;
@@ -236,12 +238,22 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     const audio = primaryAudioRef.current;
     if (!element || !audio) return;
     element.muted = usePrimaryAudio || audioSettings.current.muted;
+    setPrimaryAudioError(null);
     if (!usePrimaryAudio) return;
     let disposed = false;
     let starting = false;
     let failed = false;
     let buffering = false;
     let lastSeek = -Infinity;
+    let failureTimer: number | undefined;
+    const stopped = () => buffering || element.paused || element.ended || element.seeking
+      || element.readyState < 3 || Boolean(pendingSource.current);
+    const recovered = () => {
+      if (disposed) return;
+      failed = false;
+      window.clearTimeout(failureTimer);
+      setPrimaryAudioError(null);
+    };
     const sync = (align = false) => {
       if (disposed) return;
       const settings = audioSettings.current;
@@ -251,29 +263,37 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       const time = getPrimaryTime();
       const drift = time - audio.currentTime;
       const now = performance.now();
-      const stopped = buffering || element.paused || element.ended || element.seeking
-        || element.readyState < 3 || Boolean(pendingSource.current);
+      const isStopped = stopped();
       // Small clock differences need gradual correction, not repeated decoder seeks.
       let nextRate = rate;
       if (audio.readyState >= 1 && !pendingSource.current) {
-        if (align || (!stopped && !audio.seeking && Math.abs(drift) / rate > .5 && now - lastSeek >= 1500)) {
+        if (align || (!isStopped && !audio.seeking && Math.abs(drift) / rate > .5 && now - lastSeek >= 1500)) {
           if (Math.abs(drift) > .02) {
             audio.currentTime = time;
             lastSeek = now;
           }
-        } else if (!stopped && !audio.paused && !audio.seeking && now - lastSeek >= 500
+        } else if (!isStopped && !audio.paused && !audio.seeking && now - lastSeek >= 500
           && Math.abs(drift) / rate > .06) {
           nextRate = rate * (drift > 0 ? 1.02 : .98);
         }
       }
       if (audio.playbackRate !== nextRate) audio.playbackRate = nextRate;
-      if (stopped) {
+      if (isStopped) {
         if (!audio.paused) audio.pause();
       } else if (audio.paused && !starting && !failed) {
         starting = true;
-        void audio.play().catch(() => {
+        void audio.play().then(recovered).catch((error: unknown) => {
+          // Pausing, seeking or replacing the source can interrupt an older play request.
+          if (disposed || !audio.paused || stopped()
+            || (error instanceof DOMException && error.name === "AbortError")) return;
           failed = true;
-          if (!disposed) setPlaybackError("主视频音频暂时无法播放，请点击播放重试。");
+          window.clearTimeout(failureTimer);
+          failureTimer = window.setTimeout(() => {
+            if (disposed) return;
+            if (!audio.paused) recovered();
+            else if (stopped()) failed = false;
+            else setPrimaryAudioError("主视频音频暂时无法播放，请点击播放重试。");
+          }, 1000);
         }).finally(() => { starting = false; });
       }
     };
@@ -288,17 +308,20 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     element.addEventListener("playing", resume);
     element.addEventListener("play", resume);
     audio.addEventListener("loadedmetadata", align);
+    audio.addEventListener("playing", recovered);
     sync(true);
     const timer = window.setInterval(update, 250);
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      window.clearTimeout(failureTimer);
       events.forEach(name => element.removeEventListener(name, update));
       element.removeEventListener("seeked", align);
       element.removeEventListener("waiting", stop);
       element.removeEventListener("playing", resume);
       element.removeEventListener("play", resume);
       audio.removeEventListener("loadedmetadata", align);
+      audio.removeEventListener("playing", recovered);
       audio.pause();
     };
   }, [usePrimaryAudio, switching, videoRef]);
@@ -742,13 +765,13 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
         <audio ref={primaryAudioRef} hidden crossOrigin="anonymous" preload="metadata"
           src={usePrimaryAudio ? getStreamUrl(videoId, demo) : undefined}
           onError={() => {
-            if (usePrimaryAudio) setPlaybackError("主视频音频加载失败，请检查视频文件或连接。");
+            if (usePrimaryAudio) setPrimaryAudioError("主视频音频加载失败，请检查视频文件或连接。");
           }} />
         {longPressing && <div className="video-long-press-indicator" role="status" aria-live="polite">3x</div>}
         {subtitles.length > 0 && (
           <DraggableSubtitle key={`${progressKey}:${captionReset}`} text={preferences.enabled ? activeSubtitle?.text ?? "" : ""} fontSize={preferences.fontSize} />
         )}
-        {playbackError && <div className="video-playback-error" role="status">{playbackError}</div>}
+        {visiblePlaybackError && <div className="video-playback-error" role="status">{visiblePlaybackError}</div>}
         <div className="player-controls" onClick={event => {
           const button = (event.target as Element).closest(".player-control");
           if (event.detail > 0 && button && !button.hasAttribute("aria-expanded")

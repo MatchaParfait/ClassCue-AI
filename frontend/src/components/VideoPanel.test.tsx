@@ -63,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -507,6 +508,64 @@ describe("secondary camera and primary timeline", () => {
     Object.defineProperty(element, "paused", { configurable: true, value: true });
     act(() => element.dispatchEvent(new Event("pause")));
     expect(paused).toBe(true);
+  });
+
+  async function prepareBorrowedAudioFailure(error: Error) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    await mountSecondary({ ...secondary, use_primary_audio: true });
+    changeCamera();
+    const element = videoRef.current!;
+    const audio = container.querySelector("audio")!;
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    Object.defineProperty(element, "readyState", { configurable: true, value: 4 });
+    const play = vi.spyOn(audio, "play").mockRejectedValue(error);
+    await act(async () => element.dispatchEvent(new Event("playing")));
+    return { element, audio, play };
+  }
+
+  it("retries interrupted audio play requests without showing a persistent error", async () => {
+    const { audio, play, element } = await prepareBorrowedAudioFailure(new DOMException("Interrupted", "AbortError"));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+    play.mockImplementation(async () => {
+      Object.defineProperty(audio, "paused", { configurable: true, value: false });
+      audio.dispatchEvent(new Event("playing"));
+    });
+    // The next regular sync retries automatically, without a new user play action.
+    await act(async () => {
+      element.dispatchEvent(new Event("timeupdate"));
+      vi.advanceTimersByTime(1500);
+    });
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+  });
+
+  it("suppresses brief audio failures and clears a reported failure when audio recovers", async () => {
+    const { audio, element } = await prepareBorrowedAudioFailure(new DOMException("Blocked", "NotAllowedError"));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(container.querySelector(".video-playback-error")?.textContent).toContain("主视频音频暂时无法播放");
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    act(() => audio.dispatchEvent(new Event("playing")));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+    act(() => audio.dispatchEvent(new Event("error")));
+    expect(container.querySelector(".video-playback-error")?.textContent).toContain("主视频音频加载失败");
+    act(() => audio.dispatchEvent(new Event("playing")));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+    Object.defineProperty(audio, "paused", { configurable: true, value: true });
+    await act(async () => element.dispatchEvent(new Event("playing")));
+    act(() => button("切换到主视角").click());
+    loadMetadata();
+    act(() => vi.advanceTimersByTime(1500));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
+  });
+
+  it("does not report an audio failure that recovers during the grace period", async () => {
+    const { audio } = await prepareBorrowedAudioFailure(new Error("Temporary failure"));
+    act(() => vi.advanceTimersByTime(500));
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    act(() => audio.dispatchEvent(new Event("playing")));
+    act(() => vi.advanceTimersByTime(1500));
+    expect(container.querySelector(".video-playback-error")).toBeNull();
   });
 
   it.each([1, 3])("corrects small borrowed-audio drift without repeated seeks at %sx", async rate => {
