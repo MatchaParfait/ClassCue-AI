@@ -131,7 +131,10 @@ export function StudyCoursesPage({ active = true, scope = "default", libraryId =
       {!courses.data?.length && !legacy.data?.length && <div className="study-empty"><FolderPlus size={32} /><span>暂无课程资料夹</span></div>}
     </div>}
     {course && <div className="study-course-reader" hidden={tab !== "documents"}>
-      <StudyMaterialsPage key={`${scope}:${courseId}`} scope={scope} courseId={courseId} active={active && tab === "documents"} />
+      <StudyMaterialsPage key={`${scope}:${courseId}`} scope={scope} courseId={courseId} libraryId={libraryId}
+        requestedDocumentId={params.get("document") || undefined}
+        onDocumentChange={id => navigateWithin({ course: courseId, document: id })}
+        active={active && tab === "documents"} />
     </div>}
     {course && tab === "video" && <div className="study-course-videos">
       <aside aria-label="课程视频例题">{examples.isPending && <p role="status">正在读取例题…</p>}

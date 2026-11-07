@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from "react-router-do
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ReviewTabs, ReviewTabsProvider, useReviewTabs } from "./ReviewTabs";
 import type { Video } from "../types";
+import type { StudyDocument } from "../api/studyMaterials";
 
 let container: HTMLDivElement, root: Root;
 let router: ReturnType<typeof createMemoryRouter>;
@@ -24,6 +25,8 @@ function Fixture() {
     <button onClick={() => tabs.setLibrary("library-b")}>Library B</button>
     <button onClick={() => tabs.setLibrary("library-a")}>Library A</button>
     <button onClick={() => tabs.register(video(1, "library-b", "Other library"))}>Open B</button>
+    <button onClick={() => tabs.registerDocument({ id: "1", name: "练习.md", deleted: false } as StudyDocument, "library-a", "course")}>Open document</button>
+    <button onClick={() => tabs.registerDocument({ id: "1", name: "新练习.md", deleted: false } as StudyDocument, "library-a", "course")}>Rename document</button>
   </>;
 }
 beforeEach(async () => {
@@ -118,4 +121,28 @@ it("moves keyboard focus without switching until activated, and Delete closes on
   await act(async () => links()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
   expect(links().map(link => link.textContent)).toEqual(["Lesson 2"]);
   expect(router.state.location.pathname).toBe("/review/2");
+});
+
+it("mixes documents with videos without ID collisions and updates document titles in place", async () => {
+  await click(button("Open 1")); await click(button("Open document")); await click(button("Open 2"));
+  await click(button("Open document")); await click(button("Rename document"));
+  expect(links().map(link => link.textContent)).toEqual(["Lesson 1", "新练习.md", "Lesson 2"]);
+  expect(links()[1].querySelector(".lucide-file-text")).not.toBeNull();
+  await click(links()[1]);
+  expect(router.state.location.pathname).toBe("/study-materials");
+  expect(new URLSearchParams(router.state.location.search).get("document")).toBe("1");
+  expect(links()[1].getAttribute("aria-current")).toBe("page");
+  await click(button("关闭资料标签：新练习.md"));
+  expect(router.state.location.pathname).toBe("/review/2");
+  expect(links().map(link => link.textContent)).toEqual(["Lesson 1", "Lesson 2"]);
+});
+
+it("isolates document tabs by library and does not mark the video-question view as a document", async () => {
+  await click(button("Open document"));
+  await go("/study-materials?course=course&document=1&tab=video");
+  expect(links()[0].getAttribute("aria-current")).toBeNull();
+  await click(button("Library B"));
+  expect(links()).toHaveLength(0);
+  await click(button("Library A"));
+  expect(links().map(link => link.textContent)).toEqual(["练习.md"]);
 });

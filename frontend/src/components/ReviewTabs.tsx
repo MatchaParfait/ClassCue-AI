@@ -1,39 +1,53 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Library, Play, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Library, Play, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { Video } from "../types";
+import type { StudyDocument } from "../api/studyMaterials";
+import { useUnsavedLeave } from "./UnsavedChanges";
 
-type OpenVideo = { id: number; title: string };
+type OpenTab = { key: string; kind: "video" | "document"; title: string; href: string };
 type ReviewTabsContextValue = {
-  tabs: OpenVideo[];
+  tabs: OpenTab[];
   register: (video: Video) => void;
+  registerDocument: (document: StudyDocument, libraryId: string, courseId: string) => void;
   setLibrary: (libraryId: string) => void;
-  remove: (id: number) => void;
+  remove: (key: string) => void;
   positions: Map<string, number>;
 };
 const ReviewTabsContext = createContext<ReviewTabsContextValue | null>(null);
 
 export function ReviewTabsProvider({ children }: { children: ReactNode }) {
   const [library, setLibrary] = useState("");
-  const [libraries, setLibraries] = useState<Record<string, OpenVideo[]>>({});
+  const [libraries, setLibraries] = useState<Record<string, OpenTab[]>>({});
   const positions = useRef(new Map<string, number>());
-  const register = useCallback((video: Video) => {
-    if (!video.library_id) return;
-    const scope = video.library_id;
+  const registerTab = useCallback((scope: string, tab: OpenTab) => {
+    if (!scope) return;
     setLibrary(scope);
     setLibraries(current => {
       const tabs = current[scope] ?? [];
-      const previous = tabs.find(tab => tab.id === video.id);
-      if (previous?.title === video.display_name) return current;
+      const previous = tabs.find(item => item.key === tab.key);
+      if (previous?.title === tab.title && previous.href === tab.href) return current;
       return { ...current, [scope]: previous
-        ? tabs.map(tab => tab.id === video.id ? { ...tab, title: video.display_name } : tab)
-        : [...tabs, { id: video.id, title: video.display_name }] };
+        ? tabs.map(item => item.key === tab.key ? tab : item) : [...tabs, tab] };
     });
   }, []);
-  const remove = useCallback((id: number) => {
-    setLibraries(current => ({ ...current, [library]: (current[library] ?? []).filter(tab => tab.id !== id) }));
+  const register = useCallback((video: Video) => {
+    if (!video.library_id) return;
+    registerTab(video.library_id, {
+      key: `video:${video.id}`, kind: "video", title: video.display_name, href: `/review/${video.id}`,
+    });
+  }, [registerTab]);
+  const registerDocument = useCallback((document: StudyDocument, libraryId: string, courseId: string) => {
+    if (document.deleted) return;
+    const query = new URLSearchParams({ course: courseId, document: document.id });
+    registerTab(libraryId, {
+      key: `document:${document.id}`, kind: "document", title: document.name, href: `/study-materials?${query}`,
+    });
+  }, [registerTab]);
+  const remove = useCallback((key: string) => {
+    setLibraries(current => ({ ...current, [library]: (current[library] ?? []).filter(tab => tab.key !== key) }));
   }, [library]);
-  return <ReviewTabsContext.Provider value={{ tabs: libraries[library] ?? [], register, setLibrary, remove, positions: positions.current }}>
+  return <ReviewTabsContext.Provider value={{ tabs: libraries[library] ?? [], register, registerDocument, setLibrary, remove, positions: positions.current }}>
     {children}
   </ReviewTabsContext.Provider>;
 }
@@ -46,11 +60,16 @@ export function ReviewTabs() {
   const context = useReviewTabs();
   const location = useLocation();
   const navigate = useNavigate();
+  const leave = useUnsavedLeave();
   const list = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ left: false, right: false });
   const tabs = context?.tabs ?? [];
   const match = /^\/review\/(\d+)$/.exec(location.pathname);
-  const activeId = match ? Number(match[1]) : null;
+  const params = new URLSearchParams(location.search);
+  const activeKey = match ? `video:${Number(match[1])}`
+    : location.pathname === "/study-materials" && params.get("document") && params.get("tab") !== "video"
+      ? tabs.find(tab => tab.key === `document:${params.get("document")}`
+        && new URLSearchParams(tab.href.split("?")[1]).get("course") === params.get("course"))?.key : null;
   const libraryActive = location.pathname === "/" || location.pathname.startsWith("/library/folder/");
 
   useEffect(() => {
@@ -72,26 +91,31 @@ export function ReviewTabs() {
     observer?.observe(element);
     element.addEventListener("scroll", update, { passive: true });
     return () => { observer?.disconnect(); element.removeEventListener("scroll", update); };
-  }, [activeId, tabs]);
+  }, [activeKey, tabs]);
 
   if (!context || !tabs.length) return null;
-  const close = (id: number, focus: boolean) => {
-    const index = tabs.findIndex(tab => tab.id === id);
+  const close = (key: string, focus: boolean) => {
+    const index = tabs.findIndex(tab => tab.key === key);
     const next = tabs[index + 1] ?? tabs[index - 1];
-    context.remove(id);
-    if (id === activeId) navigate(next ? `/review/${next.id}` : "/", { replace: true });
-    if (focus) {
-      const targetId = id === activeId ? next?.id : activeId ?? next?.id;
-      window.requestAnimationFrame(() => {
-        const target = list.current?.querySelector<HTMLAnchorElement>(`a[href="/review/${targetId}"]`)
-          ?? document.querySelector<HTMLAnchorElement>('.review-tabs-library, .workbench-brand');
-        target?.focus({ preventScroll: true });
-      });
-    }
+    const finish = () => {
+      context.remove(key);
+      if (key === activeKey) navigate(next?.href ?? "/", { replace: true });
+      if (focus) {
+        const targetKey = key === activeKey ? next?.key : activeKey ?? next?.key;
+        window.requestAnimationFrame(() => {
+          const target = [...(list.current?.querySelectorAll<HTMLAnchorElement>(".review-tab-link") ?? [])]
+            .find(link => link.dataset.tabKey === targetKey)
+            ?? document.querySelector<HTMLAnchorElement>('.review-tabs-library, .workbench-brand');
+          target?.focus({ preventScroll: true });
+        });
+      }
+    };
+    if (key === activeKey) leave(finish);
+    else finish();
   };
-  const keydown = (event: KeyboardEvent<HTMLAnchorElement>, id: number) => {
+  const keydown = (event: KeyboardEvent<HTMLAnchorElement>, key: string) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
-    if (event.key === "Delete") { event.preventDefault(); close(id, true); return; }
+    if (event.key === "Delete") { event.preventDefault(); close(key, true); return; }
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const links = [...(list.current?.querySelectorAll<HTMLAnchorElement>(".review-tab-link") ?? [])];
@@ -104,23 +128,23 @@ export function ReviewTabs() {
       list.current.scrollLeft = Math.max(0, item.offsetLeft - (list.current.clientWidth - item.offsetWidth) / 2);
     }
   };
-  return <nav className="review-tabs" aria-label="已打开的视频">
+  return <nav className="review-tabs" aria-label="已打开的视频与资料">
     <Link className="review-tabs-library" to="/" aria-current={libraryActive ? "page" : undefined} title="返回视频库">
       <Library size={15} aria-hidden="true" /><span>视频库</span>
     </Link>
-    <button type="button" className="review-tabs-scroll" aria-label="向左滚动视频标签" title="向左滚动视频标签"
+    <button type="button" className="review-tabs-scroll" aria-label="向左滚动标签" title="向左滚动标签"
       disabled={!edges.left} onClick={() => list.current?.scrollBy({ left: -300, behavior: "auto" })}><ChevronLeft size={16} /></button>
     <div ref={list} className="review-tabs-list">
-      {tabs.map(tab => <div className={`review-tab${tab.id === activeId ? " is-active" : ""}`} key={tab.id}>
-        <Link to={`/review/${tab.id}`} className="review-tab-link" title={tab.title}
-          aria-current={tab.id === activeId ? "page" : undefined} onKeyDown={event => keydown(event, tab.id)}>
-          <Play size={13} aria-hidden="true" /><span>{tab.title}</span>
+      {tabs.map(tab => <div className={`review-tab${tab.key === activeKey ? " is-active" : ""}`} key={tab.key}>
+        <Link to={tab.href} className="review-tab-link" title={tab.title} data-tab-key={tab.key}
+          aria-current={tab.key === activeKey ? "page" : undefined} onKeyDown={event => keydown(event, tab.key)}>
+          {tab.kind === "video" ? <Play size={13} aria-hidden="true" /> : <FileText size={13} aria-hidden="true" />}<span>{tab.title}</span>
         </Link>
-        <button type="button" className="review-tab-close" aria-label={`关闭视频标签：${tab.title}`} title={`关闭标签：${tab.title}`}
-          onClick={() => close(tab.id, true)}><X size={13} /></button>
+        <button type="button" className="review-tab-close" aria-label={`关闭${tab.kind === "video" ? "视频" : "资料"}标签：${tab.title}`} title={`关闭标签：${tab.title}`}
+          onClick={() => close(tab.key, true)}><X size={13} /></button>
       </div>)}
     </div>
-    <button type="button" className="review-tabs-scroll" aria-label="向右滚动视频标签" title="向右滚动视频标签"
+    <button type="button" className="review-tabs-scroll" aria-label="向右滚动标签" title="向右滚动标签"
       disabled={!edges.right} onClick={() => list.current?.scrollBy({ left: 300, behavior: "auto" })}><ChevronRight size={16} /></button>
   </nav>;
 }

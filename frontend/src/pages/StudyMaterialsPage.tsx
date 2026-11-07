@@ -5,12 +5,13 @@ import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Check, ChevronLeft, ChevronRig
   Pencil, Plus, RotateCcw, Save, Trash2, Undo2, Upload, X, ZoomIn, ZoomOut, ScanLine, Maximize2, Minimize2 } from "lucide-react";
 import { getStudyBlocks, getStudyDocuments, getStudyQuestions, getStudyTextBounds, saveStudyQuestion, saveStudyReading,
   studyRegionUrl, studySourceLabel, studyWrite, uploadStudyAttachment, uploadStudyDocument,
-  type StudyBlock, type StudyQuestion, type StudyRegion } from "../api/studyMaterials";
+  type StudyBlock, type StudyDocument, type StudyQuestion, type StudyRegion } from "../api/studyMaterials";
 import { StudyPageCanvas } from "../components/StudyPageCanvas";
 import { StudyMarkdown } from "../components/StudyMarkdown";
 import { StudyQuestionContent, StudyQuestionPreview } from "../components/StudyQuestionPreview";
 import { DshQuestionActions } from "../components/DshQuestionActions";
 import { useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
+import { useReviewTabs } from "../components/ReviewTabs";
 import { useStudyMarkdownBoxSelection } from "../hooks/useStudyMarkdownBoxSelection";
 import { expandToTextWidth, useStudyPageBoxSelection } from "../hooks/useStudyPageBoxSelection";
 import "./StudyMaterialsPage.css";
@@ -24,12 +25,17 @@ const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
 function savedDocument(key: string) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 function remember(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Optional browser storage. */ } }
 
-export function StudyMaterialsPage({ active = true, scope = "default", courseId }: {
-  active?: boolean; scope?: string; courseId?: string;
+export function StudyMaterialsPage({ active = true, scope = "default", courseId, libraryId = "", requestedDocumentId, onDocumentChange }: {
+  active?: boolean; scope?: string; courseId?: string; libraryId?: string;
+  requestedDocumentId?: string; onDocumentChange?: (id: string) => void;
 }) {
   const client = useQueryClient();
   const selectionKey = `classcue-study-document:${scope}${courseId ? `:${courseId}` : ""}`;
-  const [documentId, setDocumentId] = useState(() => savedDocument(selectionKey));
+  const [documentId, setDocumentId] = useState(() => requestedDocumentId || savedDocument(selectionKey));
+  // A list refetch may return before a pending reading-position save reaches the server.
+  const initialReading = useRef({ id: documentId, value: client.getQueryData<StudyDocument[]>(
+    ["study", scope, "documents", courseId])?.find(item => item.id === documentId)?.reading });
+  const reviewTabs = useReviewTabs();
   const [view, setView] = useState<View>("files");
   const [leftOpen, setLeftOpen] = useState(true), [rightOpen, setRightOpen] = useState(true);
   const [recycle, setRecycle] = useState(false), [query, setQuery] = useState("");
@@ -233,10 +239,11 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
     save: () => save(true), discard: discardAll });
   function guarded(action: () => void) { leave(action); }
   function selectDocument(id: string) {
-    if (id === documentId) { setView("reader"); return; }
+    if (id === documentId) { setView("reader"); onDocumentChange?.(id); return; }
     guarded(() => {
       clearUnsaved(); resetDrafts(); setDocumentId(id); remember(selectionKey, id);
       setView("reader"); setSelecting(false); setError(""); setNotice(""); restoring.current = "";
+      onDocumentChange?.(id);
     });
   }
   function locate(region: StudyRegion) {
@@ -270,16 +277,29 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
     startFreshDraft(); setSelecting(true); setRightOpen(true); setView("reader"); setNotice("");
   }
   useEffect(() => {
+    if (!active || !requestedDocumentId || requestedDocumentId === documentId) return;
+    clearUnsaved(); resetDrafts(); setDocumentId(requestedDocumentId); remember(selectionKey, requestedDocumentId);
+    setView("reader"); setSelecting(false); setError(""); setNotice(""); restoring.current = "";
+  }, [active, requestedDocumentId]);
+  useEffect(() => {
+    if (!active || requestedDocumentId) return;
     if (documents.data && !documents.data.some(item => item.id === documentId && !item.deleted)) {
       const first = documents.data.find(item => !item.deleted);
       if (first) { setDocumentId(first.id); remember(selectionKey, first.id); setView("reader"); }
       else { setDocumentId(""); resetDrafts(); }
     }
-  }, [documents.data, documentId]);
+  }, [active, requestedDocumentId, documents.data, documentId]);
+  useEffect(() => {
+    if (!active || !document || document.deleted || !courseId
+      || (requestedDocumentId && requestedDocumentId !== document.id)) return;
+    reviewTabs?.registerDocument(document, libraryId, courseId);
+    if (!requestedDocumentId) onDocumentChange?.(document.id);
+  }, [active, document, courseId, libraryId, requestedDocumentId, reviewTabs?.registerDocument, onDocumentChange]);
   useLayoutEffect(() => {
     if (!active || !document || !blocks.data || !questions.data || restoring.current === document.id) return;
     restoring.current = document.id;
-    const reading = readingStates.current.get(document.id) || document.reading;
+    const reading = readingStates.current.get(document.id)
+      || (initialReading.current.id === document.id ? initialReading.current.value : undefined) || document.reading;
     setZoom(reading.zoom || 1); setPage(reading.page || 1); setPageInput(String(reading.page || 1));
     setLeftOpen(reading.left_open !== false); setRightOpen(reading.right_open ?? questions.data.some(item => !item.deleted));
     const question = questions.data.find(item => item.id === reading.question_id && !item.deleted);
@@ -483,6 +503,9 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId 
       <progress value={uploadProgress.index - 1} max={uploadProgress.count} /></div>}
     {(error || blockError) && <div className="study-error" role="alert"><span>{error || (blockError as Error).message}</span>
       <button className="text-button" onClick={() => { setError(""); void refresh(); }}>重新读取</button></div>}
+    {requestedDocumentId && documents.isSuccess && (!document || document.deleted) && <div className="study-error" role="alert">
+      这份资料已移除或已不在当前课程中，请从文件列表选择其他资料。
+    </div>}
     {!!importErrors.length && <div className="study-error" role="alert"><div>{importErrors.map(message => <p key={message}>{message}</p>)}</div>
       <button className="icon-button" aria-label="关闭导入错误" title="关闭" onClick={() => setImportErrors([])}><X size={16} /></button></div>}
     <div className={`study-workspace${leftOpen ? "" : " left-closed"}${rightOpen ? "" : " right-closed"}`}>
