@@ -13,6 +13,7 @@ vi.mock("../api/studyMaterials", async original => ({
   ...await original<typeof import("../api/studyMaterials")>(),
   getStudyCourses: vi.fn(), getStudyCourseFolders: vi.fn(), getStudyDocuments: vi.fn(),
   getStudyBlocks: vi.fn(), getStudyQuestions: vi.fn(), saveStudyReading: vi.fn(),
+  getCourseVideoQuestions: vi.fn(),
 }));
 vi.mock("../components/DshQuestionActions", () => ({ DshQuestionActions: () => null }));
 
@@ -49,6 +50,7 @@ beforeEach(() => {
       line_start: 1, line_end: 1 },
   ]);
   vi.mocked(api.getStudyQuestions).mockResolvedValue([]);
+  vi.mocked(api.getCourseVideoQuestions).mockResolvedValue([]);
   vi.mocked(api.saveStudyReading).mockResolvedValue({ ok: true });
   container = document.createElement("div"); document.body.append(container);
   root = createRoot(container);
@@ -71,13 +73,13 @@ const tabs = () => [...container.querySelectorAll<HTMLAnchorElement>(".review-ta
 const selectedName = () => container.querySelector(".study-current-name")?.textContent;
 async function go(path: string | number) { await act(async () => { await router.navigate(path as string); }); await settle(); }
 
-it("opens the requested document instead of the remembered one and mixes it with video tabs", async () => {
+it("returns from a video through one materials tab to the requested document", async () => {
   localStorage.setItem("classcue-study-document:test:course", "a");
   await mount();
   expect(selectedName()).toBe("练习二.md");
-  expect(tabs().map(tab => tab.textContent)).toEqual(["练习二.md"]);
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料"]);
   await go("/review/1");
-  expect(tabs().map(tab => tab.textContent)).toEqual(["练习二.md", "第一讲"]);
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料", "第一讲"]);
   await click(tabs()[0]);
   await settle();
   expect(selectedName()).toBe("练习二.md");
@@ -85,45 +87,48 @@ it("opens the requested document instead of the remembered one and mixes it with
   expect(tabs()[0].getAttribute("aria-current")).toBe("page");
 });
 
-it("registers the default document and switches same-course documents by tab and browser history", async () => {
+it("switches documents within one materials tab and follows browser history", async () => {
   await mount("/study-materials?course=course");
   expect(new URLSearchParams(router.state.location.search).get("document")).toBe("a");
   await click([...container.querySelectorAll(".study-file-open")][1]);
   expect(selectedName()).toBe("练习二.md");
-  expect(tabs().map(tab => tab.textContent)).toEqual(["练习一.md", "练习二.md"]);
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料"]);
+  expect(new URLSearchParams(tabs()[0].search).get("document")).toBe("b");
+  await go("/review/1");
   await click(tabs()[0]);
-  expect(selectedName()).toBe("练习一.md");
-  await go(-1);
   expect(selectedName()).toBe("练习二.md");
+  await go(-1);
+  expect(router.state.location.pathname).toBe("/review/1");
   await go(1);
-  expect(selectedName()).toBe("练习一.md");
+  expect(selectedName()).toBe("练习二.md");
 });
 
-it("restores each document's zoom and closes into the neighboring document", async () => {
+it("restores each document's zoom internally and closes the materials tab into a video", async () => {
   await mount("/study-materials?course=course&document=a");
   await click(container.querySelector('[aria-label="放大"]')!);
   expect(container.querySelector(".study-zoom")?.textContent).toBe("110%");
   await click([...container.querySelectorAll(".study-file-open")][1]);
   expect(container.querySelector(".study-zoom")?.textContent).toBe("100%");
-  await click(tabs()[0]);
+  await click([...container.querySelectorAll(".study-file-open")][0]);
   expect(container.querySelector(".study-zoom")?.textContent).toBe("110%");
-  await click(container.querySelector('[aria-label="关闭资料标签：练习一.md"]')!);
-  expect(selectedName()).toBe("练习二.md");
-  expect(tabs().map(tab => tab.textContent)).toEqual(["练习二.md"]);
-  expect(tabs()[0].getAttribute("aria-current")).toBe("page");
+  await go("/review/1");
+  await click(tabs()[0]);
+  await click(container.querySelector('[aria-label="关闭资料标签：学习资料"]')!);
+  expect(router.state.location.pathname).toBe("/review/1");
+  expect(tabs().map(tab => tab.textContent)).toEqual(["第一讲"]);
 });
 
 it("keeps the current document tab and draft when closing is cancelled", async () => {
   await mount();
   await click([...container.querySelectorAll("button")].find(node => node.textContent === "选题")!);
   await click(container.querySelector(".study-block-check")!);
-  await click(container.querySelector('[aria-label="关闭资料标签：练习二.md"]')!);
+  await click(container.querySelector('[aria-label="关闭资料标签：学习资料"]')!);
   expect(document.querySelector(".unsaved-dialog")).not.toBeNull();
   expect(tabs()).toHaveLength(1);
   await click([...document.querySelectorAll(".unsaved-actions button")].find(node => node.textContent === "继续编辑")!);
   expect(tabs()).toHaveLength(1);
   expect(container.querySelectorAll(".study-region-preview")).toHaveLength(1);
-  await click(container.querySelector('[aria-label="关闭资料标签：练习二.md"]')!);
+  await click(container.querySelector('[aria-label="关闭资料标签：学习资料"]')!);
   await click([...document.querySelectorAll(".unsaved-actions button")].find(node => node.textContent === "放弃修改")!);
   expect(router.state.location.pathname).toBe("/");
   expect(tabs()).toHaveLength(0);
@@ -134,7 +139,7 @@ it("guards switching to another document and selects it only after discarding th
   await click([...container.querySelectorAll(".study-file-open")][1]);
   await click([...container.querySelectorAll("button")].find(node => node.textContent === "选题")!);
   await click(container.querySelector(".study-block-check")!);
-  await click(tabs()[0]);
+  await click([...container.querySelectorAll(".study-file-open")][0]);
   expect(document.querySelector(".unsaved-dialog")).not.toBeNull();
   expect(selectedName()).toBe("练习二.md");
   await click([...document.querySelectorAll(".unsaved-actions button")].find(node => node.textContent === "放弃修改")!);
@@ -144,10 +149,35 @@ it("guards switching to another document and selects it only after discarding th
 
 it("does not substitute a different document when a document URL no longer exists", async () => {
   await mount("/study-materials?course=course&document=missing");
-  expect(tabs()).toHaveLength(0);
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料"]);
   expect(selectedName()).toBe("资料原文");
   expect(container.textContent).toContain("这份资料已移除或已不在当前课程中");
   await click(container.querySelector(".study-file-open")!);
   expect(selectedName()).toBe("练习一.md");
   expect(tabs()).toHaveLength(1);
+});
+
+it("uses one materials tab for the course list, multiple courses and video examples", async () => {
+  vi.mocked(api.getStudyCourses).mockResolvedValue([
+    { id: "course", name: "合成课程", folder_id: 1, document_count: 2, question_count: 0 },
+    { id: "other", name: "另一课程", folder_id: 2, document_count: 0, question_count: 0 },
+  ]);
+  vi.mocked(api.getStudyDocuments).mockImplementation(async (course, unassigned) =>
+    unassigned || course === "other" ? [] : documents);
+  await mount("/study-materials");
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料"]);
+  await click(container.querySelector(".study-course-row")!);
+  expect(selectedName()).toBe("练习一.md");
+  await click(container.querySelector('[aria-label="返回全部课程"]')!);
+  await click([...container.querySelectorAll(".study-course-row")][1]);
+  expect(tabs()).toHaveLength(1);
+  await click([...container.querySelectorAll(".study-course-tabs button")][1]);
+  expect(tabs()[0].getAttribute("aria-current")).toBe("page");
+  const destination = tabs()[0].getAttribute("href");
+  expect(destination).toBe("/study-materials?course=other&tab=video");
+  await go("/review/1");
+  expect(tabs()[0].getAttribute("href")).toBe(destination);
+  await click(tabs()[0]);
+  expect(container.querySelector(".study-courses-page")?.getAttribute("data-layout")).toBe("video");
+  expect(tabs().map(tab => tab.textContent)).toEqual(["学习资料", "第一讲"]);
 });

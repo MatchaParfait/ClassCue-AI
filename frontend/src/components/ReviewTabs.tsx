@@ -2,14 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { ChevronLeft, ChevronRight, FileText, Library, Play, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { Video } from "../types";
-import type { StudyDocument } from "../api/studyMaterials";
 import { useUnsavedLeave } from "./UnsavedChanges";
 
-type OpenTab = { key: string; kind: "video" | "document"; title: string; href: string };
+type OpenTab = { key: string; kind: "video" | "materials"; title: string; href: string };
 type ReviewTabsContextValue = {
   tabs: OpenTab[];
   register: (video: Video) => void;
-  registerDocument: (document: StudyDocument, libraryId: string, courseId: string) => void;
+  registerStudyMaterials: (libraryId: string, href: string) => void;
   setLibrary: (libraryId: string) => void;
   remove: (key: string) => void;
   positions: Map<string, number>;
@@ -37,17 +36,15 @@ export function ReviewTabsProvider({ children }: { children: ReactNode }) {
       key: `video:${video.id}`, kind: "video", title: video.display_name, href: `/review/${video.id}`,
     });
   }, [registerTab]);
-  const registerDocument = useCallback((document: StudyDocument, libraryId: string, courseId: string) => {
-    if (document.deleted) return;
-    const query = new URLSearchParams({ course: courseId, document: document.id });
+  const registerStudyMaterials = useCallback((libraryId: string, href: string) => {
     registerTab(libraryId, {
-      key: `document:${document.id}`, kind: "document", title: document.name, href: `/study-materials?${query}`,
+      key: "study-materials", kind: "materials", title: "学习资料", href,
     });
   }, [registerTab]);
   const remove = useCallback((key: string) => {
     setLibraries(current => ({ ...current, [library]: (current[library] ?? []).filter(tab => tab.key !== key) }));
   }, [library]);
-  return <ReviewTabsContext.Provider value={{ tabs: libraries[library] ?? [], register, registerDocument, setLibrary, remove, positions: positions.current }}>
+  return <ReviewTabsContext.Provider value={{ tabs: libraries[library] ?? [], register, registerStudyMaterials, setLibrary, remove, positions: positions.current }}>
     {children}
   </ReviewTabsContext.Provider>;
 }
@@ -65,11 +62,8 @@ export function ReviewTabs() {
   const [edges, setEdges] = useState({ left: false, right: false });
   const tabs = context?.tabs ?? [];
   const match = /^\/review\/(\d+)$/.exec(location.pathname);
-  const params = new URLSearchParams(location.search);
   const activeKey = match ? `video:${Number(match[1])}`
-    : location.pathname === "/study-materials" && params.get("document") && params.get("tab") !== "video"
-      ? tabs.find(tab => tab.key === `document:${params.get("document")}`
-        && new URLSearchParams(tab.href.split("?")[1]).get("course") === params.get("course"))?.key : null;
+    : location.pathname === "/study-materials" ? "study-materials" : null;
   const libraryActive = location.pathname === "/" || location.pathname.startsWith("/library/folder/");
 
   useEffect(() => {

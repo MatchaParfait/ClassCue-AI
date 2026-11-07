@@ -11,7 +11,6 @@ import { StudyMarkdown } from "../components/StudyMarkdown";
 import { StudyQuestionContent, StudyQuestionPreview } from "../components/StudyQuestionPreview";
 import { DshQuestionActions } from "../components/DshQuestionActions";
 import { useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
-import { useReviewTabs } from "../components/ReviewTabs";
 import { useStudyMarkdownBoxSelection } from "../hooks/useStudyMarkdownBoxSelection";
 import { expandToTextWidth, useStudyPageBoxSelection } from "../hooks/useStudyPageBoxSelection";
 import "./StudyMaterialsPage.css";
@@ -25,8 +24,8 @@ const same = (a: Draft, b: Draft) => JSON.stringify(a) === JSON.stringify(b);
 function savedDocument(key: string) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 function remember(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* Optional browser storage. */ } }
 
-export function StudyMaterialsPage({ active = true, scope = "default", courseId, libraryId = "", requestedDocumentId, onDocumentChange }: {
-  active?: boolean; scope?: string; courseId?: string; libraryId?: string;
+export function StudyMaterialsPage({ active = true, scope = "default", courseId, requestedDocumentId, onDocumentChange }: {
+  active?: boolean; scope?: string; courseId?: string;
   requestedDocumentId?: string; onDocumentChange?: (id: string) => void;
 }) {
   const client = useQueryClient();
@@ -35,7 +34,6 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId,
   // A list refetch may return before a pending reading-position save reaches the server.
   const initialReading = useRef({ id: documentId, value: client.getQueryData<StudyDocument[]>(
     ["study", scope, "documents", courseId])?.find(item => item.id === documentId)?.reading });
-  const reviewTabs = useReviewTabs();
   const [view, setView] = useState<View>("files");
   const [leftOpen, setLeftOpen] = useState(true), [rightOpen, setRightOpen] = useState(true);
   const [recycle, setRecycle] = useState(false), [query, setQuery] = useState("");
@@ -292,9 +290,8 @@ export function StudyMaterialsPage({ active = true, scope = "default", courseId,
   useEffect(() => {
     if (!active || !document || document.deleted || !courseId
       || (requestedDocumentId && requestedDocumentId !== document.id)) return;
-    reviewTabs?.registerDocument(document, libraryId, courseId);
     if (!requestedDocumentId) onDocumentChange?.(document.id);
-  }, [active, document, courseId, libraryId, requestedDocumentId, reviewTabs?.registerDocument, onDocumentChange]);
+  }, [active, document, courseId, requestedDocumentId, onDocumentChange]);
   useLayoutEffect(() => {
     if (!active || !document || !blocks.data || !questions.data || restoring.current === document.id) return;
     restoring.current = document.id;

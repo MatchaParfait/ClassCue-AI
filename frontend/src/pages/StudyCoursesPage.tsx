@@ -7,6 +7,7 @@ import { createStudyCourse, getCourseForFolder, getCourseVideoQuestions, getStud
 import { questionCaptureUrl } from "../api/questions";
 import { DshQuestionActions } from "../components/DshQuestionActions";
 import { useUnsavedLeave } from "../components/UnsavedChanges";
+import { useReviewTabs } from "../components/ReviewTabs";
 import { StudyMaterialsPage } from "./StudyMaterialsPage";
 import { formatTime } from "../utils";
 import "./StudyMaterialsPage.css";
@@ -24,6 +25,12 @@ function folderLabel(folder: StudyCourseFolder, folders: StudyCourseFolder[]) {
 export function StudyCoursesPage({ active = true, scope = "default", libraryId = "" }: { active?: boolean; scope?: string; libraryId?: string }) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
+  const registerStudyMaterials = useReviewTabs()?.registerStudyMaterials;
+  useEffect(() => {
+    if (active && location.pathname === "/study-materials") {
+      registerStudyMaterials?.(libraryId, `${location.pathname}${location.search}`);
+    }
+  }, [active, libraryId, location.pathname, location.search, registerStudyMaterials]);
   const courseId = params.get("course") || "";
   const incomingFolder = Number(params.get("folder")) || null;
   const unassigned = params.get("view") === "unassigned";
@@ -131,7 +138,7 @@ export function StudyCoursesPage({ active = true, scope = "default", libraryId =
       {!courses.data?.length && !legacy.data?.length && <div className="study-empty"><FolderPlus size={32} /><span>暂无课程资料夹</span></div>}
     </div>}
     {course && <div className="study-course-reader" hidden={tab !== "documents"}>
-      <StudyMaterialsPage key={`${scope}:${courseId}`} scope={scope} courseId={courseId} libraryId={libraryId}
+      <StudyMaterialsPage key={`${scope}:${courseId}`} scope={scope} courseId={courseId}
         requestedDocumentId={params.get("document") || undefined}
         onDocumentChange={id => navigateWithin({ course: courseId, document: id })}
         active={active && tab === "documents"} />
