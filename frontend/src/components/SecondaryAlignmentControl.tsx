@@ -120,6 +120,14 @@ export function SecondaryAlignmentControl({ alignment, disabled }: {
         : result ? `${result.message}${["applied", "candidate"].includes(result.outcome) && result.offset_ms != null
           ? `（${result.offset_ms >= 0 ? "+" : ""}${(result.offset_ms / 1000).toFixed(1)} 秒）` : ""}` : job?.message}
     </span>}
+    {(result?.model_id || job?.model_id) && <span className="secondary-view-mapping">
+      ASR：{result?.model_id || job?.model_id}
+      {result?.asr_seconds != null && ` · 已识别 ${Math.ceil(result.asr_seconds)} / 900 秒`}
+      {result?.phase === "fallback" && " · 已使用扩大搜索"}
+    </span>}
+    {result?.primary_model_id && result.primary_model_id !== result.model_id && <span className="secondary-view-mapping">
+      主字幕模型：{result.primary_model_id}（与本次 ASR 不同）
+    </span>}
     {result?.outcome === "candidate" && result.evidence.length > 0 && <details className="secondary-alignment-evidence">
       <summary>查看对应句</summary>
       {result.evidence.map((e, i) => <div key={i}><p>主视频：{e.primary_text}</p><p>副视频：{e.secondary_text}</p></div>)}

@@ -9,14 +9,17 @@ import unicodedata
 
 from classcue.core import TranscriptSegment
 
-MAX_SEGMENTS = 10
-MAX_CALLS = 10
-MAX_ASR_SECONDS = 120
-MAX_DECODE_SECONDS = 600
-MAX_RUNTIME_SECONDS = 180
+FAST_SEGMENTS = 10
+FAST_CALLS = 10
+FAST_ASR_SECONDS = 120
+MAX_SEGMENTS = 200
+MAX_CALLS = 100
+MAX_ASR_SECONDS = 900
+MAX_DECODE_SECONDS = 1800
+MAX_RUNTIME_SECONDS = 600
 WINDOW_SECONDS = 12
 SCAN_SECONDS = 30
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
 
 
 def normalize(text: str) -> str:
@@ -91,6 +94,32 @@ def search_ranges(primary: list[TranscriptSegment], offset_ms: int, duration_ms:
                 if end > start:
                     visited.append((start, end))
                     yield start, end
+
+
+def search_windows(primary, offset_ms, duration_ms, *, fallback=False):
+    """Visit each anchor before spending more decoding/ASR on the same location."""
+    plans = []
+    for anchor in anchors(primary):
+        expected = (anchor.start_ms + offset_ms) / 1000
+        ranges = [(-15, 15), (15, 45)]
+        if fallback:
+            # Expand both directions by distance, reserving opportunities for negative offsets.
+            for distance in range(15, 600, SCAN_SECONDS):
+                ranges.append((-min(distance + SCAN_SECONDS, 600), -distance))
+                if distance + SCAN_SECONDS < 600:
+                    ranges.append((distance + SCAN_SECONDS, min(distance + 2 * SCAN_SECONDS, 600)))
+        windows = []
+        for left, right in ranges:
+            cursor, end = max(0., expected + left), min(duration_ms / 1000, expected + right)
+            while cursor < end:
+                stop = min(cursor + SCAN_SECONDS, end)
+                windows.append((cursor, stop))
+                cursor = stop
+        plans.append(windows)
+    for index in range(max(map(len, plans), default=0)):
+        for anchor_id, windows in enumerate(plans):
+            if index < len(windows):
+                yield anchor_id, *windows[index]
 
 
 @dataclass

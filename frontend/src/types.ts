@@ -75,6 +75,11 @@ export interface SecondaryAlignment {
   offset_ms: number | null;
   message: string;
   segments_checked?: number;
+  phase?: "fast" | "fallback";
+  model_id?: string;
+  primary_model_id?: string;
+  asr_seconds?: number;
+  stop_reason?: string;
   evidence: Array<{ primary_text: string; secondary_text: string; primary_ms: number; secondary_ms: number;
     offset_ms: number; score: number }>;
 }

@@ -56,6 +56,7 @@ def alignment_snapshot(store, video_id, library_id):
         "original_offset_ms": view["offset_ms"], "duration_ms": secondary["duration_ms"],
         "primary_file": file_identity(primary), "secondary_file": file_identity(secondary),
         "subtitle_fingerprint": subtitle_fingerprint(segments), "model": model_selection(),
+        "primary_model_id": primary["transcription_model"] or "",
     }
 
 
@@ -104,6 +105,7 @@ def run_worker(store, snapshot, update, cancelled):
             except (ValueError, KeyError):
                 return
 
+        timed_out = False
         try:
             code = run_process(
                 [sys.executable, "-m", "classcue.secondary_alignment_worker", str(request_path), str(result_path)],
@@ -112,6 +114,7 @@ def run_worker(store, snapshot, update, cancelled):
             )
         except subprocess.TimeoutExpired:
             code = 0
+            timed_out = True
         if not result_path.exists():
             if code:
                 raise ValueError("自动对齐进程未能完成，请检查 ASR 环境")
@@ -120,6 +123,9 @@ def run_worker(store, snapshot, update, cancelled):
         result = json.loads(result_path.read_text(encoding="utf-8"))
         if result.get("error") or code:
             raise ValueError(result.get("error") or "自动对齐进程异常退出，原偏移已保留")
+        if timed_out and result.get("outcome") != "ready":
+            result.update(stop_reason="runtime_limit",
+                          message=f"{result['message']}；达到运行时限，已停止扩大搜索")
         return result
 
 

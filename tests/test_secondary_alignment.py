@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from classcue.core import TranscriptSegment
-from classcue.secondary_alignment import Matcher, anchors, search_ranges
+from classcue.secondary_alignment import Matcher, anchors, search_ranges, MAX_ASR_SECONDS, MAX_CALLS, MAX_SEGMENTS
 from classcue.secondary_alignment_worker import run_alignment
 from classcue.video_store import VideoStore
 import api.secondary_alignment as alignment_api
@@ -82,7 +82,7 @@ def test_long_hallucination_with_small_true_excerpt_is_rejected():
     assert Matcher([segment(1, 20000, FIRST)]).evaluate([segment(1, 28000, text)], {1: 1})["outcome"] == "no_match"
 
 
-def test_raw_noise_uses_the_ten_segment_budget_and_temp_audio_is_removed(tmp_path):
+def test_raw_noise_consumes_both_phase_budgets_and_temp_audio_is_removed(tmp_path):
     calls = []
     def recognize(path):
         calls.append(path)
@@ -94,8 +94,9 @@ def test_raw_noise_uses_the_ten_segment_budget_and_temp_audio_is_removed(tmp_pat
         read_audio=lambda *args, **kwargs: (np.ones(30 * 16000, dtype=np.float32), 30, False),
         detect=lambda audio: [{"start": 0, "end": len(audio)}],
     )
-    assert result["segments_checked"] == 10
-    assert result["asr_calls"] == len(calls) == 1
+    assert 10 < result["segments_checked"] <= MAX_SEGMENTS
+    assert result["asr_calls"] == len(calls) <= MAX_CALLS
+    assert result["phase"] == "fallback"
     assert result["outcome"] == "no_match"
     assert not list(tmp_path.glob("*.wav"))
 
@@ -113,7 +114,7 @@ def test_silence_never_calls_asr_and_decode_budget_is_finite(tmp_path):
         read_audio=read, detect=lambda _: [],
     )
     assert result["asr_calls"] == 0
-    assert result["decoded_seconds"] <= 600
+    assert result["decoded_seconds"] <= 1800
     assert scans[0][0] > 1100
 
 
@@ -125,10 +126,237 @@ def test_empty_asr_outputs_still_consume_call_and_audio_budget(tmp_path):
         read_audio=lambda *args, **kwargs: (np.ones(30 * 16000, dtype=np.float32), 30, False),
         detect=lambda audio: [{"start": 0, "end": len(audio)}],
     )
-    assert result["asr_calls"] <= 10
-    assert result["asr_seconds"] <= 120
+    assert result["asr_calls"] <= MAX_CALLS
+    assert result["asr_seconds"] <= MAX_ASR_SECONDS
     assert result["segments_checked"] == 0
     assert result["outcome"] == "no_match"
+
+
+def alignment_request(primary, *, duration=5000000):
+    return {"segments": [asdict(s) for s in primary], "model": {"id": "synthetic"},
+            "secondary_path": "synthetic.mp4", "duration_ms": duration, "original_offset_ms": 0}
+
+
+def test_short_rollcall_does_not_spend_fast_asr_before_later_long_anchors(tmp_path):
+    third = "最后我们通过具体例子检查积分计算过程中的关键步骤"
+    primary = [segment(1, 20000, FIRST), segment(2, 460000, SECOND), segment(3, 550000, third)]
+    cursor = [0.]
+    scans, phases = [], []
+    calls = []
+
+    def read(_path, start, end, **kwargs):
+        cursor[0] = start
+        scans.append(start)
+        return np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False
+
+    def detect(audio):
+        if cursor[0] < 100:
+            return [{"start": i * 16000, "end": int((i + 1.8) * 16000)} for i in (1, 5, 9, 13, 17, 21)]
+        return [{"start": 15 * 16000, "end": 22 * 16000}]
+
+    def recognize(path):
+        calls.append(cursor[0])
+        return [segment(1, 0, SECOND if cursor[0] < 500 else third)]
+
+    result = run_alignment(alignment_request(primary), tmp_path, read_audio=read, detect=detect,
+                           recognize=recognize, report=lambda phase, _: phases.append(phase))
+    assert result["outcome"] == "ready"
+    assert result["offset_ms"] == 0
+    assert result["asr_calls"] == 2
+    assert result["skipped_short"] == 6
+    assert "fallback" not in phases
+    assert calls == [445, 535]
+
+
+def test_fallback_finds_a_large_offset_without_relaxing_matching(tmp_path):
+    primary = [segment(1, 20000, FIRST), segment(2, 500000, SECOND)]
+    cursor, text = [0.], [""]
+    stages = []
+
+    def read(_path, start, end, **kwargs):
+        cursor[0] = start
+        return np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False
+
+    def detect(audio):
+        for position, sentence in ((220, FIRST), (700, SECOND)):
+            local = position - cursor[0]
+            if 0 <= local and local + 6 <= len(audio) / 16000:
+                text[0] = sentence
+                return [{"start": round(local * 16000), "end": round((local + 6) * 16000)}]
+        return []
+
+    result = run_alignment(alignment_request(primary), tmp_path, read_audio=read, detect=detect,
+                           recognize=lambda _: [segment(1, 0, text[0])],
+                           report=lambda stage, _: stages.append(stage))
+    assert result["outcome"] == "ready"
+    assert result["offset_ms"] == 200000
+    assert result["phase"] == "fallback"
+    assert result["asr_calls"] == 2
+    assert stages.index("fallback") > stages.index("fast")
+
+
+def test_total_audio_budget_includes_fast_and_fallback_and_never_exceeds_fifteen_minutes(tmp_path):
+    primary = [segment(1, 1200000, FIRST), segment(2, 2400000, SECOND),
+               segment(3, 3600000, "最后我们通过具体例子检查积分计算过程中的关键步骤")]
+    submitted = []
+
+    def recognize(path):
+        with wave.open(str(path)) as clip:
+            submitted.append(clip.getnframes() / clip.getframerate())
+        return []
+
+    result = run_alignment(
+        alignment_request(primary), tmp_path,
+        read_audio=lambda _path, start, end, **kwargs: (
+            np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False),
+        detect=lambda audio: [{"start": 0, "end": len(audio)}], recognize=recognize,
+    )
+    assert sum(submitted) == result["asr_seconds"] == 900
+    assert result["stop_reason"] == "asr_budget"
+    assert result["phase"] == "fallback"
+    assert result["asr_calls"] <= MAX_CALLS
+    assert max(submitted) <= 12
+
+
+def test_fallback_does_not_recognize_fast_audio_twice_or_count_it_as_independent_evidence(tmp_path):
+    primary = [segment(1, 20000, FIRST)]
+    submitted = []
+
+    def recognize(path):
+        submitted.append(True)
+        return [segment(1, 0, FIRST)]
+
+    result = run_alignment(
+        alignment_request(primary, duration=35000), tmp_path,
+        read_audio=lambda _path, start, end, **kwargs: (
+            np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False),
+        detect=lambda audio: [{"start": 15 * 16000, "end": min(len(audio), 21 * 16000)}],
+        recognize=recognize,
+    )
+    assert result["outcome"] == "candidate"
+    assert len(submitted) == 1
+    assert result["asr_seconds"] == 6
+
+
+def test_noisy_first_anchor_cannot_consume_later_anchors_fast_quota(tmp_path):
+    third = "最后我们通过具体例子检查积分计算过程中的关键步骤"
+    primary = [segment(1, 20000, FIRST), segment(2, 460000, SECOND), segment(3, 550000, third)]
+    cursor, calls = [0.], []
+
+    def read(_path, start, end, **kwargs):
+        cursor[0] = start
+        return np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False
+
+    def recognize(_path):
+        calls.append(cursor[0])
+        if cursor[0] < 100:
+            return [segment(i, 0, "完全不同的背景噪声识别内容") for i in range(30)]
+        return [segment(1, 0, SECOND if cursor[0] < 500 else third)]
+
+    result = run_alignment(alignment_request(primary), tmp_path, read_audio=read,
+                           detect=lambda _: [{"start": 15 * 16000, "end": 22 * 16000}],
+                           recognize=recognize)
+    assert result["outcome"] == "ready"
+    assert result["phase"] == "fast"
+    assert calls == [5, 445, 535]
+    assert result["segments_checked"] == 6
+
+
+def test_fallback_inspects_deferred_long_sentence_without_repeating_asr(tmp_path):
+    calls = []
+
+    def recognize(_path):
+        calls.append(True)
+        return [segment(i, i * 1000, "测试名", end=i * 1000 + 800) for i in range(4)] + [
+            segment(4, 4000, FIRST, end=10000)]
+
+    result = run_alignment(
+        alignment_request([segment(1, 9000, FIRST)], duration=12000), tmp_path,
+        read_audio=lambda _path, start, end, **kwargs: (
+            np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False),
+        detect=lambda audio: [{"start": 0, "end": len(audio)}], recognize=recognize,
+    )
+    assert result["outcome"] == "candidate"
+    assert result["offset_ms"] == -5000
+    assert result["phase"] == "fallback"
+    assert result["segments_checked"] == 5
+    assert len(calls) == result["asr_calls"] == 1
+    assert result["asr_seconds"] == 12
+
+
+def test_deferred_matches_keep_original_window_identity(tmp_path):
+    primary = [segment(1, 0, FIRST, end=5000), segment(2, 6000, SECOND, end=11000)]
+
+    def recognize(_path):
+        return [segment(i, -1000, "测试名", end=0) for i in range(4)] + [
+            segment(4, 0, FIRST, end=5000), segment(5, 6000, SECOND, end=11000)]
+
+    result = run_alignment(
+        alignment_request(primary, duration=12000), tmp_path,
+        read_audio=lambda _path, start, end, **kwargs: (
+            np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False),
+        detect=lambda audio: [{"start": 0, "end": len(audio)}], recognize=recognize,
+    )
+    assert result["outcome"] == "candidate"
+    assert result["asr_calls"] == 1
+    assert result["segments_checked"] == 6
+
+
+@pytest.mark.parametrize("offset", [-120, 120])
+def test_bidirectional_fallback_reaches_matches_before_local_quota_is_used(tmp_path, offset):
+    primary = [segment(1, 1200000, FIRST), segment(2, 2400000, SECOND)]
+    position = [0.]
+    scans = []
+
+    def read(_path, start, end, **kwargs):
+        position[0] = start
+        scans.append((start, end))
+        return np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False
+
+    def recognize(path):
+        with wave.open(str(path)) as clip:
+            duration = clip.getnframes() / clip.getframerate()
+        source_start = position[0] + clip_start[0]
+        clip_start[0] += duration
+        # The fake audio is continuous speech, with reliable sentences at two target positions.
+        for expected, text in ((1200 + offset, FIRST), (2400 + offset, SECOND)):
+            local = expected - source_start
+            if 0 <= local and local + 6 <= duration:
+                return [segment(1, round(local * 1000), text, end=round((local + 6) * 1000))]
+        return []
+
+    clip_start = [0.]
+
+    def detect(audio):
+        clip_start[0] = 0.
+        return [{"start": 0, "end": len(audio)}]
+
+    result = run_alignment(alignment_request(primary), tmp_path,
+                           read_audio=read, detect=detect, recognize=recognize)
+    assert result["outcome"] == "ready"
+    assert result["offset_ms"] == offset * 1000
+    assert result["asr_seconds"] <= 900
+    assert all(any(start <= expected < end for start, end in scans)
+               for expected in (1200 + offset, 2400 + offset))
+
+
+def test_fallback_can_be_cancelled_before_more_asr_and_removes_clips(tmp_path):
+    from classcue.processing_control import ProcessingCancelled
+    cancel = [False]
+
+    def report(stage, _message):
+        if stage == "fallback":
+            cancel[0] = True
+
+    with pytest.raises(ProcessingCancelled):
+        run_alignment(
+            alignment_request([segment(1, 20000, FIRST)]), tmp_path,
+            read_audio=lambda _path, start, end, **kwargs: (
+                np.zeros(round((end - start) * 16000), dtype=np.float32), end - start, False),
+            detect=lambda _: [], recognize=lambda _: pytest.fail("ASR should not run"),
+            report=report, should_stop=lambda: cancel[0],
+        )
+    assert not list(tmp_path.glob("*.wav"))
 
 
 def test_window_timestamps_produce_the_correct_offset_end_to_end(tmp_path):
@@ -317,6 +545,27 @@ def test_owned_worker_scans_synthetic_silence_without_loading_asr(library):
     result = service.run_worker(store, snapshot, lambda *args: None, lambda: False)
     assert result["outcome"] == "no_match"
     assert result["asr_calls"] == 0
+    assert not list((store.path.parent / "temporary_audio").iterdir())
+
+
+def test_timeout_preserves_partial_candidate_and_explains_stopping(library, monkeypatch):
+    import subprocess
+    _client, store, (primary, _) = library
+    snapshot = service.alignment_snapshot(store, primary, "synthetic")
+
+    def timeout(command, **kwargs):
+        Path(command[-1]).write_text(json.dumps({
+            "outcome": "candidate", "offset_ms": 8000, "evidence": [],
+            "message": "找到一处可靠对应", "asr_seconds": 24, "phase": "fallback",
+        }), encoding="utf-8")
+        raise subprocess.TimeoutExpired(command, 600)
+
+    monkeypatch.setattr(service, "run_process", timeout)
+    result = service.run_worker(store, snapshot, lambda *args: None, lambda: False)
+    assert result["outcome"] == "candidate"
+    assert result["offset_ms"] == 8000
+    assert result["stop_reason"] == "runtime_limit"
+    assert "运行时限" in result["message"]
     assert not list((store.path.parent / "temporary_audio").iterdir())
 
 

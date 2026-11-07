@@ -116,3 +116,15 @@ it("discards late results after changing videos", async () => {
   expect(onChange).not.toHaveBeenCalled();
   expect(container.textContent).not.toContain("对应句");
 });
+
+it("shows fallback usage and identifies a different primary subtitle model", async () => {
+  vi.mocked(api.getJob).mockResolvedValue({ ...candidate, alignment: {
+    ...candidate.alignment!, phase: "fallback", model_id: "fireredasr2-aed",
+    primary_model_id: "whisper-turbo", asr_seconds: 123.4,
+  } });
+  await mount({ ...secondary, alignment_job_id: "alignment" });
+  expect(container.textContent).toContain("ASR：fireredasr2-aed");
+  expect(container.textContent).toContain("124 / 900 秒");
+  expect(container.textContent).toContain("已使用扩大搜索");
+  expect(container.textContent).toContain("主字幕模型：whisper-turbo（与本次 ASR 不同）");
+});

@@ -13,7 +13,8 @@ import wave
 from classcue.core import TranscriptSegment
 from classcue.media import read_audio_window
 from classcue.secondary_alignment import (
-    Matcher, anchors, search_ranges, MAX_SEGMENTS, MAX_CALLS, MAX_ASR_SECONDS,
+    Matcher, anchors, search_windows, FAST_SEGMENTS, FAST_CALLS, FAST_ASR_SECONDS,
+    MAX_SEGMENTS, MAX_CALLS, MAX_ASR_SECONDS,
     MAX_DECODE_SECONDS, MAX_RUNTIME_SECONDS, SCAN_SECONDS, WINDOW_SECONDS,
 )
 
@@ -46,82 +47,182 @@ def run_alignment(request, directory, *, read_audio=read_audio_window, recognize
     calls = count = 0
     asr_seconds = decoded = 0.
     result = matcher.evaluate([], {})
+    phase = "fast"
+    attempted: list[tuple[int, int]] = []
+    deferred = []
+    skipped_short = 0
 
-    def snapshot():
+    def inspect(segment, shift_ms, duration, window_id):
+        nonlocal count
+        count += 1
+        if not 0 <= segment.start_ms < segment.end_ms <= round(duration * 1000) + 100:
+            return
+        words = [{**word, "start": word["start"] + shift_ms / 1000,
+                  "end": word["end"] + shift_ms / 1000}
+                 for word in segment.words or []
+                 if isinstance(word.get("start"), (int, float))
+                 and isinstance(word.get("end"), (int, float))]
+        recognized.append(replace(segment, id=count, start_ms=segment.start_ms + shift_ms,
+                                  end_ms=segment.end_ms + shift_ms, words=words))
+        windows[count] = window_id
+
+    def snapshot(reason=None):
         value = {**result, "segments_checked": count, "asr_calls": calls,
-                 "asr_seconds": round(asr_seconds, 3), "decoded_seconds": round(decoded, 3)}
+                 "asr_seconds": round(asr_seconds, 3), "decoded_seconds": round(decoded, 3),
+                 "phase": phase, "model_id": request["model"]["id"],
+                 "primary_model_id": request.get("primary_model_id", ""),
+                 "skipped_short": skipped_short, "stop_reason": reason or "searching"}
+        if reason and result["outcome"] != "ready":
+            explanations = {
+                "asr_budget": "已达到 15 分钟 ASR 音频上限",
+                "call_budget": "已达到识别调用上限",
+                "segment_budget": "已达到字幕检查上限",
+                "decode_budget": "已达到音频扫描上限",
+                "search_exhausted": "快速匹配及扩大搜索均已结束",
+            }
+            value["message"] = f"{result['message']}；{explanations.get(reason, reason)}"
         checkpoint(value)
         return value
 
     snapshot()
     with asr_session():
-        for begin, finish in search_ranges(primary, request["original_offset_ms"], request["duration_ms"]):
-            cursor = begin
-            while cursor < finish:
+        for phase in ("fast", "fallback"):
+            fallback = phase == "fallback"
+            label = "扩大搜索" if fallback else "快速匹配"
+            call_limit = MAX_CALLS if fallback else FAST_CALLS
+            segment_limit = MAX_SEGMENTS if fallback else FAST_SEGMENTS
+            audio_limit = MAX_ASR_SECONDS if fallback else FAST_ASR_SECONDS
+            per_anchor_calls = 32 if fallback else 4
+            per_anchor_audio = 300 if fallback else 48
+            per_anchor_segments = 64 if fallback else 4
+            anchor_calls, anchor_audio, anchor_segments = {}, {}, {}
+            scanned: list[tuple[float, float]] = []
+            report(phase, f"{label}：使用 {request['model']['id']}")
+            if fallback:
+                for owner, segment, shift_ms, duration, window_id in deferred:
+                    if should_stop():
+                        raise ProcessingCancelled("已停止自动对齐")
+                    if count >= segment_limit:
+                        break
+                    if anchor_segments.get(owner, 0) >= per_anchor_segments:
+                        continue
+                    inspect(segment, shift_ms, duration, window_id)
+                    anchor_segments[owner] = anchor_segments.get(owner, 0) + 1
+                deferred.clear()
+                result = matcher.evaluate(recognized, windows)
+                if result["outcome"] == "ready":
+                    return snapshot("matched")
+            offset = result["offset_ms"] if result["outcome"] == "candidate" else request["original_offset_ms"]
+            snapshot()
+            for anchor_id, begin, finish in search_windows(
+                    primary, offset, request["duration_ms"], fallback=fallback):
                 if should_stop():
                     raise ProcessingCancelled("已停止自动对齐")
-                if count >= MAX_SEGMENTS or calls >= MAX_CALLS or asr_seconds >= MAX_ASR_SECONDS:
-                    return snapshot()
+                if count >= segment_limit or calls >= call_limit or asr_seconds >= audio_limit:
+                    break
+                if (anchor_calls.get(anchor_id, 0) >= per_anchor_calls
+                        or anchor_audio.get(anchor_id, 0) >= per_anchor_audio
+                        or anchor_segments.get(anchor_id, 0) >= per_anchor_segments):
+                    continue
                 remaining = MAX_DECODE_SECONDS - decoded
                 if remaining <= 0:
-                    return snapshot()
-                stop = min(cursor + SCAN_SECONDS, finish)
-                report("finding_speech", f"正在寻找语音，已检查 {count}/10 段")
-                audio, charged, exhausted = read_audio(
-                    request["secondary_path"], cursor, stop, decoded_budget=remaining,
-                    should_stop=should_stop,
-                )
-                decoded += charged
-                if exhausted:
-                    return snapshot()
-                for speech in detect(audio):
-                    start_sample, end_sample = int(speech["start"]), int(speech["end"])
-                    start_sample = max(0, start_sample)
-                    end_sample = min(len(audio), end_sample)
-                    while start_sample < end_sample:
-                        if should_stop():
-                            raise ProcessingCancelled("已停止自动对齐")
-                        if count >= MAX_SEGMENTS or calls >= MAX_CALLS or asr_seconds >= MAX_ASR_SECONDS:
-                            return snapshot()
-                        last = min(end_sample, start_sample + WINDOW_SECONDS * 16000,
-                                   start_sample + round((MAX_ASR_SECONDS - asr_seconds) * 16000))
-                        if last <= start_sample:
-                            return snapshot()
-                        clip = audio[start_sample:last]
-                        path = Path(directory) / "window.wav"
-                        with wave.open(str(path), "wb") as output:
-                            output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
-                            output.writeframes((np.clip(clip, -1, 1) * 32767).astype("<i2").tobytes())
-                        calls += 1
-                        duration = len(clip) / 16000
-                        asr_seconds += duration
-                        report("recognizing", f"正在识别语音，已检查 {count}/10 段")
-                        try:
-                            output = recognize(path)
-                        finally:
-                            path.unlink(missing_ok=True)
-                        shift_ms = round((cursor + start_sample / 16000) * 1000)
-                        for segment in output[:MAX_SEGMENTS - count]:
-                            count += 1
-                            if not 0 <= segment.start_ms < segment.end_ms <= round(duration * 1000) + 100:
+                    return snapshot("decode_budget")
+                # Overlapping anchor searches must not repeatedly decode the same interval in a phase.
+                pieces = [(begin, finish)]
+                for used_start, used_end in scanned:
+                    pieces = [(a, b) for start, end in pieces
+                              for a, b in ((start, min(end, used_start)), (max(start, used_end), end))
+                              if b > a]
+                for cursor, stop in pieces:
+                    if should_stop():
+                        raise ProcessingCancelled("已停止自动对齐")
+                    remaining = MAX_DECODE_SECONDS - decoded
+                    if remaining <= 0:
+                        return snapshot("decode_budget")
+                    report(phase, f"{label}：寻找语音，累计 ASR {asr_seconds:.0f}/900 秒")
+                    audio, charged, exhausted = read_audio(
+                        request["secondary_path"], cursor, stop, decoded_budget=remaining,
+                        should_stop=should_stop,
+                    )
+                    decoded += charged
+                    scanned.append((cursor, stop))
+                    if exhausted:
+                        return snapshot("decode_budget")
+                    speech_ranges = []
+                    for speech in detect(audio):
+                        start = max(0, int(speech["start"]))
+                        end = min(len(audio), int(speech["end"]))
+                        if end <= start:
+                            continue
+                        if fallback and speech_ranges and start - speech_ranges[-1][1] <= 2 * 16000:
+                            previous_start, previous_end = speech_ranges[-1]
+                            if end - previous_start <= WINDOW_SECONDS * 16000:
+                                speech_ranges[-1] = (previous_start, max(previous_end, end))
                                 continue
-                            words = [{**word, "start": word["start"] + shift_ms / 1000,
-                                      "end": word["end"] + shift_ms / 1000}
-                                     for word in segment.words or []
-                                     if isinstance(word.get("start"), (int, float))
-                                     and isinstance(word.get("end"), (int, float))]
-                            recognized.append(replace(segment, id=count,
-                                                      start_ms=segment.start_ms + shift_ms,
-                                                      end_ms=segment.end_ms + shift_ms, words=words))
-                            windows[count] = calls
-                        report("matching", f"正在匹配字幕，已检查 {count}/10 段")
-                        result = matcher.evaluate(recognized, windows)
-                        saved = snapshot()
-                        if result["outcome"] == "ready":
-                            return saved
-                        start_sample = last
-                cursor = stop
-    return snapshot()
+                        speech_ranges.append((start, end))
+                    for start_sample, end_sample in speech_ranges:
+                        if (end_sample - start_sample) / 16000 < (1 if fallback else 2.5):
+                            skipped_short += 1
+                            continue
+                        shift = round(cursor * 16000)
+                        pending = [(start_sample + shift, end_sample + shift)]
+                        for used_start, used_end in attempted:
+                            pending = [(a, b) for start, end in pending
+                                       for a, b in ((start, min(end, used_start)), (max(start, used_end), end))
+                                       if b > a]
+                        for absolute_start, absolute_end in pending:
+                            start_sample, end_sample = absolute_start - shift, absolute_end - shift
+                            while start_sample < end_sample:
+                                if should_stop():
+                                    raise ProcessingCancelled("已停止自动对齐")
+                                if count >= segment_limit or calls >= call_limit or asr_seconds >= audio_limit:
+                                    break
+                                used_audio = anchor_audio.get(anchor_id, 0)
+                                if (anchor_calls.get(anchor_id, 0) >= per_anchor_calls
+                                        or used_audio >= per_anchor_audio
+                                        or anchor_segments.get(anchor_id, 0) >= per_anchor_segments):
+                                    break
+                                last = min(end_sample, start_sample + WINDOW_SECONDS * 16000,
+                                           start_sample + int(min(audio_limit - asr_seconds,
+                                                                  per_anchor_audio - used_audio) * 16000))
+                                if last <= start_sample:
+                                    break
+                                clip = audio[start_sample:last]
+                                path = Path(directory) / "window.wav"
+                                with wave.open(str(path), "wb") as output:
+                                    output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+                                    output.writeframes((np.clip(clip, -1, 1) * 32767).astype("<i2").tobytes())
+                                calls += 1
+                                anchor_calls[anchor_id] = anchor_calls.get(anchor_id, 0) + 1
+                                duration = len(clip) / 16000
+                                asr_seconds += duration
+                                anchor_audio[anchor_id] = used_audio + duration
+                                attempted.append((start_sample + shift, last + shift))
+                                report(phase, f"{label}：识别语音，累计 ASR {asr_seconds:.0f}/900 秒")
+                                snapshot()
+                                try:
+                                    output = recognize(path)
+                                finally:
+                                    path.unlink(missing_ok=True)
+                                shift_ms = round((cursor + start_sample / 16000) * 1000)
+                                remaining_segments = min(segment_limit - count,
+                                                         per_anchor_segments - anchor_segments.get(anchor_id, 0))
+                                for segment in output[:remaining_segments]:
+                                    inspect(segment, shift_ms, duration, calls)
+                                    anchor_segments[anchor_id] = anchor_segments.get(anchor_id, 0) + 1
+                                if not fallback:
+                                    room = max(0, MAX_SEGMENTS - count - len(deferred))
+                                    deferred.extend((anchor_id, segment, shift_ms, duration, calls)
+                                                    for segment in output[remaining_segments:remaining_segments + room])
+                                result = matcher.evaluate(recognized, windows)
+                                snapshot()
+                                if result["outcome"] == "ready":
+                                    return snapshot("matched")
+                                start_sample = last
+    reason = ("asr_budget" if asr_seconds >= MAX_ASR_SECONDS else
+              "call_budget" if calls >= MAX_CALLS else
+              "segment_budget" if count >= MAX_SEGMENTS else "search_exhausted")
+    return snapshot(reason)
 
 
 def main():
@@ -146,6 +247,11 @@ def main():
         save(result)
     except ProcessingCancelled:
         if result_path.exists():
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            if result.get("outcome") != "ready":
+                result.update(stop_reason="runtime_limit",
+                              message=f"{result['message']}；达到运行时限，已停止扩大搜索")
+                save(result)
             return 0
         save({"outcome": "no_match", "offset_ms": None, "evidence": [],
               "message": "达到运行时限，原偏移已保留"})
