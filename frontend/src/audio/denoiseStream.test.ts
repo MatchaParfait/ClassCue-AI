@@ -106,6 +106,33 @@ describe("GTCRN local stream lifecycle", () => {
     stream.dispose();
   });
 
+  it("preserves denoise buffers during clock corrections but resets on user speed changes", async () => {
+    element.playbackRate = 3;
+    const { stream, ws, epoch } = await start();
+    ws.send.mockClear();
+    port.postMessage.mockClear();
+    for (const rate of [3.06, 3, 2.94, 3.06, 3]) {
+      element.playbackRate = rate;
+      element.dispatchEvent(new Event("ratechange"));
+    }
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(port.postMessage).not.toHaveBeenCalled();
+    const packet = input(epoch, 0);
+    ws.onmessage?.({ data: packet });
+    expect(port.postMessage).toHaveBeenCalledWith({ type: "output", epoch, buffer: packet }, [packet]);
+    element.playbackRate = 2.5;
+    element.dispatchEvent(new Event("ratechange"));
+    const next = ws.ready();
+    expect(next).toBeGreaterThan(epoch);
+    ws.send.mockClear();
+    element.playbackRate = 2.55;
+    element.dispatchEvent(new Event("ratechange"));
+    expect(ws.send).not.toHaveBeenCalled();
+    element.dispatchEvent(new Event("seeking"));
+    expect(ws.ready()).toBeGreaterThan(next);
+    stream.dispose();
+  });
+
   it("limits pending frames and falls back before memory can grow indefinitely", async () => {
     const { stream, epoch, onError, ws } = await start();
     for (let i = 0; i < 25; i++) input(epoch, i);

@@ -238,19 +238,36 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
     element.muted = usePrimaryAudio || audioSettings.current.muted;
     if (!usePrimaryAudio) return;
     let disposed = false;
-    let frame = 0;
     let starting = false;
     let failed = false;
     let buffering = false;
-    const sync = () => {
+    let lastSeek = -Infinity;
+    const sync = (align = false) => {
       if (disposed) return;
       const settings = audioSettings.current;
       if (audio.volume !== settings.volume) audio.volume = settings.volume;
       if (audio.muted !== settings.muted) audio.muted = settings.muted;
-      if (audio.playbackRate !== element.playbackRate) audio.playbackRate = element.playbackRate;
+      const rate = element.playbackRate;
       const time = getPrimaryTime();
-      if (audio.readyState >= 1 && Math.abs(audio.currentTime - time) > .12) audio.currentTime = time;
-      if (buffering || element.paused || element.ended || element.seeking || element.readyState < 3 || pendingSource.current) {
+      const drift = time - audio.currentTime;
+      const now = performance.now();
+      const stopped = buffering || element.paused || element.ended || element.seeking
+        || element.readyState < 3 || Boolean(pendingSource.current);
+      // Small clock differences need gradual correction, not repeated decoder seeks.
+      let nextRate = rate;
+      if (audio.readyState >= 1 && !pendingSource.current) {
+        if (align || (!stopped && !audio.seeking && Math.abs(drift) / rate > .5 && now - lastSeek >= 1500)) {
+          if (Math.abs(drift) > .02) {
+            audio.currentTime = time;
+            lastSeek = now;
+          }
+        } else if (!stopped && !audio.paused && !audio.seeking && now - lastSeek >= 500
+          && Math.abs(drift) / rate > .06) {
+          nextRate = rate * (drift > 0 ? 1.02 : .98);
+        }
+      }
+      if (audio.playbackRate !== nextRate) audio.playbackRate = nextRate;
+      if (stopped) {
         if (!audio.paused) audio.pause();
       } else if (audio.paused && !starting && !failed) {
         starting = true;
@@ -261,24 +278,27 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
       }
     };
     const stop = () => { buffering = true; audio.pause(); };
+    const update = () => sync();
+    const align = () => sync(true);
     const resume = () => { buffering = false; failed = false; sync(); };
-    const events = ["play", "playing", "pause", "seeking", "seeked", "timeupdate", "ratechange", "ended"];
-    events.forEach(name => element.addEventListener(name, sync));
+    const events = ["play", "playing", "pause", "seeking", "timeupdate", "ratechange", "ended"];
+    events.forEach(name => element.addEventListener(name, update));
+    element.addEventListener("seeked", align);
     element.addEventListener("waiting", stop);
     element.addEventListener("playing", resume);
     element.addEventListener("play", resume);
-    audio.addEventListener("loadedmetadata", sync);
-    const tick = () => { sync(); frame = requestAnimationFrame(tick); };
-    sync();
-    frame = requestAnimationFrame(tick);
+    audio.addEventListener("loadedmetadata", align);
+    sync(true);
+    const timer = window.setInterval(update, 250);
     return () => {
       disposed = true;
-      cancelAnimationFrame(frame);
-      events.forEach(name => element.removeEventListener(name, sync));
+      window.clearInterval(timer);
+      events.forEach(name => element.removeEventListener(name, update));
+      element.removeEventListener("seeked", align);
       element.removeEventListener("waiting", stop);
       element.removeEventListener("playing", resume);
       element.removeEventListener("play", resume);
-      audio.removeEventListener("loadedmetadata", sync);
+      audio.removeEventListener("loadedmetadata", align);
       audio.pause();
     };
   }, [usePrimaryAudio, switching, videoRef]);

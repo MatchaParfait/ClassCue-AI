@@ -24,6 +24,7 @@ export async function createDenoiseStream(
   let timer: ReturnType<typeof setInterval> | undefined;
   let resetTimeout: ReturnType<typeof setTimeout> | undefined;
   let rejectInitialization: ((error: Error) => void) | undefined;
+  let resetRate = element.playbackRate;
   const pending = new Map<number, number>();
 
   const active = () => !element.paused && !element.ended && !element.seeking;
@@ -45,6 +46,7 @@ export async function createDenoiseStream(
     onError(message);
   };
   const reset = () => {
+    resetRate = element.playbackRate;
     if (!enabled || socket?.readyState !== WebSocket.OPEN) return;
     ready = false;
     pending.clear();
@@ -53,8 +55,14 @@ export async function createDenoiseStream(
     clearTimeout(resetTimeout);
     resetTimeout = setTimeout(() => fail(), 10000);
   };
-  const events = ["play", "pause", "seeking", "seeked", "ended", "emptied", "ratechange", "volumechange"] as const;
+  // Clock correction varies by ±2%; even opposite corrections must keep PCM flowing.
+  // Compare against the last reset, so successive user changes still accumulate.
+  const rateChange = () => {
+    if (Math.abs(element.playbackRate / resetRate - 1) > .05) reset();
+  };
+  const events = ["play", "pause", "seeking", "seeked", "ended", "emptied", "volumechange"] as const;
   for (const event of events) element.addEventListener(event, reset);
+  element.addEventListener("ratechange", rateChange);
 
   node.port.onmessage = ({ data }) => {
     if (data.epoch !== epoch || !enabled || !ready) return;
@@ -127,6 +135,7 @@ export async function createDenoiseStream(
       disposed = true;
       stop();
       for (const event of events) element.removeEventListener(event, reset);
+      element.removeEventListener("ratechange", rateChange);
       node.port.onmessage = null;
       node.disconnect();
     },

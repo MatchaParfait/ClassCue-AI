@@ -509,6 +509,74 @@ describe("secondary camera and primary timeline", () => {
     expect(paused).toBe(true);
   });
 
+  it.each([1, 3])("corrects small borrowed-audio drift without repeated seeks at %sx", async rate => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    await mountSecondary({ ...secondary, use_primary_audio: true });
+    changeCamera();
+    const element = videoRef.current!;
+    const audio = container.querySelector("audio")!;
+    Object.defineProperty(audio, "readyState", { configurable: true, value: 4 });
+    act(() => audio.dispatchEvent(new Event("loadedmetadata")));
+    for (const media of [element, audio]) {
+      Object.defineProperty(media, "paused", { configurable: true, value: false });
+      Object.defineProperty(media, "readyState", { configurable: true, value: 4 });
+    }
+    clock.mockReturnValue(5000);
+    element.playbackRate = rate;
+    element.currentTime = 25 + .2 * rate;
+    let audioTime = audio.currentTime;
+    const position = vi.fn((time: number) => { audioTime = time; });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true, get: () => audioTime, set: position,
+    });
+    act(() => {
+      for (let i = 0; i < 10; i++) element.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(position).not.toHaveBeenCalled();
+    expect(audio.playbackRate).toBeCloseTo(rate * 1.02);
+    audio.currentTime = element.currentTime - 5;
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(audio.playbackRate).toBe(rate);
+    audio.currentTime += .2 * rate;
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(audio.playbackRate).toBeCloseTo(rate * .98);
+  });
+
+  it("limits large drift corrections while audio seeks but aligns explicit video seeks immediately", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    await mountSecondary({ ...secondary, use_primary_audio: true });
+    changeCamera();
+    const element = videoRef.current!;
+    const audio = container.querySelector("audio")!;
+    Object.defineProperty(audio, "readyState", { configurable: true, value: 4 });
+    act(() => audio.dispatchEvent(new Event("loadedmetadata")));
+    for (const media of [element, audio]) {
+      Object.defineProperty(media, "paused", { configurable: true, value: false });
+      Object.defineProperty(media, "readyState", { configurable: true, value: 4 });
+    }
+    clock.mockReturnValue(5000);
+    element.playbackRate = 3;
+    element.currentTime = 35;
+    let audioTime = audio.currentTime;
+    const position = vi.fn((time: number) => { audioTime = time; });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true, get: () => audioTime, set: position,
+    });
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(position).toHaveBeenCalledTimes(1);
+    expect(position).toHaveBeenLastCalledWith(30);
+    element.currentTime = 41;
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(position).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(7000);
+    Object.defineProperty(audio, "seeking", { configurable: true, value: true });
+    act(() => element.dispatchEvent(new Event("timeupdate")));
+    expect(position).toHaveBeenCalledTimes(1);
+    act(() => element.dispatchEvent(new Event("seeked")));
+    expect(position).toHaveBeenLastCalledWith(36);
+    expect(audio.playbackRate).toBe(3);
+  });
+
   it("switches at mapped time, preserves playback settings and keeps primary duration", async () => {
     await mountSecondary();
     const element = videoRef.current!;
