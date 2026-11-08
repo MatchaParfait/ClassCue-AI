@@ -124,3 +124,17 @@ it("recognizes redo combinations with exact modifiers and reserves them", () => 
   map.nextMarker = ["Ctrl+Y"];
   expect(validateShortcuts(map)).toContain("重做");
 });
+
+it("reserves tab navigation and removes only conflicting old bindings", () => {
+  for (const binding of ["Ctrl+PageUp", "Ctrl+PageDown"]) {
+    const map = defaultShortcuts();
+    map.nextMarker = [binding];
+    expect(validateShortcuts(map)).toContain("标签切换");
+  }
+  window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify({
+    previousMarker: ["Ctrl+PageUp", "H"], nextMarker: ["Ctrl+PageDown", "J"], captureTime: ["Ctrl+U"],
+  }));
+  expect(readShortcuts().previousMarker).toEqual(["H"]);
+  expect(readShortcuts().nextMarker).toEqual(["J"]);
+  expect(readShortcuts().captureTime).toEqual(["Ctrl+U"]);
+});

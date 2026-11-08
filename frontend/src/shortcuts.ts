@@ -36,6 +36,7 @@ export function bindingFromEvent(event: KeyEvent): string | null {
 }
 const reserved = new Set(["F5", "F6", "F11", "F12", "Alt+F4", "Alt+Tab", "Alt+ArrowLeft", "Alt+ArrowRight", "Ctrl+R", "Ctrl+Shift+R", "Ctrl+W", "Ctrl+Shift+W", "Ctrl+T", "Ctrl+N", "Ctrl+L", "Ctrl+Shift+T", "Ctrl+Shift+N", "Ctrl+Alt+Delete", "Meta+Q", "Meta+W", "Meta+R", "Meta+L", "Meta+T", "Meta+N"]);
 const undoBindings = new Set(["Ctrl+Z", "Meta+Z", "Ctrl+Shift+Z", "Meta+Shift+Z", "Ctrl+Y", "Meta+Y"]);
+const tabBindings = new Set(["Ctrl+PageUp", "Ctrl+PageDown"]);
 export function validateShortcuts(map: ShortcutMap, wake = ""): string | null {
   if (wake && !/^Ctrl\+(Alt|Shift)\+[A-Z0-9]$/.test(wake)) return "启动 / 唤起仅支持 Ctrl+Alt+字母/数字或 Ctrl+Shift+字母/数字。";
   const used: { binding: string; label: string }[] = wake ? [{ binding: wake, label: "启动 / 唤起" }] : [];
@@ -46,6 +47,7 @@ export function validateShortcuts(map: ShortcutMap, wake = ""): string | null {
       let binding: string;
       try { binding = normalizeBinding(raw); } catch { return `“${definition.label}”的快捷键无效。`; }
       if (undoBindings.has(binding)) return `“${formatBinding(binding)}”保留给撤销或重做，请更换。`;
+      if (tabBindings.has(binding)) return `“${formatBinding(binding)}”保留给标签切换，请更换。`;
       if (reserved.has(binding)) return `“${formatBinding(binding)}”由系统或浏览器保留，请更换。`;
       const collision = used.find(item => item.binding === binding);
       if (collision) return `“${formatBinding(binding)}”同时用于“${collision.label}”和“${definition.label}”，请更换其中一个。`;
@@ -98,7 +100,7 @@ export function readShortcuts(): ShortcutMap {
     const saved = JSON.parse(raw ?? "{}");
     for (const { id } of shortcutDefinitions) if (Object.hasOwn(saved, id)) map[id] = saved[id];
     for (const { id } of shortcutDefinitions) {
-      if (Array.isArray(map[id])) map[id] = map[id].filter(binding => !undoBindings.has(binding));
+      if (Array.isArray(map[id])) map[id] = map[id].filter(binding => !undoBindings.has(binding) && !tabBindings.has(binding));
     }
     // Keep old custom bindings when the new default key is already in use.
     if (!Object.hasOwn(saved, "createQuestion")

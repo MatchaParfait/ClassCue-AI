@@ -5,6 +5,7 @@ import type { Video } from "../types";
 import { useUnsavedLeave } from "./UnsavedChanges";
 
 type OpenTab = { key: string; kind: "video" | "materials"; title: string; href: string };
+const SWITCH_HINT = "切换标签：Ctrl+Tab 向右，Ctrl+Shift+Tab 向左；也可用 Ctrl+PageUp / PageDown";
 type ReviewTabsContextValue = {
   tabs: OpenTab[];
   register: (video: Video) => void;
@@ -59,12 +60,38 @@ export function ReviewTabs() {
   const navigate = useNavigate();
   const leave = useUnsavedLeave();
   const list = useRef<HTMLDivElement>(null);
+  const focusAfterSwitch = useRef<string | null>(null);
   const [edges, setEdges] = useState({ left: false, right: false });
   const tabs = context?.tabs ?? [];
   const match = /^\/review\/(\d+)$/.exec(location.pathname);
   const activeKey = match ? `video:${Number(match[1])}`
     : location.pathname === "/study-materials" ? "study-materials" : null;
   const libraryActive = location.pathname === "/" || location.pathname.startsWith("/library/folder/");
+
+  useEffect(() => {
+    if (!tabs.length) return;
+    const switchTab = (event: globalThis.KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.defaultPrevented
+        || document.visibilityState === "hidden" || document.body.hasAttribute("data-modal-locked")
+        || list.current?.closest('[hidden], [inert], [aria-hidden="true"]')
+        || (event.target instanceof Element && event.target.closest('[data-shortcut-recorder]'))) return;
+      const direction = event.key === "Tab" ? (event.shiftKey ? -1 : 1)
+        : !event.shiftKey && event.key === "PageUp" ? -1
+        : !event.shiftKey && event.key === "PageDown" ? 1 : 0;
+      if (!direction) return;
+      const index = tabs.findIndex(tab => tab.key === activeKey);
+      const next = tabs[index < 0 ? (direction > 0 ? 0 : tabs.length - 1)
+        : (index + direction + tabs.length) % tabs.length];
+      event.preventDefault();
+      if (event.repeat || next.key === activeKey) return;
+      leave(() => {
+        focusAfterSwitch.current = next.key;
+        navigate(next.href);
+      });
+    };
+    document.addEventListener("keydown", switchTab);
+    return () => document.removeEventListener("keydown", switchTab);
+  }, [tabs, activeKey, leave, navigate]);
 
   useEffect(() => {
     const element = list.current;
@@ -75,6 +102,10 @@ export function ReviewTabs() {
     });
     const active = element.querySelector<HTMLElement>('[aria-current="page"]');
     if (active) {
+      if (focusAfterSwitch.current === activeKey) {
+        focusAfterSwitch.current = null;
+        active.focus({ preventScroll: true });
+      }
       const item = active.parentElement!;
       const left = item.offsetLeft, right = left + item.offsetWidth;
       if (left < element.scrollLeft) element.scrollLeft = left;
@@ -122,7 +153,9 @@ export function ReviewTabs() {
       list.current.scrollLeft = Math.max(0, item.offsetLeft - (list.current.clientWidth - item.offsetWidth) / 2);
     }
   };
-  return <nav className="review-tabs" aria-label="已打开的视频与资料">
+  return <nav className="review-tabs" aria-label="已打开的视频与资料"
+    title={SWITCH_HINT}
+    aria-keyshortcuts="Control+Tab Control+Shift+Tab Control+PageUp Control+PageDown">
     <Link className="review-tabs-library" to="/" aria-current={libraryActive ? "page" : undefined} title="返回视频库">
       <Library size={15} aria-hidden="true" /><span>视频库</span>
     </Link>
@@ -130,7 +163,7 @@ export function ReviewTabs() {
       disabled={!edges.left} onClick={() => list.current?.scrollBy({ left: -300, behavior: "auto" })}><ChevronLeft size={16} /></button>
     <div ref={list} className="review-tabs-list">
       {tabs.map(tab => <div className={`review-tab${tab.key === activeKey ? " is-active" : ""}`} key={tab.key}>
-        <Link to={tab.href} className="review-tab-link" title={tab.title} data-tab-key={tab.key}
+        <Link to={tab.href} className="review-tab-link" title={`${tab.title}\n${SWITCH_HINT}`} data-tab-key={tab.key}
           aria-current={tab.key === activeKey ? "page" : undefined} onKeyDown={event => keydown(event, tab.key)}>
           {tab.kind === "video" ? <Play size={13} aria-hidden="true" /> : <FileText size={13} aria-hidden="true" />}<span>{tab.title}</span>
         </Link>
