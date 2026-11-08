@@ -72,6 +72,30 @@ it("does not read real tasks in demo mode", async () => {
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("暂无处理任务");
 });
 
+it("shows course transcription counts and failures and returns to the library", async () => {
+  const job = {
+    id: "course-job", status: "failed", job_type: "course_transcribe", progress: 100,
+    model_id: "whisper-turbo", message: "转写结束，1 个视频失败",
+    batch_summary: { total: 3, completed: 1, skipped: 1, failed: 1, awaiting_ai: 0, pending_asr: 0 },
+    batch_entries: [{ video_id: 1, label: "第一课", status: "completed" },
+      { video_id: 2, label: "第二课", status: "skipped" },
+      { video_id: 3, label: "第三课", status: "failed", error: "媒体解码失败" }],
+  };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([job]);
+  vi.mocked(api.getJob).mockResolvedValue(job);
+  await mount();
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="查看任务详情"]')!.click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("课程转写"));
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("第一课");
+  expect(dialog.textContent).toContain("媒体解码失败");
+  expect(dialog.textContent).toContain("打开视频库");
+  expect(dialog.textContent).not.toContain("待 AI");
+  expect([...dialog.querySelectorAll(".task-summary dt")].map(node => node.textContent))
+    .toEqual(["已转写", "已跳过", "失败", "待转写"]);
+  expect(taskDestination(job)).toBe("/");
+});
+
 it("routes historical material tasks home while paused and restores their destination when enabled", () => {
   const job = { id: "materials-history", status: "completed", job_type: "material_preprocess" };
   expect(taskDestination(job)).toBe("/");

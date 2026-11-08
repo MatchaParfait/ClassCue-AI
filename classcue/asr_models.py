@@ -5,6 +5,7 @@ from __future__ import annotations
 from classcue.paths import PROJECT_ROOT
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 import json
@@ -22,6 +23,28 @@ MODEL_ROOT = storage_root(ROOT) / "models" / "asr"
 SETTINGS_PATH = application_config_directory(ROOT) / "asr_settings.json"
 DEFAULT_MODEL_ID = "whisper-turbo"
 OPERATION_LOCK = RLock()
+_FROZEN_SELECTION = ContextVar("asr_frozen_selection", default=None)
+
+
+@contextmanager
+def frozen_selection(selection):
+    """Keep a background task's selection without rewriting global preferences."""
+    token = _FROZEN_SELECTION.set(dict(selection))
+    try:
+        yield
+    finally:
+        _FROZEN_SELECTION.reset(token)
+
+
+def selection_is_frozen():
+    return _FROZEN_SELECTION.get() is not None
+
+
+def selection_snapshot():
+    with SETTINGS_LOCK:
+        return {"model_id": selected_model_id(), "firered_device": selected_firered_device(),
+                "paraformer_device": selected_paraformer_device(), "nano_device": selected_nano_device(),
+                "dolphin_device": selected_dolphin_device()}
 SETTINGS_LOCK = RLock()
 Progress = Callable[[float, str], None]
 FIRERED_CPU_NOTICE = (
@@ -125,6 +148,8 @@ def require_selectable_model(model_id: str) -> ASRModel:
 
 
 def selected_model_id() -> str:
+    if _FROZEN_SELECTION.get() is not None:
+        return _FROZEN_SELECTION.get()["model_id"]
     with SETTINGS_LOCK:
         try:
             value = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))["model_id"]
@@ -135,6 +160,8 @@ def selected_model_id() -> str:
 
 
 def selected_firered_device() -> str:
+    if _FROZEN_SELECTION.get() is not None:
+        return _FROZEN_SELECTION.get()["firered_device"]
     with SETTINGS_LOCK:
         try:
             device = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")).get("firered_device")
@@ -149,6 +176,8 @@ def require_firered_gpu(device: str | None = None) -> None:
 
 
 def selected_paraformer_device() -> str:
+    if _FROZEN_SELECTION.get() is not None:
+        return _FROZEN_SELECTION.get()["paraformer_device"]
     with SETTINGS_LOCK:
         try:
             device = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")).get("paraformer_device")
@@ -158,6 +187,8 @@ def selected_paraformer_device() -> str:
 
 
 def selected_nano_device() -> str:
+    if _FROZEN_SELECTION.get() is not None:
+        return _FROZEN_SELECTION.get()["nano_device"]
     with SETTINGS_LOCK:
         try:
             device = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")).get("nano_device")
@@ -167,6 +198,8 @@ def selected_nano_device() -> str:
 
 
 def selected_dolphin_device() -> str:
+    if _FROZEN_SELECTION.get() is not None:
+        return _FROZEN_SELECTION.get()["dolphin_device"]
     with SETTINGS_LOCK:
         try:
             device = json.loads(SETTINGS_PATH.read_text(encoding="utf-8")).get("dolphin_device")

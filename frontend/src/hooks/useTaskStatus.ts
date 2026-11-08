@@ -45,7 +45,7 @@ export function taskTypeLabel(job: Job) {
     && job.analysis_modes[0] === "question_extraction" ? "题目提取" : "考点提取";
   return ({
     batch_video_process: job.import_only ? "批量导入" : "批量处理",
-    video_process: "视频处理", video_transcribe: "重新转写",
+    video_process: "视频处理", video_transcribe: "重新转写", course_transcribe: "课程转写",
     secondary_view_align: "副视角自动对齐",
     question_analysis: "题目分析", question_visual: "题图复核",
     material_preprocess: "资料整理",

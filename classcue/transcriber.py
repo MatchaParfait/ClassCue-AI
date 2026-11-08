@@ -19,7 +19,7 @@ from classcue.asr_models import (
     OPERATION_LOCK, ROOT, component_paths, delete_model, download_model, get_model,
     model_operation, selected_model_id, selected_firered_device, selected_paraformer_device,
     selected_nano_device, selected_dolphin_device, require_firered_gpu,
-    require_selectable_model, model_is_downloaded,
+    require_selectable_model, model_is_downloaded, selection_is_frozen,
 )
 from classcue.core import TranscriptSegment
 from classcue.asr_cpu import cpu_thread_policy, worker_creationflags
@@ -687,7 +687,7 @@ def transcribe_audio(
             except ValueError as exc:
                 raise ASRSetupError(str(exc)) from exc
         try:
-            if prepared_only:
+            if prepared_only or selection_is_frozen():
                 require_prepared_asr_model(selected.id)
             else:
                 prepare_asr_model(selected.id, progress)
@@ -793,7 +793,7 @@ def require_prepared_asr_model(model_id: str) -> None:
         "nano": lambda: nano_runtime_is_ready(device=selected_nano_device()),
     }
     if not model_is_downloaded(model.id) or (model.engine in ready and not ready[model.engine]()):
-        raise ASRSetupError("自动对齐仅使用已准备的模型，请先在设置中准备当前 ASR 模型")
+        raise ASRSetupError("此任务仅使用已准备的模型，请先在设置中准备当前 ASR 模型")
 
 
 def _transcribe_whisper(audio_path, model_id, progress, should_stop=None):

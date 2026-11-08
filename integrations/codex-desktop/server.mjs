@@ -8,8 +8,9 @@ import { configuredRoots, discussionStore } from "./connection.mjs";
 import { relative, isAbsolute } from "node:path";
 import { realpath } from "node:fs/promises";
 import { discussionResource, resourceUri } from "./resource.mjs";
+import { courseTools, callCourseTool } from "./course-tools.mjs";
 
-const server = new Server({ name: "classcue", version: "0.3.0" },
+const server = new Server({ name: "classcue", version: "0.5.0" },
   { capabilities: { tools: {}, resources: {} } });
 const properties = {
   request_id: { type: "string", pattern: "^[a-f0-9]{32}$" },
@@ -17,7 +18,7 @@ const properties = {
 };
 const appOnly = { ui: { visibility: ["app"] } };
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [{
+  tools: [...courseTools, {
     name: "read_discussion_context",
     description: "读取 ClassCue 已保存讨论的原题或课堂片段字幕及有序图片。使用讨论指引提供的 context.json 绝对路径；不读取聊天记录，不启动模型。",
     inputSchema: {
@@ -59,6 +60,10 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   let store;
   try {
     const { name, arguments: args = {}, _meta: meta } = request.params;
+    if (courseTools.some(tool => tool.name === name)) {
+      const result = await callCourseTool(name, args);
+      return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+    }
     if (name === "read_discussion_context") {
       if (typeof args.context_file !== "string") throw new Error("缺少上下文文件路径。");
       const file = await realpath(args.context_file);

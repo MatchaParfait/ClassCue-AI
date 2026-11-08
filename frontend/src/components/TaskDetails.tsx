@@ -54,10 +54,13 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       : <div className="job-progress"><span style={{ width: `${progress}%` }} /></div>}
     <p className="task-message">{job.message}</p>
     {job.job_type !== "asr_prepare" && hasActivePreparation(job) && <ModelPreparationProgress job={job} />}
-    {summary && <dl className="task-summary">{[
+    {summary && <dl className="task-summary">{(job.job_type === "course_transcribe" ? [
+      ["已转写", summary.completed], ["已跳过", summary.skipped],
+      ["失败", summary.failed], ["待转写", summary.pending_asr],
+    ] : [
       ["已完成", summary.completed + summary.skipped], ["失败", summary.failed],
       ["待 AI", summary.awaiting_ai], ["尚未转写", summary.pending_asr],
-    ].map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count}</dd></div>)}</dl>}
+    ]).map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count}</dd></div>)}</dl>}
     <FireRedResourceStatus resource={job.resource} />
     {job.error_message && <p className="field-error" role="alert">{job.error_message}</p>}
     {command.isError && <p className="field-error" role="alert">{command.error.message}</p>}
@@ -66,7 +69,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       {job.status === "resource_paused" ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("resume")}>{commandIcon}继续任务</button>
         : job.job_type === "batch_video_process" && ["awaiting_api", "failed", "interrupted"].includes(job.status) && retryableBatch
           ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("retry")}>{commandIcon}重试未完成视频</button>
-          : <button className="secondary-button" onClick={() => onOpen(job)}>{migrating ? "打开存储设置" : "打开处理详情"}</button>}
+          : <button className="secondary-button" onClick={() => onOpen(job)}>{migrating ? "打开存储设置" : job.job_type === "course_transcribe" ? "打开视频库" : "打开处理详情"}</button>}
       {job.status === "awaiting_api" && <button className="secondary-button" onClick={onSettings}><Settings2 size={16} />AI 服务设置</button>}
     </div>
     {!migrating && (running || job.status === "resource_paused") && <div className="task-danger-zone"><button className="stop-job-button"
@@ -74,7 +77,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       {command.isPending || job.stage === "stopping" ? "正在请求停止…" : "停止任务"}</button></div>}
     {job.batch_entries && <ul className="task-entry-list">{job.batch_entries.map((entry, index) =>
       <li key={`${entry.video_id}:${index}`}><div><strong>{entry.label || `视频 ${entry.video_id ?? index + 1}`}</strong>
-        <span>{({ completed: "已完成", skipped: "已复用", failed: "失败", pending_ai: "待 AI", awaiting_api: "待 AI", pending_asr: "尚未转写" } as Record<string, string>)[entry.status] ?? entry.status}</span></div>
+        <span>{({ completed: "已完成", skipped: "已复用", failed: "失败", pending: "尚未转写", running: "转写中", pending_ai: "待 AI", awaiting_api: "待 AI", pending_asr: "尚未转写" } as Record<string, string>)[entry.status] ?? entry.status}</span></div>
         {entry.error && <p className="field-error">{entry.error}</p>}</li>)}</ul>}
   </div>;
 }

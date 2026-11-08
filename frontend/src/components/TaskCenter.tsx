@@ -23,6 +23,7 @@ export function useRecentTasks(active = true, poll = true) {
 
 export function taskDestination(job: Job) {
   return job.job_type === "storage_migration" ? "/settings?section=storage"
+    : job.job_type === "course_transcribe" ? "/"
     : job.job_type === "material_preprocess" ? MATERIALS_ENABLED ? "/materials" : "/"
     : job.job_type === "batch_video_process" ? "/batch-process"
       : job.video_id ? `/process?videoId=${job.video_id}&jobId=${encodeURIComponent(job.job_id ?? job.id)}` : "/settings?section=asr";

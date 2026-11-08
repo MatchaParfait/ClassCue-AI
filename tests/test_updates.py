@@ -349,6 +349,35 @@ def test_native_reservation_blocks_tasks_and_rejects_web_or_cross_origin(distrib
         assert not updating.is_set()
 
 
+def test_headless_api_and_later_desktop_share_native_update_authorization(distribution, monkeypatch):
+    from api.updates import router
+    from classcue.desktop_runtime import Services
+
+    d = distribution
+    monkeypatch.delenv("CLASSROOM_UPDATE_TOKEN", raising=False)
+    jobs = SimpleNamespace(_lock=RLock(), is_running=lambda: False)
+    provider = SimpleNamespace(get=lambda: SimpleNamespace(list_paused_jobs=lambda: []),
+                               database_path=lambda: d.root / "data/project.db")
+    updating = Event()
+    app = FastAPI()
+    app.include_router(router(d.center, jobs, provider, Event(), updating))
+    # Opening a window reuses the API; changing the parent environment cannot
+    # replace authorization already held by that separate server process.
+    services = Services(d.root)
+    monkeypatch.setenv("CLASSROOM_UPDATE_TOKEN", "later-desktop-environment")
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        assert client.post("/api/updates/prepare-install").status_code == 403
+        assert client.post("/api/updates/prepare-install", headers={
+            "Authorization": f"Bearer {services.update_token}",
+            "Origin": "http://127.0.0.1:8765",
+        }).status_code == 403
+        headers = {"Authorization": f"Bearer {services.update_token}"}
+        assert client.post("/api/updates/prepare-install", headers=headers).status_code == 200
+        assert updating.is_set()
+        assert client.post("/api/updates/cancel-install", headers=headers).status_code == 200
+        assert not updating.is_set()
+
+
 def test_download_resumes_and_validates_signed_hash(distribution):
     d = distribution
     release = d.payload["release"]

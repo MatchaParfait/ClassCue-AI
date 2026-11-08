@@ -92,6 +92,7 @@ def search_subtitles(
     video_id: int | None = None,
     preferred_video_id: int | None = None,
     folder_id: int | None = None,
+    root_only: bool = False,
 ) -> dict[str, object]:
     query = validate_query(query)
     if (not 1 <= limit <= MAX_PAGE_SIZE or not 0 <= offset <= MAX_SQLITE_INTEGER
@@ -102,6 +103,8 @@ def search_subtitles(
     parameters: list[object] = []
     index_join = ""
     predicates = ["v.is_secondary = 0"]
+    if root_only:
+        predicates.append("v.library_folder_id IS NULL")
     # FTS5 trigrams require three code points; shorter queries still work via LIKE.
     if len(query) >= 3:
         index_join = "JOIN video_subtitle_fts ON video_subtitle_fts.rowid = s.row_id"

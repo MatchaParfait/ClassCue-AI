@@ -149,7 +149,8 @@ def test_window_preserves_one_artwork_across_navigation_retry_and_early_progress
     assert 'data-scene-id="second"' in html
     loaded = Event()
     ui.window = SimpleNamespace(events=SimpleNamespace(loaded=loaded),
-                                evaluate_js=Mock(return_value=None), load_url=Mock(), load_html=Mock())
+                                evaluate_js=Mock(return_value=None), load_url=Mock(), load_html=Mock(),
+                                get_current_url=lambda: None)
     ui.progress("Connecting")
     ui.window.evaluate_js.assert_not_called()
     loaded.set()
@@ -229,7 +230,7 @@ def test_missing_transition_asset_cannot_prevent_the_real_library_from_opening(p
     loaded = Event()
     loaded.set()
     ui.window = SimpleNamespace(events=SimpleNamespace(loaded=loaded), load_url=Mock(),
-                                evaluate_js=lambda _script: None)
+                                evaluate_js=lambda _script: None, get_current_url=lambda: None)
     (project / "assets" / "desktop-startup-transition.js").unlink()
     ui.open("http://127.0.0.1:8765")
     ui.window.load_url.assert_called_once_with("http://127.0.0.1:8765/")
@@ -259,3 +260,62 @@ def test_delayed_start_cannot_create_services_after_the_window_has_closed():
     lifecycle.destroy()
     lifecycle.start()
     services.start.assert_not_called()
+
+
+@pytest.mark.parametrize("actual_url", ["http://127.0.0.1:8765/", "http://127.0.0.1:8765/review/1"])
+def test_retry_reloads_the_actual_root_page_and_finishes_startup(project, monkeypatch, actual_url):
+    from scripts import desktop_app
+    from classcue.desktop_runtime import Lifecycle
+    monkeypatch.setattr(desktop_app, "PROJECT", project)
+    monkeypatch.setattr(desktop_app, "install_startup_transition", Mock(return_value=Mock()))
+    reload_window = Mock()
+    monkeypatch.setattr(desktop_app, "reload_window", reload_window)
+    loaded = Event()
+    loaded.set()
+    ui = desktop_app.WindowUI()
+    # Cached state is intentionally different: navigation must use the real URL.
+    ui.current_url = "http://127.0.0.1:8765/stale"
+    ui.window = SimpleNamespace(events=SimpleNamespace(loaded=loaded), evaluate_js=Mock(return_value=None),
+                                load_url=Mock(), get_current_url=lambda: actual_url)
+    services = SimpleNamespace(start=Mock(return_value="http://127.0.0.1:8765"))
+    lifecycle = Lifecycle(services, ui)
+    lifecycle.ready = True
+    lifecycle.start()
+    assert lifecycle.ready and not lifecycle.starting
+    assert ui.current_url == "http://127.0.0.1:8765/"
+    if actual_url.endswith("/review/1"):
+        ui.window.load_url.assert_called_once_with(ui.current_url)
+        reload_window.assert_not_called()
+    else:
+        ui.window.load_url.assert_not_called()
+        reload_window.assert_called_once_with(ui.window)
+
+
+def test_same_url_reload_uses_the_native_ui_thread_without_page_scripts(monkeypatch):
+    import sys
+    from scripts.desktop_transition import reload_window
+    inside_ui = False
+    calls = []
+
+    class Delegate:
+        def __class_getitem__(cls, _value):
+            return lambda callback: callback
+
+    class WebView:
+        def Reload(self):
+            assert inside_ui
+            calls.append("reload")
+
+    def invoke(callback):
+        nonlocal inside_ui
+        inside_ui = True
+        try:
+            return callback()
+        finally:
+            inside_ui = False
+
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(Func=Delegate, Object=object))
+    window = SimpleNamespace(native=SimpleNamespace(browser=SimpleNamespace(webview=SimpleNamespace(
+        CoreWebView2=WebView())), Invoke=invoke))
+    reload_window(window)
+    assert calls == ["reload"]

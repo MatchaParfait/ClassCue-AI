@@ -588,7 +588,8 @@ class JobManager:
             "preparation": json.loads(row["preparation_json"]) if row["preparation_json"] else None,
             "cleanup": json.loads(row["cleanup_json"]) if row["cleanup_json"] else None,
             "migration": json.loads(row["request_json"] or "{}").get("migration"),
-            "model_id": json.loads(row["request_json"] or "{}").get("model_id"),
+            "model_id": (json.loads(row["request_json"] or "{}").get("model_id")
+                         or json.loads(row["request_json"] or "{}").get("selection", {}).get("model_id")),
             **({"alignment": json.loads(row["request_json"] or "{}").get("alignment", {}).get("result")}
                if row["job_type"] == "secondary_view_align" else {}),
             "analysis_modes": options.get("analysis_modes") or ([options["analysis_mode"]] if options.get("analysis_mode") else []),
@@ -599,6 +600,24 @@ class JobManager:
 
     @staticmethod
     def _batch_payload(row: sqlite3.Row, store=None) -> dict:
+        if row["job_type"] == "course_transcribe":
+            state = json.loads(row["request_json"] or "{}")
+            entries = state.get("entries", [])
+            counts = {status: sum(entry["status"] == status for entry in entries)
+                      for status in ("completed", "skipped", "failed")}
+            def entry_payload(entry):
+                video = store.get_video(entry["video_id"]) if store is not None else None
+                status = entry["status"]
+                if status == "running" and row["status"] != "running":
+                    status = "pending"
+                return {**entry, "status": status,
+                        "label": (video["display_name"] or video["filename"]) if video else None}
+            return {
+                "batch_summary": {**counts, "total": len(entries), "awaiting_ai": 0,
+                                  "pending_asr": len(entries) - sum(counts.values())},
+                "batch_entries": [entry_payload(entry) for entry in entries],
+                **({"message": state["interruption_reason"]} if state.get("interruption_reason") else {}),
+            }
         if row["job_type"] != "batch_video_process":
             return {}
         state = json.loads(row["request_json"] or "{}")
@@ -1505,7 +1524,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 snapshot = json.loads(row["request_json"] or "{}").get("alignment", {}).get("snapshot", {})
                 if snapshot.get("secondary_id"):
                     locked[int(snapshot["secondary_id"])] = reason
-            if row["job_type"] != "batch_video_process":
+            if row["job_type"] not in {"batch_video_process", "course_transcribe"}:
                 continue
             try:
                 state = json.loads(row["request_json"] or "{}")
@@ -2888,7 +2907,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         return operation
 
     def submit_batch_state(state: dict, options: VideoProcessPayload, *, restore=False,
-                           resume_from: str | None = None) -> str:
+                           resume_from: str | None = None, mcp_request: dict | None = None) -> str:
         options = freeze_processing_options(options, restore=restore)
         options = options.model_copy(update={"asr_model_id": options.asr_model_id or selected_model_id()})
         if not state["entries"]:
@@ -2902,6 +2921,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         state["options"] = options.model_dump()
+        if mcp_request is not None:
+            state["mcp_request"] = mcp_request
         job_id = uuid.uuid4().hex
         try:
             return jobs.submit(
@@ -2934,6 +2955,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.post("/api/batch/process", status_code=202)
     def process_batch(payload: BatchProcessPayload) -> dict[str, object]:
+        return start_batch(payload)
+
+    def start_batch(payload: BatchProcessPayload, *, mcp_request=None) -> dict[str, object]:
         with jobs._lock:
             ensure_file_changes_allowed()
             preview = preview_directories(payload.folders)
@@ -2967,7 +2991,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                     known.add(video_id)
             state = make_batch(preview, payload.model_dump(), registered)
             state["import_only"] = payload.import_only
-            job_id = submit_batch_state(state, payload)
+            job_id = submit_batch_state(state, payload, mcp_request=mcp_request)
             return {
                 "job_id": job_id, "status": "queued", "job_type": "batch_video_process",
                 "video_ids": [entry["video_id"] for entry in registered], "total": len(state["entries"]), "errors": [],
@@ -3206,6 +3230,9 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     @api.post("/api/jobs/{job_id}/retry", status_code=202)
     def retry_batch(job_id: str) -> dict:
+        return retry_batch_task(job_id)
+
+    def retry_batch_task(job_id: str, *, mcp_request=None) -> dict:
         with jobs._lock:
             ensure_file_changes_allowed()
             row = provider.get().get_job(job_id)
@@ -3232,11 +3259,16 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 update={"force_retranscribe": False},
             )
             state["api_error"] = ""
-            new_id = submit_batch_state(state, options, restore=True)
+            # A UI retry must not inherit the original MCP operation identity.
+            state.pop("mcp_request", None)
+            new_id = submit_batch_state(state, options, restore=True, mcp_request=mcp_request)
             return JobManager._row_payload(provider.get().get_job(new_id), provider.get())
 
     @api.post("/api/jobs/{job_id}/resume", status_code=202)
     def resume_job(job_id: str, payload: ResumePayload | None = None) -> dict[str, object]:
+        return resume_job_task(job_id, payload)
+
+    def resume_job_task(job_id: str, payload: ResumePayload | None = None, *, mcp_request=None) -> dict[str, object]:
         # The paused check, queue rebuild, submission and the old row's final
         # status are one critical section with cancel/delete/undo, or a paused
         # batch could be cancelled and deleted, then resumed from a stale
@@ -3252,6 +3284,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             skip = bool(payload and payload.skip_current)
             if request_data.get("kind") == "batch":
                 state = normalize_batch(request_data, provider.get())
+                state.pop("mcp_request", None)
                 if skip:
                     index = state.get("current_index")
                     if index is None:
@@ -3261,7 +3294,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                         state["entries"][index]["status"] = "skipped"
                 if any(entry["status"] not in {"completed", "skipped", "failed"} for entry in state["entries"]):
                     new_id = submit_batch_state(state, options.model_copy(update={"force_retranscribe": False}),
-                                                restore=True, resume_from=job_id)
+                                                restore=True, resume_from=job_id, mcp_request=mcp_request)
                     result = {"job_id": new_id, "status": "queued"}
                 else:
                     jobs.cancel(job_id)
@@ -3944,6 +3977,30 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+    from api.course_tools import router as course_tools_router
+    def mcp_batch_options(payload):
+        from classcue.course_tools import BatchOptions
+        values = {key: value for key, value in payload.items() if key in BatchOptions.model_fields}
+        options = VideoProcessPayload.model_validate(values).model_copy(
+            update={"asr_model_id": values.get("asr_model_id") or selected_model_id()},
+        )
+        get_model(options.asr_model_id)
+        return freeze_processing_options(options).model_dump()
+
+    batch_tools = {
+        "options": mcp_batch_options,
+        "modes": lambda: [
+            {"id": mode, "name": mode} for mode in
+            ("high_recall", "medium_recall", "low_recall", "question_extraction", "strict_exam_intent")
+        ] + [{"id": scheme["id"], "name": scheme["name"]}
+             for scheme in provider.get().list_recall_schemes() if not scheme["archived"]],
+        "start": lambda payload, marker: start_batch(
+            BatchProcessPayload.model_validate(payload), mcp_request=marker),
+        "retry": lambda job_id, marker: retry_batch_task(job_id, mcp_request=marker),
+        "resume": lambda job_id, marker: resume_job_task(job_id, mcp_request=marker),
+    }
+    api.state.course_batch_tools = batch_tools
+    api.include_router(course_tools_router(provider, jobs, ensure_file_changes_allowed, batch=batch_tools))
     from classcue.frontend_host import mount_frontend
     mount_frontend(api, Path(__file__).resolve().parents[1])
     return api

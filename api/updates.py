@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from classcue.app_updates import write_json
+from classcue.desktop_runtime import native_update_token
 
 
 class Preferences(BaseModel):
@@ -31,6 +32,7 @@ def local_request(request: Request):
 
 def router(center, jobs, provider, migrating, updating):
     routes = APIRouter(prefix="/api/updates", dependencies=[Depends(local_request)])
+    update_token = native_update_token(center.root, proposed=os.getenv("CLASSROOM_UPDATE_TOKEN"))
 
     def execute(operation):
         try:
@@ -69,8 +71,7 @@ def router(center, jobs, provider, migrating, updating):
         return execute(lambda: center.mark_read(value.ids))
 
     def native(request):
-        expected = os.getenv("CLASSROOM_UPDATE_TOKEN", "")
-        if not expected or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {expected}"):
+        if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {update_token}"):
             raise HTTPException(403, "安装必须由桌面程序确认")
         if request.headers.get("origin"):
             raise HTTPException(403, "网页不能直接安装更新")

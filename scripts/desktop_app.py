@@ -20,13 +20,43 @@ if str(PROJECT) not in sys.path:
 
 from classcue.desktop_runtime import APP_NAME, Lifecycle, Services, SingleInstance
 from classcue.desktop_startup import startup_background, startup_html, startup_transition_script
-from scripts.desktop_transition import install_startup_transition
+from scripts.desktop_transition import install_startup_transition, reload_window
 
 
 def background(function, *args, **kwargs):
     thread = Thread(target=function, args=args, kwargs=kwargs, daemon=True)
     thread.start()
     return thread
+
+
+def load_window_url(window, url):
+    # WebView2 ignores assigning the same Source; pywebview would clear its
+    # ready events without receiving a new navigation completion.
+    if window.get_current_url() == url:
+        reload_window(window)
+    else:
+        window.load_url(url)
+
+
+def navigate_review(lifecycle, ui, url):
+    """Validate and hand navigation to the window before acknowledging IPC."""
+    if (not lifecycle or not lifecycle.ready or lifecycle.unsaved_changes
+            or lifecycle.starting or lifecycle.exiting or lifecycle.dialog
+            or not ui or not ui.window or not ui.window.events.loaded.is_set()):
+        return {"ok": False, "error": "桌面尚未就绪或有未保存的操作"}
+    parsed, origin = urlsplit(url), urlsplit(lifecycle.services.origin)
+    from urllib.parse import parse_qs
+    if ((parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc)
+            or parse_qs(parsed.query).get("library_id") != [ui.library_id]):
+        return {"ok": False, "error": "视频库或服务身份不匹配"}
+    try:
+        load_window_url(ui.window, url)
+        ui.current_url = url
+        lifecycle.show()
+    except Exception:
+        logging.getLogger(__name__).exception("Desktop review navigation failed")
+        return {"ok": False, "error": "桌面未能打开视频，请稍后重试"}
+    return {"ok": True}
 
 
 class WindowUI:
@@ -77,8 +107,9 @@ class WindowUI:
             self.remove_startup_transition = None
             logging.getLogger(__name__).warning("Startup artwork transition unavailable", exc_info=True)
         self.last_error = None
-        self.current_url = origin + "/"
-        self.window.load_url(origin + "/")
+        url = origin + "/"
+        load_window_url(self.window, url)
+        self.current_url = url
 
     def navigation_loaded(self):
         if self.current_url and self.remove_startup_transition and self.window.get_current_url() == self.current_url:
@@ -253,6 +284,8 @@ def main(action="activate"):
     tray = None
 
     def dispatch(command):
+        if isinstance(command, dict):
+            return navigate_review(lifecycle, ui, command["url"])
         if command == "status":
             return {
                 "ready": bool(lifecycle and lifecycle.ready),

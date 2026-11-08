@@ -397,7 +397,7 @@ def test_native_codex_restarts_and_keeps_unicode_title_and_images(tmp_path):
     with CodexClient(executable, home) as client:
         detail = client.call("plugin/read", {"pluginName": "classcue", "marketplacePath": str(marketplace)})["plugin"]
         assert detail["mcpServers"] == ["classcue"]
-        assert len(detail["skills"]) == 1
+        assert len(detail["skills"]) == 2
         result = client.call("plugin/install", {"pluginName": "classcue", "marketplacePath": str(marketplace)})
         assert result["appsNeedingAuth"] == []
     from PIL import Image
@@ -433,6 +433,7 @@ def test_native_codex_restarts_and_keeps_unicode_title_and_images(tmp_path):
         servers = client.call("mcpServerStatus/list", {"threadId": first["thread_id"]})["data"]
         server = next(row for row in servers if row.get("pluginId") == "classcue@personal")
         assert server["toolsError"] is None
+        assert {"preview_batch", "start_batch_processing", "retry_batch", "resume_batch"} <= set(server["tools"])
         panel_tool = server["tools"]["classcue_discussion"]
         assert panel_tool["title"] == "ClassCue 题目"
         assert panel_tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": "thread"}]

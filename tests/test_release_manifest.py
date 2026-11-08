@@ -134,6 +134,12 @@ def test_application_manifest_covers_runtime_sources_and_excludes_development_ma
                     assert dependency in files, f"{name} imports unpackaged {dependency}"
 
 
+def test_application_manifest_paths_are_accepted_without_requiring_staging():
+    entries = tomllib.loads((ROOT / "release_manifest.toml").read_text(encoding="utf-8"))["files"]
+    for name in entries:
+        assert managed_name(name) == name
+
+
 def test_application_manifest_is_accepted_by_update_path_validation():
     files = source_files(ROOT)
     assert "integrations/dsh-desktop/bridge.mjs" in files

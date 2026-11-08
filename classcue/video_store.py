@@ -2008,10 +2008,11 @@ class VideoStore:
     def search_subtitles(
         self, query: str, *, limit: int = 20, offset: int = 0, video_id: int | None = None,
         preferred_video_id: int | None = None, folder_id: int | None = None,
+        root_only: bool = False,
     ) -> dict[str, object]:
         with self.connect() as connection:
             return search_subtitles(connection, query, limit=limit, offset=offset, video_id=video_id,
-                                    preferred_video_id=preferred_video_id, folder_id=folder_id)
+                                    preferred_video_id=preferred_video_id, folder_id=folder_id, root_only=root_only)
 
     def replace_keyword_hits(self, video_id: int, matches: list[TriggerMatch], segments: list[TranscriptSegment]) -> None:
         source_by_id = {segment.id: segment.text for segment in segments}
@@ -2772,7 +2773,7 @@ class VideoStore:
                 "AND video_id IS NOT NULL AND job_type != 'secondary_view_align'"
             ).fetchall()
             batch_rows = connection.execute(
-                "SELECT request_json FROM processing_jobs "
+                "SELECT id, job_type, request_json FROM processing_jobs "
                 "WHERE status IN ('queued', 'running') AND video_id IS NULL"
             ).fetchall()
             batch_ids = []
@@ -2783,6 +2784,14 @@ class VideoStore:
                     batch_ids.extend(
                         int(entry["video_id"]) for entry in request.get("entries", []) if entry.get("video_id")
                     )
+                    if row["job_type"] == "course_transcribe":
+                        for entry in request.get("entries", []):
+                            if entry.get("status") == "running":
+                                entry["status"] = "pending"
+                        connection.execute(
+                            "UPDATE processing_jobs SET request_json = ? WHERE id = ?",
+                            (json.dumps(request, ensure_ascii=False), row["id"]),
+                        )
                 except (ValueError, TypeError, KeyError, IndexError):
                     continue
             cursor = connection.execute(

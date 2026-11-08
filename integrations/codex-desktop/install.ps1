@@ -5,6 +5,7 @@ param(
     [string]$MarketplaceRoot = $env:USERPROFILE,
     [string]$NodeExecutable,
     [string]$NpmExecutable,
+    [string]$PythonExecutable,
     [string]$CodexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" })
 )
 
@@ -52,7 +53,7 @@ if (Test-Path -LiteralPath $pluginDestination) {
 }
 New-Item -ItemType Directory -Path $pluginDestination -Force | Out-Null
 $sourcePaths = @("package.json", "package-lock.json", "server.mjs", "context.mjs",
-    "connection.mjs", "drafts.mjs", "draft-controller.mjs", "app.mjs", "resource.mjs", "view.html", "icon.png", ".codex-plugin", "skills")
+    "connection.mjs", "course-tools.mjs", "drafts.mjs", "draft-controller.mjs", "app.mjs", "resource.mjs", "view.html", "icon.png", ".codex-plugin", "skills")
 foreach ($name in $sourcePaths) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $pluginDestination -Recurse -Force
 }
@@ -74,6 +75,16 @@ try {
 } finally {
     if (Test-Path -LiteralPath $temporaryConnection) { Remove-Item -LiteralPath $temporaryConnection }
 }
+$applicationRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+if (-not $PythonExecutable) {
+    $PythonExecutable = @(
+        (Join-Path $applicationRoot ".venv\Scripts\python.exe"),
+        (Join-Path $applicationRoot ".runtime\venv\Scripts\python.exe")
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+if (-not $PythonExecutable) { throw "ClassCue Python environment is missing; start ClassCue first." }
+& $PythonExecutable (Join-Path $applicationRoot "scripts\codex_course_tools.py") --register $connectionPath
+if ($LASTEXITCODE -ne 0) { throw "Could not register the ClassCue application." }
 $mcp = @{
     mcpServers = @{
         classcue = @{

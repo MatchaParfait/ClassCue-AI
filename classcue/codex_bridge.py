@@ -97,6 +97,10 @@ class CodexBridge:
             identity = client.identity
         config["version"] = identity.get("userAgent", "")
         connect_workspace(config["home"], config["root"])
+        connection = Path(config["home"]) / "classcue" / "connection.json"
+        if connection.is_file():
+            from classcue.course_connection import register_application
+            register_application(connection)
         with self.store.connect() as db:
             db.execute("""INSERT INTO codex_bridge_settings VALUES(1,?)
                 ON CONFLICT(id) DO UPDATE SET config=excluded.config""", (encode(config),))

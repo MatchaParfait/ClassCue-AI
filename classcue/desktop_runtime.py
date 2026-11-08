@@ -39,6 +39,22 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+def native_update_token(project, *, proposed=None):
+    """Share native update authorization when the API starts before the window."""
+    runtime = Path(project) / ".runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    path = runtime / "native_update_auth.json"
+    with FileLock(str(path.with_suffix(".lock")), timeout=5):
+        value = read_json(path, {})
+        token = value.get("token") if isinstance(value, dict) else None
+        if not isinstance(token, str) or not token:
+            token = proposed or secrets.token_urlsafe(32)
+            atomic_json(path, {"token": token})
+    from classcue.diagnostics import register_secret
+    register_secret(token)
+    return token
+
+
 def http_json(url, *, method="GET", payload=None, timeout=3, token=None):
     data = None if payload is None else json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
@@ -82,10 +98,23 @@ class SingleInstance:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 2048 or self.headers.get("Origin"):
                         raise ValueError("Invalid desktop request")
-                    action = json.loads(self.rfile.read(length))["action"]
-                    if action not in {"activate", "exit", "restart", "status"}:
+                    payload = json.loads(self.rfile.read(length))
+                    action = payload["action"]
+                    if action not in {"activate", "exit", "restart", "status", "navigate"}:
                         raise ValueError("Unknown desktop action")
-                    result = owner.dispatch(action)
+                    if action == "navigate":
+                        from urllib.parse import parse_qs
+                        parsed = urlsplit(payload.get("url", ""))
+                        import re
+                        query = parse_qs(parsed.query)
+                        if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+                                or parsed.username or parsed.password or parsed.fragment
+                                or not re.fullmatch(r"/review/[1-9]\d*", parsed.path)
+                                or set(query) != {"start_ms", "library_id"}
+                                or len(query["start_ms"]) != 1 or not query["start_ms"][0].isdigit()
+                                or len(query["library_id"]) != 1):
+                            raise ValueError("Invalid navigation")
+                    result = owner.dispatch(payload if action == "navigate" else action)
                     encoded = json.dumps(result or {"ok": True}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -116,7 +145,8 @@ class SingleInstance:
                 try:
                     return http_json(
                         f"http://127.0.0.1:{int(state['port'])}/command",
-                        method="POST", payload={"action": action}, token=state["token"],
+                        method="POST", payload=action if isinstance(action, dict) else {"action": action},
+                        token=state["token"],
                     )
                 except (OSError, ValueError, KeyError):
                     pass
@@ -140,7 +170,7 @@ class Services:
         self.project = Path(project)
         self.origin = ""
         self.instance_id = None
-        self.update_token = secrets.token_urlsafe(32)
+        self.update_token = native_update_token(self.project)
 
     def start(self, action="start"):
         from scripts import start_frontend

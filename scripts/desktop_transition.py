@@ -3,6 +3,13 @@
 import logging
 
 
+def reload_window(window):
+    """Reload through WebView2 without waiting for the page's JavaScript."""
+    from System import Func, Object
+    window.native.Invoke(Func[Object](
+        lambda: window.native.browser.webview.CoreWebView2.Reload()))
+
+
 def install_startup_transition(window, script):
     try:
         from System import Func, Object
