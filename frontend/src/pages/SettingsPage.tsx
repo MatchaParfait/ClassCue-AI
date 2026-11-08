@@ -5,6 +5,7 @@ import { SettingsHerons } from "../components/SettingsHerons";
 import { ShortcutSettings } from "../components/ShortcutSettings";
 import { DesktopSettings } from "../components/DesktopSettings";
 import { DshSettingsSection } from "../components/DshConnectionSettings";
+import { CodexSettingsSection } from "../components/CodexDiscussion";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { InteractionSettings } from "../components/InteractionSettings";
 import { RecallSchemeSettings } from "../components/RecallSchemeSettings";
@@ -108,7 +109,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "dsh", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
+  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "dsh", "codex", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
   const asr = useQuery({ queryKey: ["settings", "asr"], queryFn: getAsrModels, enabled: active && section === "asr", staleTime: 60_000 });
   const ai = useQuery({ queryKey: ["settings", "ai"], queryFn: getAiSettings, enabled: active && section === "ai" });
   const directoriesKey = ["settings", "directories"];
@@ -163,7 +164,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
 
         <div className="settings-layout">
           {!guidedSection && <nav className="settings-navigation" aria-label="设置分类">
-            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["dsh", "DSH 讨论", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => key !== "dsh" || desktop).map(([key, label, Icon]) =>
+            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["dsh", "DSH 讨论", MessageSquare], ["codex", "Codex 讨论", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => !["dsh", "codex"].includes(key) || desktop).map(([key, label, Icon]) =>
               <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => setSearchParams({ section: key }, { replace: true, state: location.state })}>
                 {section === key && <SelectionIndicator id={`${selectionScope}-settings`} />}<Icon size={18} /><span>{label}</span>
               </button>)}
@@ -178,6 +179,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
         {(!guidedSection || section === "shortcuts") && <div hidden={section !== "shortcuts"}><ShortcutSettings /></div>}
         {!guidedSection && <div hidden={section !== "desktop"}><DesktopSettings active={active && section === "desktop"} /><InteractionSettings /></div>}
         {!guidedSection && desktop && section === "dsh" && <DshSettingsSection active={active} scope={scope} />}
+        {!guidedSection && desktop && section === "codex" && <CodexSettingsSection active={active} scope={scope} />}
         {!guidedSection && <div hidden={section !== "experimental"}><ExperimentalSettings active={active && section === "experimental"} /></div>}
         {(!guidedSection || section === "storage") && <div hidden={section !== "storage"}>
         <StorageDirectoriesSection

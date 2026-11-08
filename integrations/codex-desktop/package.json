@@ -1,0 +1,16 @@
+{
+  "name": "classcue-codex-desktop",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server.mjs && node --check context.mjs && node --check drafts.mjs && node --check connection.mjs && node --check app.mjs && node --check draft-controller.mjs && node --check resource.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "esbuild": "0.28.2"
+  },
+  "engines": { "node": ">=24" }
+}

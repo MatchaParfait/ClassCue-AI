@@ -99,6 +99,7 @@ from api.upload_io import run_upload_io
 from api.secondary_alignment import router as secondary_alignment_router
 from classcue.secondary_alignment_service import latest_alignment
 from api.dsh_bridge import router as dsh_bridge_router
+from api.codex_bridge import router as codex_bridge_router
 from classcue.video_library import recover_managed_rename, register_managed_video, rename_managed_video, video_filename
 from classcue.video_thumbnail import ThumbnailUnavailable, video_thumbnail, video_preview_frame
 from classcue.api_failure import ApiUnavailable
@@ -1203,6 +1204,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     api.include_router(study_bookmarks_router(provider))
     api.include_router(secondary_alignment_router(provider, jobs, storage_migrating.is_set))
     api.include_router(dsh_bridge_router(provider))
+    api.include_router(codex_bridge_router(provider))
     api.include_router(update_router(update_center, jobs, provider, storage_migrating, updating))
     api.state.update_center = update_center
     api.state.updating = updating

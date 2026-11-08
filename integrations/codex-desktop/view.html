@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClassCue</title>
+<style>
+  :root { color-scheme: light dark; font: 13px/1.6 var(--font-sans, system-ui);
+    color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+  * { box-sizing: border-box; letter-spacing: 0; }
+  body { margin: 0; padding: 16px; min-width: 0; }
+  header { display: flex; align-items: center; gap: 8px; }
+  header img { width: 24px; height: 24px; flex: 0 0 24px; }
+  h1 { font-size: 16px; font-weight: 600; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
+  p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; }
+  #status, #summary, figcaption { color: var(--color-text-secondary, GrayText); }
+  #status[role=alert] { color: var(--color-text-danger, #b42318); }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button { font: inherit; color: inherit; background: var(--color-background-secondary, ButtonFace);
+    border: 1px solid var(--color-border-primary, ButtonBorder); border-radius: 6px; padding: 6px 12px;
+    min-height: 34px; cursor: pointer; }
+  button:hover { background: var(--color-background-tertiary, ButtonFace); }
+  button:focus-visible { outline: 2px solid var(--color-ring-primary, Highlight); outline-offset: 2px; }
+  button:active { opacity: .8; }
+  button:disabled { opacity: .5; cursor: wait; }
+  [hidden] { display: none !important; }
+  #preview { border-top: 1px solid var(--color-border-primary, ButtonBorder); padding-top: 8px; }
+  figure { margin: 12px 0; }
+  figure img { display: block; width: 100%; height: auto; object-fit: contain;
+    background: white; border: 1px solid var(--color-border-secondary, ButtonBorder); border-radius: 4px; }
+  figcaption { font-size: 12px; margin-top: 4px; }
+  dialog { max-width: min(400px, calc(100vw - 32px)); border-radius: 8px; padding: 16px;
+    border: 1px solid var(--color-border-primary, ButtonBorder);
+    color: inherit; background: var(--color-background-primary, Canvas); }
+  dialog::backdrop { background: #0006; }
+  @media (max-width: 360px) { body { padding: 12px; } }
+</style>
+<header><img src="CLASSCUE_ICON" alt=""><h1>ClassCue</h1></header>
+<p id="status" role="status" aria-live="polite">正在接收题目…</p>
+<p id="summary"></p>
+<nav aria-label="题目操作">
+  <button id="refresh">刷新</button>
+</nav>
+<main id="preview" aria-label="原题和题图"></main>
+<script type="module">CLASSCUE_SCRIPT</script>
+</html>

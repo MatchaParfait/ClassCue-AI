@@ -1,0 +1,11 @@
+{
+  "name": "classcue",
+  "version": "0.3.0",
+  "description": "读取 ClassCue 原题和题图，继续独立学习讨论。",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ClassCue",
+    "shortDescription": "课程、资料与独立学习讨论"
+  }
+}

@@ -162,6 +162,13 @@ def managed_name(name):
         "pipe.mjs", "client.js", "install.ps1",
     }:
         return name
+    if parts[:2] == ("integrations", "codex-desktop") and "/".join(parts[2:]) in {
+        "package.json", "package-lock.json", ".mcp.json",
+        ".codex-plugin/plugin.json", "context.mjs", "server.mjs", "install.ps1",
+        "drafts.mjs", "draft-controller.mjs", "connection.mjs", "app.mjs", "resource.mjs", "view.html", "icon.png",
+        "skills/classcue-discussion/SKILL.md",
+    }:
+        return name
     if len(parts) > 2 and parts[:2] == ("frontend", "dist"):
         return name
     raise ValueError("包内文件不属于程序分发范围")

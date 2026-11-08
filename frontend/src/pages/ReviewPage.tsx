@@ -19,6 +19,7 @@ import { canOpenReview, captureJumpTime, filterMarkers, formatTime, markerJumpTi
 import { AnimatePresence, AnimatedPopup } from "../components/Motion";
 import { useStudyProgress } from "../hooks/useStudyProgress";
 import { StudyBookmarksDialog, type BookmarkScope } from "../components/StudyBookmarks";
+import { CodexVideoClip } from "../components/CodexVideoClip";
 
 type ReviewChange =
   | { kind: "time"; previous: number | null; next: number | null }
@@ -502,6 +503,8 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onStudyProgress={savedStudy.save}
             />
             {!mockMode && video.library_id && <div className="review-study-tools">
+              <CodexVideoClip videoId={videoId} libraryId={libraryId} title={video.display_name}
+                durationMs={video.duration_ms} getCurrentTimeMs={() => (getPlayerTime() ?? currentTime) * 1000} />
               <button type="button" className="secondary-button compact" aria-haspopup="dialog" onClick={() => {
                 const time = getPlayerTime();
                 if (!timelineRef.current?.isReady() || time === undefined || !Number.isFinite(time)) {

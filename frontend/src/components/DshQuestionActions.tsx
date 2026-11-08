@@ -8,6 +8,8 @@ import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { getCourseVideoQuestion } from "../api/studyMaterials";
 import "./DshQuestionActions.css";
+import { CodexQuestionActions } from "./CodexDiscussion";
+import { useDiscussionProvider } from "../hooks/useDiscussionProvider";
 
 export function VideoQuestionDiscussion({ markerId, captureId }: { markerId: number; captureId: string }) {
   const desktop = useDesktopAPI();
@@ -23,7 +25,10 @@ export function DshQuestionActions({ questionId, contentVersion, scope = "defaul
   questionId: string; contentVersion: number; scope?: string; active?: boolean;
 }) {
   const desktop = useDesktopAPI();
+  const provider = useDiscussionProvider();
   if (!desktop || !active) return null;
+  if (provider === "codex") return <CodexQuestionActions key={`${scope}:${questionId}:${contentVersion}`}
+    questionId={questionId} scope={scope} />;
   return <DesktopQuestionActions key={`${scope}:${questionId}:${contentVersion}`}
     questionId={questionId} contentVersion={contentVersion} scope={scope} />;
 }
