@@ -1,8 +1,84 @@
 # Codex 课程检索与转写工具
 
-插件版本：`0.6.0`。13 个课程工具与课程 Skill 已实现；
+插件源码版本：`0.7.0`。19 个课程工具与课程 Skill 已实现；
 真实调用和单列的 ASR 环境验证限制见
 [验收记录](../validation/codex-course-tools-validation.md)。
+
+## 本轮完善记录
+
+2026-11-09，`0.7.0` 在原有课程检索、转写和完整批处理上补齐以下能力。
+本文件作为课程 MCP 的持续维护说明，后续变更同步更新工具表、使用场景和边界；
+测试结果另存验收记录，不以源码完成代表用户安装已经更新。
+
+| 原来的缺口 | 现在能做什么 |
+| --- | --- |
+| 能启动 PPT 提取，却不能通过独立课程工具看图 | 列出指定时段 PPT，再读指定图片；也能直接取视频某秒的实际画面 |
+| 能启动分析，却不能独立读取已有结果 | 分页读取考点、题目、手动定位和分析运行状态，不重新调用模型 |
+| 不知道任务 ID 时无法查询 | 按活动／结束状态、包含的视频查找课程和完整批次任务 |
+| 需要猜测当前保存设置 | 只读当前召回选择、ASR 选择、就绪检查缓存和 AI 模型配置；不读取密钥 |
+| 只能搜课程或全库，一次一个词 | 可限定单视频，一次提交最多 8 个候选词，明确任一词／同句全部词的规则 |
+| 相邻命中重复占满结果 | 默认合并间隔不超过 5 秒的命中，并在有候选的视频之间轮流返回 |
+| Agent 需要自己计算上下文时间 | 返回有限相邻字幕、截断标记和可直接传给字幕读取工具的时间范围 |
+| 检索返回结构缺少明确声明 | 为课程、视频、检索、字幕及新增工具声明分页和关键结果字段 |
+
+本轮收尾统一了全库和文件夹内的 PPT 数量统计，包含辅助状态；
+合并字幕按时间选取代表句，逆序写入也不会把文字配到错误的起始时间。
+图像解码和编码不占用全局任务锁，慢读取期间仍可取消任务；
+读取前后核对库、文件和提取记录，素材变化时要求重新读取。
+
+### 一个使用场景：找讲解，再核对 PPT
+
+用户说：
+
+> 在“算法”课程里找老师讲分治的地方，也看看当时的 PPT。
+> 我可能记错词了，也试一下“递归”。
+
+Agent 可以这样完成：
+
+1. `list_courses(query="算法")` 确定课程 ID，沿用该课程范围。
+2. `search_subtitles(course_id=返回的ID, queries=["分治","递归"], match_mode="any")`。
+   工具在同一范围内检索两个字面词，合并连续命中并轮流展示不同视频，
+   返回每组的命中数量、时间、字幕摘要和 `context_range`。
+   若用户只想查某节课，再传 `video_id`；与课程同时提供时取交集。
+3. 从候选取 `video_id` 和 `context_range` 调 `read_transcript`，
+   核对完整字幕，而不是仅靠搜索摘要判断老师讲了什么。
+4. 调 `list_slides` 列出这段时间已有的 PPT，比较每张图的实际可见区间，
+   再用 `read_slide(video_id=返回的ID, slide_id=返回的ID)` 看图。
+   若要确认第 83 秒当时的板书或动画状态，调用
+   `read_video_frame(video_id=返回的ID, start_seconds=83)` 看该时刻的视频画面。
+5. 结合实际读到的字幕和图片回答，附视频名称、时间和播放链接。
+   只有用户要求观看时才 `open_video`，检索和看图本身不打开播放器。
+
+这里没有另一个模型替 Agent 回答：APP 只查找已保存材料、解码画面并返回证据，
+Agent 负责选择候选和解释。没有 PPT 时工具返回空列表，不自动启动提取；
+用户同意提取时才提交 `start_processing_sequence(steps=["extract_slides"], ...)`。
+不知道此前任务的 ID 时，可用 `list_jobs` 找回后再 `get_job`。
+
+### 检索和证据的边界
+
+- 仍是字面检索，不是语义检索；候选词由 Agent 提供，不自动扩写同义词。
+  `any` 是任一词命中；`all` 要求同一句字幕包含所有词，不跨字幕句匹配短语。
+  ASR 错字和跨句切分仍可能漏搜；无结果不等于老师没有讲。
+- `total` 是合并后结果数量，`total_matches` 是原始命中字幕句数量，
+  `total_videos` 是命中视频数量；默认按视频轮流展示，不承诺语义相关性排名。
+  `merge_gap_seconds` 可在 0–60 秒调整；0 仍合并时间重叠或相接的命中。
+- 搜索上下文最多 5 句、每句最多 300 字，`context_truncated` 标记省略；
+  默认扩展前后 20 秒，可设 0–120 秒。完整证据继续用 `read_transcript` 分页读取。
+  查询期间每页使用一致快照，但搜索分页不锁定整个视频库；
+  转写或资料变化后重新检索，不将不同轮结果当作固定快照。
+- `empty_reason` 区分 `no_videos`、`no_subtitles` 和 `no_literal_match`；
+  同时结合 `coverage` 说明未转写范围。翻到结果末尾的空页不等于无匹配。
+- `list_slides` 返回提取状态的时间范围及真实可见区间。某页的精选状态
+  不一定就是某秒画面；核对精确时刻使用 `read_video_frame`。
+  图片以 MCP 图像内容返回，最长边缩至 1600 像素，不做 OCR 或模型分析，
+  小字可能因缩放难以阅读；取帧仍受源视频帧率和可解码内容限制。
+- `read_analysis` 读取已经保存的结果，隐藏已移除条目，区分 `manual` 与 `analysis`。
+  `analysis_runs` 用来区分尚未分析和完成后零候选；手动题目可能独立于分析存在。
+  长文字通过 `text_truncated` 标明截断，模型概括不能冒充教师原话。
+- `list_jobs` 只覆盖课程纯转写、顺序任务和完整批次，不列模型下载、迁移等管理任务。
+  `get_processing_status` 只读已有模型检查缓存，保留检查时间和 `unknown`，
+  不加载模型、不检查资源余量、不验证密钥、不发起网络测试。
+  AI 的 `profile_configured` 只表示模型和地址已填写，不能证明连接可用。
 
 ## 使用
 
@@ -19,8 +95,8 @@
 Codex 查找课程、搜索关键词，再读附近字幕。结果不足时可自主换相关词，
 不会因为空结果自动扩大到其他课程。回答附课次、时间和播放链接；
 用户要求观看时才打开桌面并定位。引用是 ASR 字幕，不等于人工校对的逐字稿。
-工具读取的字幕会进入当前 Codex 对话，按用户所用 Codex 服务处理，
-不意味着字幕始终仅在本机参与推理。
+工具读取的字幕、分析文字和图片会进入当前 Codex 对话，按用户所用 Codex 服务处理，
+不意味着这些材料始终仅在本机参与推理。
 
 > 用默认模型转写数据库课程里还没字幕的视频。
 
@@ -63,7 +139,7 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 | --- | --- | --- |
 | `list_courses` | 可选 `query`、分页 | 课程／文件夹 ID、路径、视频数与字幕覆盖 |
 | `list_videos` | 可选 `course_id`、名称、字幕状态、分页 | 视频 ID、时长、字幕状态、关联转写任务和播放链接 |
-| `search_subtitles` | `query`，可选 `course_id`、分页 | 字面匹配片段、原视频时间、链接和范围覆盖 |
+| `search_subtitles` | `query` 或 `queries`，可选课程、视频、匹配规则与分页 | 合并命中、上下文、播放链接、覆盖和无结果原因 |
 | `read_transcript` | 视频 ID、起止秒数，可选继续读取游标 | 完整字幕句、时间、字幕版本、下一页位置 |
 | `open_video` | 视频 ID、可选起始秒数 | 桌面导航请求结果，不冒充播放器已经完成定位 |
 | `start_transcription` | `course_id` 或 `video_ids`，二选一 | 后台任务 ID、实际模型／设备、统计；无缺失则无需新建任务 |
@@ -74,6 +150,12 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 | `resume_batch` | 资源暂停的完整批次 `job_id`、新动作的 `request_id` | 使用已有恢复流程创建续跑任务，资源问题需先解除 |
 | `get_job` | `job_id`，顺序任务或完整批次明细可分页 | 状态、进度、统计、逐项结果及后续动作 |
 | `cancel_job` | `job_id` | 请求停止纯转写、顺序任务或完整批次；保留已保存结果，不开放其他类型任务取消 |
+| `list_slides` | 视频 ID、起止秒数、分页 | 时段内已提取的 PPT 状态、可见区间和图片 ID，不启动提取 |
+| `read_slide` | 视频 ID、PPT 图片 ID | 原生 MCP 图像及尺寸，校验图片所属视频 |
+| `read_video_frame` | 视频 ID、秒数 | 指定时刻的实际视频画面，不要求已有 PPT |
+| `read_analysis` | 视频 ID、可选方案和分页 | 已保存考点／题目、来源、复习状态及分析运行状态 |
+| `list_jobs` | 可选状态、视频 ID、分页 | 找回任务 ID；活动任务优先，不自动恢复处理 |
+| `get_processing_status` | 无 | 当前保存的处理选择、ASR 检查缓存和非敏感 AI 模型配置 |
 
 完整批处理的 `options` 支持 `analysis_modes`、`asr_model_id`、`keywords`、
 `use_keyword_prefilter`、`filter_formula_noise`、`filter_formula` 和 `force_retranscribe`。
@@ -159,7 +241,7 @@ MCP 可查询、取消和重试界面创建的完整批次。
 ## 维护与验证
 
 ```powershell
-python -m pytest tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py tests/test_course_sequence.py -q
+python -m pytest tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py tests/test_course_sequence.py tests/test_course_retrieval.py tests/test_subtitle_search.py -q
 npm test --prefix integrations/codex-desktop
 npm run check --prefix integrations/codex-desktop
 ```

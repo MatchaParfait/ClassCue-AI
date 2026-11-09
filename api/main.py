@@ -4021,7 +4021,36 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         get_model(options.asr_model_id)
         return freeze_processing_options(options).model_dump()
 
+    def course_processing_status():
+        model_id = selected_model_id()
+        saved = status_cache.peek(asr_status_key(model_id))
+        settings = load_provider_settings()
+        return {
+            "service_status": "running",
+            "asr_observation": {
+                "inspection_status": "cached" if saved else "unknown",
+                "checked_at": saved["checked_at"] if saved else None,
+                "data": {key: value for key, value in (saved["data"] if saved else {}).items()
+                         if key in observation_fields and key not in {"gpu_name", "cache_size_display"}},
+            },
+            "ai_connection": {"model": settings.active_profile.model,
+                              "profile_configured": bool(settings.active_profile.model and settings.active_profile.base_url),
+                              "request_concurrency": settings.active_profile.request_concurrency,
+                              "credential_checked": False},
+        }
+
+    def course_frame_reader(video_id, time_ms):
+        video = _video_or_404(provider.get(), video_id)
+        source = Path(str(video["video_path"])).expanduser()
+        cache = asr_storage.audio_directory(DIRECTORY_PROJECT_ROOT, provider.data_root()) / "search-previews"
+        return lambda: video_preview_frame(source, cache, time_ms)
+
     batch_tools = {
+        "slides_read": lambda video_id, start, end: get_video_slides(
+            video_id, start_ms=start, end_ms=end, include_auxiliary=True, context_ms=0),
+        "slide_image": lambda video_id, slide_id: get_slide_image(video_id, slide_id).path,
+        "frame_reader": course_frame_reader,
+        "processing_status": course_processing_status,
         "slides": lambda video_id, update, should_cancel: slide_operation(video_id)(update, should_cancel),
         "moves_sources": lambda: asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, provider.data_root()),
         "options": mcp_batch_options,

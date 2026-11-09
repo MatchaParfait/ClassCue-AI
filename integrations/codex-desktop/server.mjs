@@ -10,7 +10,7 @@ import { realpath } from "node:fs/promises";
 import { discussionResource, resourceUri } from "./resource.mjs";
 import { courseTools, callCourseTool } from "./course-tools.mjs";
 
-const server = new Server({ name: "classcue", version: "0.6.0" },
+const server = new Server({ name: "classcue", version: "0.7.0" },
   { capabilities: { tools: {}, resources: {} } });
 const properties = {
   request_id: { type: "string", pattern: "^[a-f0-9]{32}$" },
@@ -62,6 +62,12 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
     const { name, arguments: args = {}, _meta: meta } = request.params;
     if (courseTools.some(tool => tool.name === name)) {
       const result = await callCourseTool(name, args);
+      if (["read_slide", "read_video_frame"].includes(name)) {
+        const { data, ...image } = result.image;
+        const structured = { ...result, image };
+        return { content: [{ type: "text", text: JSON.stringify(structured) },
+          { type: "image", mimeType: image.mime_type, data }], structuredContent: structured };
+      }
       return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
     }
     if (name === "read_discussion_context") {

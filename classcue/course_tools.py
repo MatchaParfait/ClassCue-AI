@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import time
@@ -41,8 +43,21 @@ class ScopedPage(Page):
 
 
 class Search(Page):
-    query: str = Field(min_length=1, max_length=120)
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    queries: list[Annotated[str, Field(min_length=1, max_length=120)]] | None = Field(
+        default=None, min_length=1, max_length=8)
     course_id: str | None = Field(default=None, max_length=100)
+    video_id: int | None = Field(default=None, gt=0, le=MAX_INTEGER, strict=True)
+    match_mode: Literal["any", "all"] = "any"
+    merge_gap_seconds: int = Field(default=5, ge=0, le=60, strict=True)
+    diverse: bool = Field(default=True, strict=True)
+    context_seconds: int = Field(default=20, ge=0, le=120, strict=True)
+
+    @model_validator(mode="after")
+    def terms(self):
+        if (self.query is None) == (self.queries is None):
+            raise ValueError("请只提供 query 或 queries 中的一项")
+        return self
 
 
 class Video(Arguments):
@@ -66,6 +81,36 @@ class Read(Video):
 
 class Open(Video):
     start_seconds: float = Field(default=0, ge=0, le=1e10, allow_inf_nan=False, strict=True)
+
+
+class SlidePage(Video):
+    start_seconds: float = Field(ge=0, le=1e10, allow_inf_nan=False, strict=True)
+    end_seconds: float = Field(gt=0, le=1e10, allow_inf_nan=False, strict=True)
+    limit: int = Field(default=20, ge=1, le=50, strict=True)
+    offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
+
+    @model_validator(mode="after")
+    def interval(self):
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("结束时间必须晚于开始时间")
+        return self
+
+
+class SlideImage(Video):
+    slide_id: int = Field(gt=0, le=MAX_INTEGER, strict=True)
+
+
+class AnalysisPage(Video):
+    analysis_mode: ModeId | None = None
+    limit: int = Field(default=20, ge=1, le=50, strict=True)
+    offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
+
+
+class JobsPage(Arguments):
+    status: Literal["all", "active", "finished"] = "all"
+    video_id: int | None = Field(default=None, gt=0, le=MAX_INTEGER, strict=True)
+    limit: int = Field(default=20, ge=1, le=50, strict=True)
+    offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
 
 
 class Start(Arguments):
@@ -151,7 +196,9 @@ SCHEMAS = {"list_courses": Page, "list_videos": ScopedPage, "search_subtitles": 
            "read_transcript": Read, "open_video": Open, "start_transcription": Start,
            "get_job": JobQuery, "cancel_job": Job, "preview_batch": BatchTarget,
            "start_batch_processing": BatchStart, "retry_batch": BatchCommand,
-           "resume_batch": BatchCommand, "start_processing_sequence": SequenceStart}
+           "resume_batch": BatchCommand, "start_processing_sequence": SequenceStart,
+           "list_slides": SlidePage, "read_slide": SlideImage, "read_video_frame": Open,
+           "read_analysis": AnalysisPage, "list_jobs": JobsPage, "get_processing_status": Arguments}
 
 
 class CourseTools:
@@ -164,10 +211,13 @@ class CourseTools:
     def store(self):
         return self.provider.get()
 
-    def call(self, name, arguments):
+    def call(self, name, arguments, *, expected_library_id=None):
         if name not in SCHEMAS:
             raise ValueError("未知课程工具")
         args = SCHEMAS[name].model_validate(arguments)
+        if name in {"read_slide", "read_video_frame"}:
+            return self._read_image(args, frame=name == "read_video_frame",
+                                    expected_library_id=expected_library_id)
         return {"library_id": self.provider.library_id(), **getattr(self, name)(args)}
 
     def _folder(self, course_id):
@@ -207,7 +257,8 @@ class CourseTools:
             "start_ms": round(seconds * 1000), "library_id": self.provider.library_id()})
 
     def _coverage(self, rows):
-        available = sum(bool(self.store.has_transcript(row["id"])) for row in rows)
+        available = sum(bool(row["has_transcript"]) if "has_transcript" in row.keys()
+                        else bool(self.store.has_transcript(row["id"])) for row in rows)
         return {"video_count": len(rows), "with_subtitles": available, "missing_subtitles": len(rows) - available}
 
     @staticmethod
@@ -265,26 +316,204 @@ class CourseTools:
                 continue
             items.append({"video_id": row["id"], "name": name, "duration_seconds": row["duration_ms"] / 1000,
                           "has_subtitles": has, "transcription_job_id": active.get(row["id"]),
+                          "slide_count": row["slide_count"] if "slide_count" in row.keys()
+                          else len(self.store.list_slides(row["id"], include_auxiliary=True)),
                           "play_url": self._url(row["id"])})
         return {**self._page(items, args), "coverage": coverage}
 
     def search_subtitles(self, args):
         from classcue.subtitle_search import validate_query
-        query = validate_query(args.query)
+        terms = list(dict.fromkeys(validate_query(term) for term in (args.queries or [args.query])))
+        query = terms[0]
+        rows = self._videos(args.course_id)
+        if args.video_id is not None:
+            self._video(args.video_id)
+            rows = [row for row in rows if row["id"] == args.video_id]
         folder = self._folder(args.course_id)
         result = self.store.search_subtitles(query, folder_id=None if folder == "root" else folder,
-                                             root_only=folder == "root", limit=args.limit, offset=args.offset)
+                                             root_only=folder == "root", limit=args.limit, offset=args.offset,
+                                             video_id=args.video_id, queries=terms, match_mode=args.match_mode,
+                                             merge_gap_ms=args.merge_gap_seconds * 1000, diverse=args.diverse)
         page = {"total": result["total"], "has_more": result["has_more"],
                 "next_offset": args.offset + len(result["items"]) if result["has_more"] else None,
                 "items": result["items"]}
         items = []
         for row in page["items"]:
+            start = max(0, row["start_ms"] - args.context_seconds * 1000)
+            end = min(row["duration_ms"], row["end_ms"] + args.context_seconds * 1000)
+            with self.store.connect() as db:
+                context = db.execute(
+                    "SELECT segment_id,start_ms,end_ms,text FROM video_transcript_segments "
+                    "WHERE video_id=? AND end_ms>? AND start_ms<? "
+                    "ORDER BY ABS(start_ms-?),start_ms,segment_id LIMIT 6",
+                    (row["video_id"], start, end, row["start_ms"])).fetchall()
+            context = sorted(context, key=lambda s: (s["start_ms"], s["segment_id"]))
             items.append({"video_id": row["video_id"], "video_name": row["video_name"] or row["filename"],
                           "segment_id": row["segment_id"], "start_seconds": row["start_ms"] / 1000,
                           "end_seconds": row["end_ms"] / 1000, "text": row.get("snippet", row["text"])[:1200],
+                          "match_count": row["match_count"],
+                          "context_range": {"start_seconds": start / 1000, "end_seconds": end / 1000},
+                          "context": [{"segment_id": s["segment_id"], "start_seconds": s["start_ms"] / 1000,
+                                       "end_seconds": s["end_ms"] / 1000, "text": s["text"][:300]}
+                                      for s in context[:5]],
+                          "context_truncated": len(context) > 5 or any(len(s["text"]) > 300 for s in context),
                           "play_url": self._url(row["video_id"], row["start_ms"] / 1000)})
-        return {**page, "items": items, "coverage": self._coverage(self._videos(args.course_id)),
-                "match_type": "literal", "query": args.query}
+        coverage = self._coverage(rows)
+        return {**page, "items": items, "coverage": coverage, "total_videos": result["total_videos"],
+                "total_matches": result["total_matches"], "match_type": "literal", "query": query,
+                "queries": terms, "match_mode": args.match_mode, "merge_gap_seconds": args.merge_gap_seconds,
+                "diverse": args.diverse,
+                "empty_reason": ("no_videos" if not rows else "no_subtitles" if not coverage["with_subtitles"]
+                                 else "no_literal_match") if not result["total"] else None}
+
+    def _capability(self, name):
+        if self.batch is None or name not in self.batch:
+            raise RuntimeError("此能力需要更新 ClassCue 后端")
+        return self.batch[name]
+
+    def list_slides(self, args):
+        video = self._video(args.video_id)
+        if args.start_seconds * 1000 >= video["duration_ms"]:
+            raise ValueError("开始时间超出视频时长")
+        slides = self._capability("slides_read")(args.video_id, round(args.start_seconds * 1000),
+                                                round(args.end_seconds * 1000))
+        items = []
+        for slide in slides:
+            items.append({"slide_id": slide["id"], "start_seconds": slide["start_ms"] / 1000,
+                          "end_seconds": slide["end_ms"] / 1000,
+                          "visible_from_seconds": slide["visible_from_ms"] / 1000,
+                          "visible_until_seconds": slide["visible_until_ms"] / 1000,
+                          "representative_seconds": slide["representative_ms"] / 1000,
+                          "is_preferred": slide["is_llm_preferred"], "image_hash": slide["image_hash"]})
+        return {"video_id": args.video_id, **self._page(items, args),
+                "extracted_slide_count": len(self.store.list_slides(args.video_id, include_auxiliary=True))}
+
+    @staticmethod
+    def _image(path):
+        from PIL import Image, ImageOps
+        try:
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                for bound in (1600, 1024):
+                    image.thumbnail((bound, bound))
+                    output = BytesIO()
+                    image.save(output, format="JPEG", quality=82)
+                    if output.tell() <= 1024 * 1024:
+                        return {"mime_type": "image/jpeg", "data": base64.b64encode(output.getvalue()).decode("ascii"),
+                                "width": image.width, "height": image.height}
+        except OSError:
+            raise ValueError("图片缺失或无法解码，请检查 PPT 提取结果或视频文件") from None
+        raise ValueError("图片超过工具返回上限")
+
+    def read_slide(self, args):
+        return self._read_image(args, frame=False)
+
+    def read_video_frame(self, args):
+        return self._read_image(args, frame=True)
+
+    @staticmethod
+    def _file_identity(path):
+        try:
+            path = Path(path).resolve(strict=True)
+            stat = path.stat()
+            if not path.is_file():
+                raise OSError()
+            return (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        except OSError:
+            raise ValueError("图像来源文件不可用或已变化，请重新读取") from None
+
+    def _read_image(self, args, *, frame, expected_library_id=None):
+        with self.jobs._lock:
+            library_id, store = self.provider.library_id(), self.store
+            if expected_library_id is not None and library_id != expected_library_id:
+                raise ValueError("视频库身份已变化，请重新读取图像")
+            video = self._video(args.video_id)
+            video_identity = tuple(video[key] for key in ("video_path", "duration_ms", "is_secondary"))
+            slide = None
+            if frame:
+                if args.start_seconds * 1000 >= video["duration_ms"]:
+                    raise ValueError("截图时间超出视频时长")
+                source = Path(video["video_path"]).expanduser()
+                reader = self._capability("frame_reader")(args.video_id, round(args.start_seconds * 1000))
+                result = {"video_id": args.video_id, "time_seconds": args.start_seconds,
+                          "evidence_type": "video_frame", "play_url": self._url(args.video_id, args.start_seconds)}
+            else:
+                source = Path(self._capability("slide_image")(args.video_id, args.slide_id))
+                row = store.get_slide(args.slide_id)
+                if row is None or row["video_id"] != args.video_id:
+                    raise ValueError("PPT 提取结果已变化，请重新读取列表")
+                slide = dict(row)
+                reader = lambda: source
+                result = {"video_id": args.video_id, "slide_id": args.slide_id,
+                          "evidence_type": "extracted_slide"}
+            identity = self._file_identity(source)
+        # Decoding and JPEG encoding may wait on disk or decoder slots; keep task controls available.
+        try:
+            image = self._image(reader())
+        except OSError:
+            raise ValueError("图像来源无法读取，请检查视频或 PPT 文件后重试") from None
+        with self.jobs._lock:
+            if library_id != self.provider.library_id() or store.path != self.store.path:
+                raise ValueError("视频库身份已变化，请重新读取图像")
+            current = store.get_video(args.video_id)
+            if current is None or tuple(current[key] for key in ("video_path", "duration_ms", "is_secondary")) != video_identity:
+                raise ValueError("视频来源已变化，请重新读取图像")
+            if self._file_identity(source) != identity:
+                raise ValueError("图像来源文件已变化，请重新读取")
+            if slide is not None:
+                current_slide = store.get_slide(args.slide_id)
+                if current_slide is None or dict(current_slide) != slide:
+                    raise ValueError("PPT 提取结果已变化，请重新读取列表")
+            return {"library_id": library_id, **result, "image": image}
+
+    def read_analysis(self, args):
+        self._video(args.video_id)
+        rows = self.store.list_markers(args.video_id, args.analysis_mode)
+        items = [{"marker_id": row["id"], "analysis_mode": row["analysis_mode"],
+                  "start_seconds": row["start_ms"] / 1000, "end_seconds": row["end_ms"] / 1000,
+                  "title": row["title"][:500], "note": row["note"][:1500],
+                  "source_quote": row["source_quote"][:1500],
+                  "text_truncated": len(row["title"]) > 500 or len(row["note"]) > 1500 or len(row["source_quote"]) > 1500,
+                  "review_status": row["review_status"], "source": "manual" if row["trigger_phrase"].startswith("MANUAL-") else "analysis",
+                  "jump_seconds": (row["user_start_ms"] if row["user_start_ms"] is not None else row["start_ms"]) / 1000,
+                  "importance": row["importance"],
+                  "play_url": self._url(args.video_id, (row["user_start_ms"] if row["user_start_ms"] is not None
+                                                        else row["start_ms"]) / 1000)}
+                 for row in rows]
+        with self.store.connect() as db:
+            runs = db.execute("SELECT analysis_mode,status,candidate_count,updated_at FROM video_analysis_runs "
+                              "WHERE video_id=? ORDER BY analysis_mode", (args.video_id,)).fetchall()
+        return {"video_id": args.video_id, **self._page(items, args),
+                "analysis_runs": [dict(row) for row in runs if not args.analysis_mode
+                                  or row["analysis_mode"] == args.analysis_mode],
+                "evidence_type": "saved_analysis"}
+
+    def list_jobs(self, args):
+        if args.video_id is not None:
+            self._video(args.video_id)
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM processing_jobs WHERE job_type IN ('course_transcribe','course_sequence','batch_video_process') "
+                "ORDER BY CASE WHEN status IN ('queued','running','resource_paused','awaiting_api') THEN 0 ELSE 1 END,"
+                "COALESCE(finished_at,started_at,created_at) DESC,rowid DESC").fetchall()
+        items = []
+        for row in rows:
+            active = row["status"] in ACTIVE | {"awaiting_api"}
+            if args.status != "all" and active != (args.status == "active"):
+                continue
+            state = json.loads(row["request_json"] or "{}")
+            if args.video_id is not None and args.video_id != row["video_id"] and args.video_id not in {
+                entry.get("video_id") for entry in state.get("entries", [])
+            }:
+                continue
+            items.append({"job_id": row["id"], "job_type": row["job_type"], "status": row["status"],
+                          "progress": row["progress"], "message": redact_text(row["message"] or "")[:500],
+                          "created_at": row["created_at"]})
+        return {**self._page(items, args), "scope": "course_and_batch_jobs"}
+
+    def get_processing_status(self, args):
+        return {"asr_selection": selection_snapshot(), "recall_selection": self.store.get_recall_selection(),
+                **self._capability("processing_status")()}
 
     def read_transcript(self, args):
         video = self._video(args.video_id)

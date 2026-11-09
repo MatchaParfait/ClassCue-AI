@@ -5,7 +5,8 @@ import { courseTools, callCourseTool } from "../course-tools.mjs";
 test("course tools are independent from bound discussion metadata", () => {
   assert.deepEqual(courseTools.map(t => t.name), ["list_courses", "list_videos", "search_subtitles",
     "read_transcript", "open_video", "start_transcription", "start_processing_sequence", "preview_batch",
-    "start_batch_processing", "retry_batch", "resume_batch", "get_job", "cancel_job"]);
+    "start_batch_processing", "retry_batch", "resume_batch", "get_job", "cancel_job",
+    "list_slides", "read_slide", "read_video_frame", "read_analysis", "list_jobs", "get_processing_status"]);
   for (const tool of courseTools) {
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.annotations.openWorldHint,

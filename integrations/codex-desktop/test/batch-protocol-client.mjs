@@ -58,6 +58,32 @@ try {
   const sequenceReplay = await call("start_processing_sequence", sequenceRequest);
   evidence.sequenceReused = sequenceReplay.structuredContent.reused
     && sequenceReplay.structuredContent.job_id === sequenceState.job_id;
+  const search = await call("search_subtitles", { video_id: Number(videoId), queries: ["会考", "掌握"] });
+  assert.equal(search.isError, undefined);
+  const hit = search.structuredContent.items[0];
+  const transcript = await call("read_transcript", { video_id: Number(videoId), ...hit.context_range });
+  evidence.retrieval = search.structuredContent.total_matches === 1
+    && transcript.structuredContent.items.length === 1;
+  const slideList = await call("list_slides", { video_id: Number(videoId), start_seconds: 0, end_seconds: 1 });
+  const slide = await call("read_slide", { video_id: Number(videoId),
+    slide_id: slideList.structuredContent.items[0].slide_id });
+  const frame = await call("read_video_frame", { video_id: Number(videoId), start_seconds: 0.2 });
+  for (const result of [slide, frame]) {
+    assert.equal(result.isError, undefined);
+    assert.equal(result.content[1].type, "image");
+    assert.equal(result.content[1].mimeType, "image/jpeg");
+    assert.ok(Buffer.from(result.content[1].data, "base64").subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")));
+    assert.equal(result.structuredContent.image.data, undefined);
+    assert.ok(!result.content[0].text.includes(result.content[1].data));
+  }
+  evidence.nativeImages = true;
+  const analysis = await call("read_analysis", { video_id: Number(videoId) });
+  evidence.analysis = analysis.isError === undefined && analysis.structuredContent.analysis_runs.length > 0;
+  const jobs = await call("list_jobs", { video_id: Number(videoId) });
+  evidence.jobDiscovery = jobs.structuredContent.items.some(item => item.job_id === sequenceState.job_id);
+  const status = await call("get_processing_status", {});
+  evidence.processingStatus = status.structuredContent.service_status === "running"
+    && status.structuredContent.ai_connection.credential_checked === false;
   assert.ok(Object.entries(evidence).every(([key, value]) => key === "version" || value === true));
   console.log(JSON.stringify(evidence));
 } finally {

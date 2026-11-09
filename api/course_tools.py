@@ -25,9 +25,12 @@ def router(provider, jobs, ensure_changes, *, batch=None):
         if payload.library_id != provider.library_id():
             raise HTTPException(409, "视频库身份已变化，请重新连接")
         try:
+            service = CourseTools(provider, jobs, ensure_changes=ensure_changes,
+                                  origin=str(request.base_url), batch=batch)
+            if tool in {"read_slide", "read_video_frame"}:
+                return service.call(tool, payload.arguments, expected_library_id=payload.library_id)
             with jobs._lock:
-                return CourseTools(provider, jobs, ensure_changes=ensure_changes,
-                                   origin=str(request.base_url), batch=batch).call(tool, payload.arguments)
+                return service.call(tool, payload.arguments)
         except KeyError as error:
             raise HTTPException(404, str(error).strip("'")) from None
         except ValidationError as error:
