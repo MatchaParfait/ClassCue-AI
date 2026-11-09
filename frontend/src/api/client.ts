@@ -795,11 +795,83 @@ export async function deleteAiConnection(id: string): Promise<AiSettings> {
   return normalizeAiSettings(await request(`/api/settings/ai/connections/${encodeURIComponent(id)}`, { method: "DELETE" }));
 }
 
-export async function uploadVideo(file: File): Promise<{ video: Video; existed: boolean }> {
-  const raw = await request<{ video: Video; existed: boolean }>(
-    `/api/videos/upload?filename=${encodeURIComponent(file.name)}`,
-    { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file },
-  );
+export async function importVideoPath(path: string, signal?: AbortSignal): Promise<{ video: Video; existed: boolean }> {
+  const raw = await request<{ video: Video; existed: boolean }>("/api/videos/register", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }), signal,
+  });
+  return { ...raw, video: normalizeVideo(raw.video) };
+}
+
+export interface VideoUploadOptions {
+  signal: AbortSignal;
+  onProgress: (loaded: number, total: number) => void;
+}
+
+export async function uploadVideo(file: File, options?: VideoUploadOptions): Promise<{ video: Video; existed: boolean }> {
+  const path = `/api/videos/upload?filename=${encodeURIComponent(file.name)}`;
+  const raw = options ? await new Promise<{ video: Video; existed: boolean }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let lastLoaded = 0;
+    const finish = (error?: Error, value?: { video: Video; existed: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal.removeEventListener("abort", abort);
+      if (error) reject(error);
+      else resolve(value!);
+    };
+    const abort = () => {
+      finish(new Error("已停止等待导入结果；入库可能仍在完成，请刷新视频库核对后再重试"));
+      xhr.abort();
+    };
+    const watch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        finish(new Error("导入连续两分钟没有进展；请检查服务连接，并刷新视频库核对结果后再重试"));
+        xhr.abort();
+      }, 120_000);
+    };
+    xhr.open("POST", `${API_BASE}${path}`);
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = event => {
+      if (settled) return;
+      if (event.loaded > lastLoaded) {
+        lastLoaded = event.loaded;
+        watch();
+      }
+      options.onProgress(event.loaded, event.lengthComputable ? event.total : file.size);
+    };
+    xhr.upload.onload = () => {
+      if (settled) return;
+      watch();
+      options.onProgress(file.size, file.size);
+    };
+    xhr.onload = () => {
+      try {
+        const value = JSON.parse(xhr.responseText);
+        if (xhr.status < 200 || xhr.status >= 300) {
+          finish(new Error(typeof value.detail === "string" ? value.detail : `导入失败：HTTP ${xhr.status}`));
+        } else finish(undefined, value);
+      } catch {
+        finish(new Error(`无法确认导入结果：HTTP ${xhr.status}；请刷新视频库核对后再重试`));
+      }
+    };
+    xhr.onerror = () => finish(new Error("导入连接中断，请检查服务连接并刷新视频库核对结果"));
+    xhr.onabort = () => finish(new Error("已停止等待导入结果，请刷新视频库核对"));
+    if (options.signal.aborted) { abort(); return; }
+    options.signal.addEventListener("abort", abort, { once: true });
+    watch();
+    try {
+      xhr.send(file);
+    } catch {
+      finish(new Error("无法发送视频，请检查文件是否仍可读取及服务连接后重试"));
+      xhr.abort();
+    }
+  }) : await request<{ video: Video; existed: boolean }>(path,
+    { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
   return { ...raw, video: normalizeVideo(raw.video) };
 }
 

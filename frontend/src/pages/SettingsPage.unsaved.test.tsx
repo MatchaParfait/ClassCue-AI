@@ -111,7 +111,10 @@ it("guards ASR device changes and does not prompt again after saving", async () 
   await click("ASR 模型"); await click("快捷键"); expect(document.querySelector(".unsaved-dialog")).toBeNull();
 });
 it("saves ordinary storage preferences but requires a separate confirmation for moving files", async () => {
-  await mount("storage"); await act(async () => input("导入后删除原文件").click());
+  await mount("storage"); await act(async () => {
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
+    select.value = "copy"; select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await click("快捷键"); await click("保存并离开");
   expect(api.saveStorageDirectories).toHaveBeenCalledWith(expect.objectContaining({ delete_source_after_import: false }));
   await click("存储与导入"); await change("视频与音频存储目录", "E:/new");

@@ -101,6 +101,7 @@ files = [
     "classcue/deepseek_judge.py",
     "classcue/desktop_runtime.py",
     "classcue/desktop_startup.py",
+    "classcue/desktop_video_drop.py",
     "classcue/desktop_windows.py",
     "classcue/diagnostics.py",
     "classcue/device_protocol.py",

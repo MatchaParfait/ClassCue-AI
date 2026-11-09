@@ -122,6 +122,9 @@ def test_local_secondary_import_skips_upload_temp_preserves_source_and_stays_hid
     secondary_upload_library, tmp_path, monkeypatch,
 ):
     client, store, ids = secondary_upload_library
+    settings = client.get("/api/settings/directories").json()
+    values = {key: settings[key] for key in ("asr_storage_root", "audio_cache_dir", "log_dir", "video_library_dir")}
+    assert client.put("/api/settings/directories", json={**values, "delete_source_after_import": False}).status_code == 200
     source = tmp_path / "local-camera.mp4"
     source.write_bytes(b"synthetic local secondary")
 
@@ -137,7 +140,7 @@ def test_local_secondary_import_skips_upload_temp_preserves_source_and_stays_hid
         secondary_id = result["video_id"]
         assert result["existed"] is existed
         assert result["secondary_view"]["video_id"] == secondary_id
-        assert result["video"]["storage_warning"] is None
+        assert bool(result["video"]["storage_warning"]) is existed
         assert Path(result["video"]["video_path"]).read_bytes() == source.read_bytes()
         assert store.get_video(secondary_id)["is_secondary"] == 1
         assert {row["id"] for row in store.list_videos()} == set(ids)

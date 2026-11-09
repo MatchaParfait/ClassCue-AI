@@ -9,7 +9,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from classcue.asr_storage import application_config_directory, audio_directory, read_configuration, validate_directory
+from classcue.asr_storage import (
+    application_config_directory, audio_directory, initialize_import_preference,
+    read_configuration, validate_directory,
+)
 
 
 ROOT = PROJECT_ROOT
@@ -36,6 +39,7 @@ def storage_paths(data_root: Path) -> tuple[Path, Path]:
 
 def active_storage_paths() -> tuple[Path, Path, Path]:
     root = load_data_root()
+    initialize_import_preference(ROOT, root)
     database, audio = storage_paths(root)
     audio.mkdir(parents=True, exist_ok=True)
     return root, database, audio

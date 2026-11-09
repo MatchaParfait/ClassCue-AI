@@ -136,6 +136,29 @@ def delete_source_after_import(project_root: Path, data_root: Path) -> bool:
     return value
 
 
+def initialize_import_preference(project_root: Path, data_root: Path) -> None:
+    """New libraries copy by default; retain the implicit move mode of old installs."""
+    from filelock import FileLock
+
+    configuration = project_root / "data" / "asr_storage.json"
+    configuration.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(configuration.with_suffix(".lock")), timeout=10):
+        settings = read_configuration(project_root)
+        if "delete_source_after_import" in settings:
+            return
+        settings["delete_source_after_import"] = (data_root / "project.db").is_file()
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=configuration.parent,
+                                    prefix="storage-", suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(settings, output, ensure_ascii=False)
+            temporary.replace(configuration)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
 def validate_video_directory(videos: Path, *temporary_directories: Path) -> None:
     for temporary in temporary_directories:
         if videos == temporary or videos.is_relative_to(temporary) or temporary.is_relative_to(videos):

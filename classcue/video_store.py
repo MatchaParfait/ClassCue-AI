@@ -631,14 +631,16 @@ class VideoStore:
                 (resolved, str(Path(resolved).parent), source_size, source_mtime_ns, video_id),
             )
 
-    def update_video_file(self, video_id: int, path: Path, *, source_folder: str | None = None) -> None:
+    def update_video_file(self, video_id: int, path: Path, *, source_folder: str | None = None,
+                          preserve_names: bool = False) -> None:
         stat = path.stat()
         with self.connect() as connection:
             connection.execute(
-                """UPDATE videos SET video_path = ?, filename = ?, display_name = ?,
+                """UPDATE videos SET video_path = ?, filename = CASE WHEN ? THEN filename ELSE ? END,
+                   display_name = CASE WHEN ? THEN display_name ELSE ? END,
                    source_size = ?, source_mtime_ns = ?,
                    source_folder = COALESCE(?, source_folder) WHERE id = ?""",
-                (str(path.resolve()), path.name, path.stem, stat.st_size, stat.st_mtime_ns,
+                (str(path.resolve()), preserve_names, path.name, preserve_names, path.stem, stat.st_size, stat.st_mtime_ns,
                  source_folder, video_id),
             )
 

@@ -573,7 +573,7 @@ def test_identical_reimport_reuses_record(library):
     assert second_id == video_id and existed
     assert path == second
     assert len(store.list_videos()) == 1
-    assert not source.exists()
+    assert source.read_bytes() == b"video fixture"
 
 
 @pytest.mark.parametrize("name", ["", "../escape", r"..\escape", "CON", "AUX.mp4", "a:b", "movie.mov"])

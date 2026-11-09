@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 import sys
-from threading import Thread
+from threading import Lock, Thread
 import time
 from urllib.parse import urlsplit
 from urllib.error import HTTPError
@@ -142,6 +142,21 @@ class WindowUI:
 class NativeAPI:
     def __init__(self, lifecycle, ui):
         self._lifecycle, self._ui = lifecycle, ui
+        self._video_drop = None
+        self._video_drop_lock = Lock()
+
+    def bind_video_drop(self):
+        self._check_origin()
+        from classcue.desktop_video_drop import VideoDropBridge
+        with self._video_drop_lock:
+            if self._video_drop is None:
+                self._video_drop = VideoDropBridge(self._ui.window, self._check_origin)
+        return self._video_drop.bind()
+
+    def unbind_video_drop(self, token):
+        self._check_origin()
+        if self._video_drop is not None:
+            self._video_drop.unbind(token)
 
     def _check_origin(self):
         current = self._ui.window.get_current_url()

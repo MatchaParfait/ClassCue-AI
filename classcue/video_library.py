@@ -18,6 +18,29 @@ import classcue.video_pipeline as video_pipeline
 from classcue.video_store import VideoStore
 
 
+DUPLICATE_NOTICE = "重复视频已复用，保留原视频库归属和来源文件"
+
+
+def import_local_video(store: VideoStore, path: str | Path, audio_dir: Path, *,
+                       project_root: Path | None = None, **options):
+    """Use the same storage settings for desktop, CLI and Streamlit imports."""
+    if project_root is None:
+        from classcue.paths import PROJECT_ROOT
+        project_root = PROJECT_ROOT
+    data_root = Path(store.path).parent
+    library = asr_storage.video_directory(project_root, data_root)
+    assets = asr_storage.storage_root(project_root)
+    asr_storage.validate_video_directory(
+        library, audio_dir, asr_storage.log_directory(project_root),
+        assets / "models" / "asr", assets / ".runtime", project_root / ".runtime",
+    )
+    return register_managed_video(
+        store, path, audio_dir, library,
+        delete_source_after_import=asr_storage.delete_source_after_import(project_root, data_root),
+        **options,
+    )
+
+
 def video_filename(value: str | None, source: Path) -> str:
     if value is None:
         return source.name
@@ -187,6 +210,7 @@ def register_managed_video(
     validate_content: Callable[[str], None] | None = None,
     _verified_source: tuple[str, os.stat_result] | None = None,
     _consume_upload: bool = False,
+    rename: bool = False,
 ) -> tuple[int, Path, bool, str | None]:
     source = Path(raw_path).expanduser().absolute()
     if source.resolve() != source or source.is_symlink():
@@ -223,6 +247,17 @@ def register_managed_video(
         if validate_content:
             validate_content(digest)
         existing = store.get_video_by_hash(digest)
+        if existing and not rename:
+            managed = Path(existing["video_path"])
+            if managed.is_relative_to(library_dir) and managed.is_file():
+                if managed.resolve() != managed or hash_video_source(store, managed)[0] != digest:
+                    raise ValueError("已有视频库文件校验失败，来源文件已保留")
+                if existing["is_secondary"] and not secondary_only:
+                    store.promote_secondary_video(int(existing["id"]))
+                if on_registered:
+                    on_registered(int(existing["id"]))
+                return int(existing["id"]), managed, True, DUPLICATE_NOTICE
+            name = video_filename(existing["filename"], Path(existing["filename"]))
         destination = library_dir / digest / name
         verified_stat = before
         if destination.parent.resolve() != destination.parent:
@@ -304,7 +339,10 @@ def register_managed_video(
                 original_folder = existing["source_folder"]
             if original_folder is None and existing:
                 original_folder = existing["source_folder"]
-            store.update_video_file(video_id, path, source_folder=original_folder)
+            if existing and not rename:
+                original_folder = existing["source_folder"]
+            store.update_video_file(video_id, path, source_folder=original_folder,
+                                    preserve_names=bool(existing and not rename))
             if on_registered:
                 on_registered(video_id)
         except Exception:
@@ -313,8 +351,9 @@ def register_managed_video(
                 destination.unlink(missing_ok=True)
             raise
 
-        warning = None
-        if destination != source and delete_source_after_import and not (_consume_upload and not source.exists()):
+        warning = DUPLICATE_NOTICE if existing and not rename else None
+        if (destination != source and delete_source_after_import and (not existing or rename)
+                and not (_consume_upload and not source.exists())):
             try:
                 after = source.stat()
                 if (before.st_size, before.st_mtime_ns, before.st_ino) != (

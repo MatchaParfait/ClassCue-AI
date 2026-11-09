@@ -233,26 +233,26 @@ def run_web_batch(
                 if _file_identity(source.stat()) != _file_identity(verified_source[1]):
                     raise ValueError("视频在校验后发生变化，请重新导入")
             existing = store.get_video_by_hash(entry.get("content_hash", ""))
-            if existing is not None:
-                entry["video_id"] = int(existing["id"])
-                entry["video_path"] = existing["video_path"]
-                entry["warning"] = "重复视频已复用，保留原视频库归属和来源文件"
-                entry["status"] = "pending_asr"
-                checkpoint()
-            else:
-                if not source.is_file():
+            registration_source = source
+            if not source.is_file():
+                if existing is None:
                     raise ValueError("待导入视频已被移动或删除")
+                registration_source = Path(existing["video_path"])
+                verified_source = hash_video_source(store, registration_source)
+                if verified_source[0] != entry["content_hash"]:
+                    raise ValueError("已有视频库文件校验失败，未恢复导入")
 
-                def registered(video_id):
+            def registered(video_id):
+                if existing is None:
                     store.set_video_folder(video_id, folder_id)
-                    entry.update(video_id=video_id, status="pending_asr")
-                    entry["video_path"] = store.get_video(video_id)["video_path"]
-                    checkpoint()
+                entry.update(video_id=video_id, status="pending_asr")
+                entry["video_path"] = store.get_video(video_id)["video_path"]
+                checkpoint()
 
-                _id, _path, _exists, warning = import_video(
-                    source, on_registered=registered, _verified_source=verified_source,
-                )
-                entry["warning"] = warning or ""
+            _id, _path, _exists, warning = import_video(
+                registration_source, on_registered=registered, _verified_source=verified_source,
+            )
+            entry["warning"] = warning or ""
             if any(previous.get("video_id") == entry["video_id"] for previous in entries[:index]):
                 entry["status"] = "skipped"
             checkpoint()

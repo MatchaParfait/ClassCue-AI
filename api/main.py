@@ -1020,6 +1020,7 @@ class StoreProvider:
 
     def get(self) -> VideoStore:
         if self._store is None:
+            asr_storage.initialize_import_preference(DIRECTORY_PROJECT_ROOT, self.data_root())
             self._store = VideoStore(self.database_path())
         return self._store
 
@@ -2602,7 +2603,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 raise ValueError("副视角不能使用主视频本身，请选择另一个视频")
 
         imported, _path, existed, warning = import_video(
-            path, filename, browser_upload=browser_upload, secondary_only=True, preserve_source=True,
+            path, filename, browser_upload=browser_upload, secondary_only=True,
             validate_content=validate_content, on_registered=lambda secondary: store.set_secondary_view(video_id, secondary),
         )
         video = video_payload(_video_or_404(store, imported))
@@ -2683,12 +2684,12 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
 
     def import_video(path: str | Path, filename: str | None = None, *, on_registered=None,
                      rename: bool = False, browser_upload: bool = False, secondary_only: bool = False,
-                     preserve_source: bool = False, validate_content=None, _verified_source=None):
+                     validate_content=None, _verified_source=None):
         root = provider.data_root()
         audio, library = video_import_directories()
         return register_managed_video(
             provider.get(), path, audio, library, filename, on_registered=on_registered,
-            delete_source_after_import=not preserve_source and (
+            delete_source_after_import=(
                 rename or asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, root)
             ),
             source_folder="" if browser_upload else None,
@@ -2696,6 +2697,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             validate_content=validate_content,
             _verified_source=_verified_source,
             _consume_upload=browser_upload,
+            rename=rename,
         )
 
     @api.patch("/api/videos/{video_id}/filename")
@@ -3988,6 +3990,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         return freeze_processing_options(options).model_dump()
 
     batch_tools = {
+        "moves_sources": lambda: asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, provider.data_root()),
         "options": mcp_batch_options,
         "modes": lambda: [
             {"id": mode, "name": mode} for mode in

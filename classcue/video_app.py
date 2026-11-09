@@ -12,12 +12,13 @@ from classcue.asr_ui import render_asr_settings, render_retranscription
 from classcue.ai_provider import create_judge
 from classcue.ai_ui import render_ai_settings
 from classcue.core import DEFAULT_TRIGGER_GROUPS, format_time, validate_trigger_groups
-from classcue.batch_processing import format_eta, run_batch
+from classcue.batch_processing import batch_source_paths, format_eta, run_batch
 from classcue.app_storage import TRIGGER_LIBRARY_PATH, active_storage_paths
 from classcue.openai_judge import OpenAICompatibleJudge
 from classcue.path_picker import read_path_picker_result, start_path_picker
 from classcue.runtime import whisper_backend
-from classcue.video_pipeline import discover_videos, process_video_once, register_local_video
+from classcue.video_pipeline import process_video_once
+from classcue.video_library import import_local_video
 from classcue.video_store import VideoStore
 from classcue.qwen_resilience import read_json, atomic_json
 
@@ -225,7 +226,7 @@ if folder_cols[0].button("选择视频文件夹"):
 folder = folder_cols[1].text_input("本机视频文件夹", key="video_folder", placeholder=r"E:\course-videos")
 if folder_cols[2].button("扫描"):
     try:
-        st.session_state.batch_paths = [str(path) for path in discover_videos(folder)]
+        st.session_state.batch_paths = [str(path) for path in batch_source_paths(store, folder)]
         st.session_state.selected_batch_paths = st.session_state.batch_paths.copy()
     except Exception as exc:
         st.error(str(exc))
@@ -340,11 +341,13 @@ render_path_picker_status()
 single_display_name = st.text_input("视频显示名称（可选）", placeholder="例如：第 03 讲 - 单纯形法")
 if single_cols[2].button("登记"):
     try:
-        video_id, _path, existed = register_local_video(store, single_path, AUDIO_DIR)
+        video_id, _path, existed, warning = import_local_video(store, single_path, AUDIO_DIR)
         if single_display_name.strip():
             store.update_video_display_name(video_id, single_display_name)
         st.session_state.single_registered_video_id = video_id
         st.success("已加载既有记录。" if existed else "已登记，请在下方开始处理。")
+        if warning:
+            st.warning(warning)
     except Exception as exc:
         st.error(str(exc))
 

@@ -10,14 +10,34 @@ from typing import Callable
 from classcue.asr_models import get_model, selected_model_id
 from classcue.video_pipeline import (
     analyze_prepared_video_once,
+    discover_videos,
     prepare_video_for_analysis,
-    register_local_video,
 )
+from classcue.video_library import import_local_video
 from classcue.video_store import VideoStore
 from classcue.transcriber import asr_session
 from classcue.processing_control import ResourcePaused
 from classcue.qwen_resilience import qwen_queue
 from classcue.firered_resilience import firered_queue
+
+
+def batch_source_paths(store: VideoStore, folder: str | Path) -> list[Path]:
+    """Resume archived recordings by their persisted source directory."""
+    root = Path(folder).expanduser().absolute()
+    if root.resolve() != root or root.is_symlink():
+        raise ValueError("请选择真实文件夹，不能使用符号链接或目录联接")
+    paths = discover_videos(root) if root.is_dir() else []
+    seen = {path.resolve() for path in paths}
+    for row in store.list_videos():
+        source_folder = row["source_folder"]
+        if source_folder and Path(source_folder).is_relative_to(root):
+            if (Path(source_folder) / row["filename"]).resolve() in seen:
+                continue
+            managed = Path(row["video_path"])
+            if managed.resolve() not in seen:
+                paths.append(managed)
+                seen.add(managed.resolve())
+    return paths
 
 
 @dataclass(frozen=True)
@@ -150,10 +170,16 @@ def run_batch(
 
     for raw_path in paths:
         try:
-            video_id, path, _exists = register_local_video(store, raw_path, audio_dir)
+            video_id, path, _exists, warning = import_local_video(store, raw_path, Path(audio_dir))
+            if video_id in video_ids:
+                skipped += 1
+                emit(f"{path.name}：重复视频已跳过")
+                continue
             video_ids.append(video_id)
             registered.append((video_id, path))
             emit(f"已登记：{path.name}")
+            if warning:
+                emit(f"{path.name}：{warning}")
         except Exception as exc:
             failed += 1
             emit(f"{Path(raw_path).name} 登记失败：{exc}")

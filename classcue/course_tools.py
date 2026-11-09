@@ -483,8 +483,12 @@ class CourseTools:
             "effects": {
                 "calls_ai_service": not args.import_only,
                 "ai_notice": "将使用应用当前 AI 连接发送字幕并分析，可能产生 API 费用" if not args.import_only else "",
-                "moves_imported_sources": bool(args.folders),
-                "import_notice": "沿用应用导入：归档校验成功后删除来源文件，重复视频保留来源" if args.folders else "",
+                "moves_imported_sources": bool(args.folders) and self.batch["moves_sources"](),
+                "import_notice": (
+                    ("沿用应用导入：归档校验成功后删除来源文件，重复视频保留来源"
+                     if self.batch["moves_sources"]() else "沿用应用导入：复制到视频库，保留来源文件")
+                    if args.folders else ""
+                ),
                 "replaces_existing_transcripts": args.options.force_retranscribe,
                 "may_prepare_asr": not args.import_only and (
                     args.options.force_retranscribe or bool(imports) or any(

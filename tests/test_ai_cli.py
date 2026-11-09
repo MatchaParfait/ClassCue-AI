@@ -16,7 +16,9 @@ def cli_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-cli-key")
     monkeypatch.setenv("OPENAI_API_KEY", "relay-cli-key")
     monkeypatch.setattr(batch_process, "VideoStore", lambda _path: object())
-    monkeypatch.setattr(batch_process, "discover_videos", lambda _folder: ["lesson.mp4"])
+    monkeypatch.setattr(batch_process, "batch_source_paths", lambda _store, _folder: ["lesson.mp4"])
+    monkeypatch.setattr(batch_process, "active_storage_paths",
+                        lambda: (tmp_path / "library", tmp_path / "library" / "project.db", tmp_path / "audio"))
     calls = []
 
     def factory(profile, api_key, provider, **kwargs):

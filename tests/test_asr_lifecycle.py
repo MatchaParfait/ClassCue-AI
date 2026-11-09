@@ -120,6 +120,8 @@ def test_busy_request_does_not_close_another_sessions_worker(worker_setup):
 
 
 def test_single_video_and_real_shared_batch_boundaries(worker_setup, tmp_path, monkeypatch):
+    import classcue.paths
+    monkeypatch.setattr(classcue.paths, "PROJECT_ROOT", tmp_path / "application")
     store = VideoStore(tmp_path / "videos.db")
     paths, video_ids = [], []
     for index in range(3):
@@ -144,7 +146,7 @@ def test_single_video_and_real_shared_batch_boundaries(worker_setup, tmp_path, m
 
     monkeypatch.setattr(batch_processing, "_average_transcription_rate", lambda _s: 1.0)
     summary = batch_processing.run_batch(
-        store, paths[1:], tmp_path, judge,
+        store, paths[1:], tmp_path / "audio", judge,
         asr_model_id=worker_setup.model_id, on_event=event,
     )
     assert summary.completed == 2 and summary.failed == 0

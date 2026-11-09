@@ -15,10 +15,9 @@ from classcue.ai_provider import (
     PROVIDER_LABELS, ProviderProfile, create_judge, load_provider_settings, resolve_api_key,
     interface_provider, resolve_interface_key,
 )
-from classcue.batch_processing import format_eta, run_batch
+from classcue.batch_processing import batch_source_paths, format_eta, run_batch
 from classcue.core import DEFAULT_TRIGGER_GROUPS, validate_trigger_groups
 from classcue.app_storage import TRIGGER_LIBRARY_PATH, active_storage_paths, storage_paths
-from classcue.video_pipeline import discover_videos
 from classcue.video_store import VideoStore
 from classcue.transcriber import clear_asr_model, prepare_asr_model
 
@@ -116,7 +115,7 @@ def main() -> None:
     data_root.mkdir(parents=True, exist_ok=True)
     database_path, audio_dir = storage_paths(data_root)
     store = VideoStore(database_path)
-    paths = discover_videos(args.videos)
+    paths = batch_source_paths(store, args.videos)
     if not paths:
         raise SystemExit("视频文件夹中没有找到支持的视频。")
     judge = create_judge(profile, api_key, provider, mode=args.mode)

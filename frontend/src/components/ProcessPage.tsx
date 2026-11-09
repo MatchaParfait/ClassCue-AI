@@ -475,7 +475,7 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
             <p className="eyebrow">单视频处理</p>
             <h1 tabIndex={-1}>{registeredVideo ? "处理视频" : "导入视频"}</h1>
             {spacePreference !== "off" && currentJob && !spaceOpen && <button className="text-button" type="button" onClick={() => setSpaceOpen(true)}><Sparkles size={16} />打开字幕空间</button>}
-            {!registeredVideo && <p>视频将保存到视频库，是否保留原文件取决于设置中的“导入后删除原文件”。</p>}
+            {!registeredVideo && <p>视频将保存到视频库，是否保留原文件取决于设置中的“本机视频导入方式”。</p>}
           </div>
           {!guided && (embedded ? <button className="secondary-button panel-return" onClick={onClose}>返回视频库</button>
             : <Link className="secondary-button" to="/"><ArrowRight size={16} /> 返回视频库</Link>)}

@@ -135,10 +135,13 @@ export function StorageDirectoriesSection({ data, isLoading, isError, onRetry, o
       {!isLoading && !isError && data && form && (
         <>
           <fieldset className="storage-directory-fields" disabled={busy}>
-            <label className="check-option">
-              <input type="checkbox" aria-label="导入后删除原文件" checked={form.delete_source_after_import ?? true}
-                onChange={(event) => update("delete_source_after_import", event.target.checked)} />
-              <span>导入后删除原文件<small>保存后下次导入生效。取消勾选只复制到视频库，保留原位置文件。</small></span>
+            <label className="settings-field">
+              <span>本机视频导入方式</span>
+              <select aria-label="本机视频导入方式" value={(form.delete_source_after_import ?? true) ? "move" : "copy"}
+                onChange={(event) => update("delete_source_after_import", event.target.value === "move")}>
+                <option value="copy">复制到视频库（保留原文件）</option>
+                <option value="move">移动到视频库（校验成功后删除原文件）</option>
+              </select>
             </label>
             <div className="storage-directory-row">
               <label className="settings-field grow"><span>{mediaLabel}<small>视频与转写缓存一起迁移</small></span>

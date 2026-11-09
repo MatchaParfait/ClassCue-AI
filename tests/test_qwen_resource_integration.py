@@ -70,8 +70,8 @@ def test_shared_batch_stops_new_asr_but_drains_ai(tmp_path, store, monkeypatch):
     paths = [tmp_path / f"{index}.mp4" for index in range(3)]
     ids = [store.create_video(str(i), path.name, str(path), "audio.wav", 1000)
            for i, path in enumerate(paths)]
-    monkeypatch.setattr(batch_processing, "register_local_video",
-                        lambda _store, path, _dir: (ids[paths.index(path)], path, True))
+    monkeypatch.setattr(batch_processing, "import_local_video",
+                        lambda _store, path, _dir: (ids[paths.index(path)], path, True, None))
     prepared = []
     analyzed = []
 
@@ -117,8 +117,8 @@ def test_shared_batch_resume_finishes_saved_queue(tmp_path, store, monkeypatch):
     queue_path = tmp_path / "batch_queue.json"
     queue_path.write_text(json.dumps({"status": "resource_paused", "paths": [str(path)]}),
                           encoding="utf-8")
-    monkeypatch.setattr(batch_processing, "register_local_video",
-                        lambda *_: (video_id, path, True))
+    monkeypatch.setattr(batch_processing, "import_local_video",
+                        lambda *_: (video_id, path, True, None))
     monkeypatch.setattr(batch_processing, "prepare_video_for_analysis",
                         lambda *_args, **_kwargs: ("skipped", 1))
     result = batch_processing.run_batch(store, [path], tmp_path, object())
@@ -130,8 +130,8 @@ def test_shared_batch_uses_one_recovery_scope_and_resets_on_next_start(tmp_path,
     paths = [tmp_path / f"{i}.mp4" for i in range(2)]
     ids = [store.create_video(str(i), path.name, str(path), "audio.wav", 1000)
            for i, path in enumerate(paths)]
-    monkeypatch.setattr(batch_processing, "register_local_video",
-                        lambda _store, path, _dir: (ids[paths.index(path)], path, True))
+    monkeypatch.setattr(batch_processing, "import_local_video",
+                        lambda _store, path, _dir: (ids[paths.index(path)], path, True, None))
     seen = []
 
     def prepare(_store, _id, **_kwargs):

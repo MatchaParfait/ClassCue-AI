@@ -36,7 +36,9 @@ def test_eta_is_finished_when_all_requested_videos_are_ready(tmp_path):
     assert estimate.seconds == 0.0
 
 
-def test_shared_batch_runner_processes_a_cached_transcript(tmp_path):
+def test_shared_batch_runner_processes_a_cached_transcript(tmp_path, monkeypatch):
+    import classcue.paths
+    monkeypatch.setattr(classcue.paths, "PROJECT_ROOT", tmp_path / "application")
     class EmptyJudge:
         def judge_semantic_chunk(self, chunk):
             return SemanticSelection()
@@ -61,7 +63,7 @@ def test_shared_batch_runner_processes_a_cached_transcript(tmp_path):
     summary = run_batch(
         store,
         [path],
-        tmp_path,
+        tmp_path / "audio",
         EmptyJudge(),
         analysis_mode="strict_exam_intent",
         on_event=events.append,

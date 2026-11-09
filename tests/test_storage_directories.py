@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+import api.updates as updates_api
+from classcue.desktop_runtime import native_update_token
 import classcue.asr_storage as asr_storage
 import classcue.video_pipeline as video_pipeline
 from classcue.video_store import VideoStore
@@ -20,6 +22,8 @@ def directories(tmp_path, monkeypatch):
     monkeypatch.setattr(api_main, "DIRECTORY_PROJECT_ROOT", project)
     monkeypatch.setattr(api_main, "ACTIVE_ASR_STORAGE_ROOT", project)
     monkeypatch.setattr(api_main, "ACTIVE_LOG_DIR", project / ".runtime" / "logs")
+    monkeypatch.setattr(updates_api, "native_update_token",
+                        lambda _root, **options: native_update_token(tmp_path / "native-control", **options))
     application = api_main.create_app(store)
     client = TestClient(application)
     yield client, store, project, workspace, application

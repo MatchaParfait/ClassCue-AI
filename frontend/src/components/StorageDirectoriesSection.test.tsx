@@ -198,11 +198,11 @@ it("does not save blank paths and supports retry after loading failure", () => {
   expect(onRetry).toHaveBeenCalledOnce();
 });
 
-it("defaults to moving videos and saves an unchecked copy-only preference", async () => {
-  const checkbox = input("导入后删除原文件");
-  expect(checkbox.checked).toBe(true);
-  act(() => checkbox.click());
-  expect(checkbox.checked).toBe(false);
+it("preserves the saved move preference and can select copy mode", async () => {
+  const select = container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
+  expect(select.value).toBe("move");
+  act(() => { select.value = "copy"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(select.value).toBe("copy");
   expect(save().disabled).toBe(false);
   const result = { ...data, delete_source_after_import: false };
   vi.mocked(saveStorageDirectories).mockResolvedValue(result);
@@ -210,18 +210,19 @@ it("defaults to moving videos and saves an unchecked copy-only preference", asyn
   await act(async () => { save().click(); });
   await settle(() => expect(onSuccess).toHaveBeenCalledWith(result));
   expect(saveStorageDirectories).toHaveBeenCalledWith(expect.objectContaining({ delete_source_after_import: false }));
-  expect(input("导入后删除原文件").checked).toBe(false);
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!.value).toBe("copy");
   expect(save().disabled).toBe(true);
 });
 
 it("preserves copy-only mode when editing directories and reverting drafts", () => {
   render({ ...data, delete_source_after_import: false });
   change("视频与音频存储目录", "E:\\videos");
-  expect(input("导入后删除原文件").checked).toBe(false);
-  act(() => input("导入后删除原文件").click());
-  expect(input("导入后删除原文件").checked).toBe(true);
+  const select = container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
+  expect(select.value).toBe("copy");
+  act(() => { select.value = "move"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(select.value).toBe("move");
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="撤销未保存的目录修改"]')!.click());
-  expect(input("导入后删除原文件").checked).toBe(false);
+  expect(select.value).toBe("copy");
   expect(input("视频与音频存储目录").value).toBe(data.media_storage_root);
   expect(save().disabled).toBe(true);
 });

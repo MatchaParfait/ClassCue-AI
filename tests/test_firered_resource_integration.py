@@ -117,8 +117,8 @@ def test_shared_batch_retains_firered_limits_and_resets_next_queue(tmp_path, sto
     paths = [tmp_path / f"{index}.mp4" for index in range(2)]
     ids = [store.create_video(str(i), path.name, str(path), "audio.wav", 1000)
            for i, path in enumerate(paths)]
-    monkeypatch.setattr(batch_processing, "register_local_video",
-                        lambda _store, path, _dir: (ids[paths.index(path)], path, True))
+    monkeypatch.setattr(batch_processing, "import_local_video",
+                        lambda _store, path, _dir: (ids[paths.index(path)], path, True, None))
     seen = []
     def prepare(*_args, **_kwargs):
         queue = fr._QUEUE.get()

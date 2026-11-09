@@ -16,6 +16,8 @@ export interface DesktopAPI {
   exit_application(): Promise<unknown>;
   open_logs(): Promise<unknown>;
   install_update?(): Promise<unknown>;
+  bind_video_drop?(): Promise<string>;
+  unbind_video_drop?(token: string): Promise<void>;
 }
 declare global {
   interface Window {
