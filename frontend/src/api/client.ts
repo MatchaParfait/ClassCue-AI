@@ -1027,6 +1027,24 @@ export async function getRecallSchemes(): Promise<RecallScheme[]> {
   return Array.isArray(value) ? value : [];
 }
 
+export interface RecallSelection {
+  library_id: string;
+  analysis_modes: RecallMode[];
+  initialized: boolean;
+  revision: number;
+}
+
+export function getRecallSelection(): Promise<RecallSelection> {
+  return request("/api/settings/recall-selection");
+}
+
+export function saveRecallSelection(libraryId: string, modes: RecallMode[], revision: number): Promise<RecallSelection> {
+  return request("/api/settings/recall-selection", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ library_id: libraryId, analysis_modes: modes, expected_revision: revision }),
+  });
+}
+
 export async function saveRecallScheme(value: RecallSchemeInput, id?: string): Promise<RecallScheme> {
   return request<RecallScheme>(`/api/settings/recall-schemes${id ? `/${encodeURIComponent(id)}` : ""}`, {
     method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value),

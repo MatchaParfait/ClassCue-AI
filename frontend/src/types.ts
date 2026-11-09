@@ -505,6 +505,7 @@ export interface Job extends JobStatus {
     status: string;
     error?: string | null;
     warning?: string | null;
+    steps?: Array<{ name: string; status: string; count?: number }>;
   }>;
   folders?: Array<{ folder_id: number; name: string; path: string }>;
 }

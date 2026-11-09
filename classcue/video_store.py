@@ -152,6 +152,11 @@ class VideoStore:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS recall_selection (
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    modes_json TEXT NOT NULL,
+                    revision INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS video_experiments (
                     id TEXT PRIMARY KEY,
                     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -2311,6 +2316,33 @@ class VideoStore:
                 "SELECT * FROM video_analysis_runs WHERE video_id = ? AND analysis_mode = ?", (video_id, analysis_mode)
             ).fetchone()
 
+    def get_recall_selection(self) -> dict:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM recall_selection WHERE id=1").fetchone()
+        return {"analysis_modes": json.loads(row["modes_json"]) if row else ["medium_recall"],
+                "revision": row["revision"] if row else 0, "initialized": row is not None}
+
+    def save_recall_selection(self, modes: list[str], expected_revision: int) -> dict:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT revision FROM recall_selection WHERE id=1").fetchone()
+            revision = row["revision"] if row else 0
+            if revision != expected_revision:
+                raise ValueError("处理方案已在其他窗口更新，请重新读取后选择")
+            for mode in modes:
+                if mode.startswith("custom_"):
+                    scheme = connection.execute(
+                        "SELECT archived FROM recall_schemes WHERE id=?", (mode,)).fetchone()
+                    if scheme is None or scheme["archived"]:
+                        raise ValueError("自定义召回方案不存在或已停用，请重新选择")
+            value = list(dict.fromkeys(modes))
+            connection.execute(
+                "INSERT INTO recall_selection VALUES(1,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET modes_json=excluded.modes_json,revision=excluded.revision",
+                (json.dumps(value), revision + 1),
+            )
+        return {"analysis_modes": value, "revision": revision + 1, "initialized": True}
+
     def list_recall_schemes(self) -> list[dict]:
         with self.connect() as connection:
             rows = connection.execute("SELECT * FROM recall_schemes ORDER BY created_at, id").fetchall()
@@ -2786,10 +2818,13 @@ class VideoStore:
                     batch_ids.extend(
                         int(entry["video_id"]) for entry in request.get("entries", []) if entry.get("video_id")
                     )
-                    if row["job_type"] == "course_transcribe":
+                    if row["job_type"] in {"course_transcribe", "course_sequence"}:
                         for entry in request.get("entries", []):
                             if entry.get("status") == "running":
                                 entry["status"] = "pending"
+                            for step in entry.get("steps", []):
+                                if step["status"] == "running":
+                                    step["status"] = "pending"
                         connection.execute(
                             "UPDATE processing_jobs SET request_json = ? WHERE id = ?",
                             (json.dumps(request, ensure_ascii=False), row["id"]),

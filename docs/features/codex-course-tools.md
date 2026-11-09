@@ -1,6 +1,6 @@
 # Codex 课程检索与转写工具
 
-插件版本：`0.5.0`。12 个课程工具与课程 Skill 已实现；
+插件版本：`0.6.0`。13 个课程工具与课程 Skill 已实现；
 真实调用和单列的 ASR 环境验证限制见
 [验收记录](../validation/codex-course-tools-validation.md)。
 
@@ -33,6 +33,17 @@ Codex 查找课程、搜索关键词，再读附近字幕。结果不足时可�
 桌面任务中心显示“课程转写”、实际模型、逐视频状态和失败原因；
 中断后未完成项显示为待转写。
 
+> 先给这个视频补字幕，然后提取 PPT。
+
+`start_processing_sequence` 一次提交步骤，由 APP 后台在每个视频内按顺序执行，
+不依赖 Agent 持续等待。默认 `steps=["transcribe","extract_slides"]`，
+也可只运行其中一步，或显式指定两步的相反顺序；步骤不能重复。
+转写只使用提交时的已准备 ASR，已有字幕直接复用；PPT 使用现有提取器及缓存，
+不强制覆盖、不调用考点或题目分析。失败、资源中断或取消后停止整个顺序任务，
+后续步骤及其他视频不再执行，已保存字幕和 PPT 保留。
+应用重启会将任务记为中断；使用新请求标识重新提交原步骤，可复用已保存产物。
+聊天结束不停止任务，但 APP 所属服务必须保持运行。
+
 > 对数据库课程做批量处理，提取中召回考点和视频题目。
 
 Agent 先预览范围与影响，再调用应用已有完整批处理；也可指定若干视频，
@@ -56,17 +67,39 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 | `read_transcript` | 视频 ID、起止秒数，可选继续读取游标 | 完整字幕句、时间、字幕版本、下一页位置 |
 | `open_video` | 视频 ID、可选起始秒数 | 桌面导航请求结果，不冒充播放器已经完成定位 |
 | `start_transcription` | `course_id` 或 `video_ids`，二选一 | 后台任务 ID、实际模型／设备、统计；无缺失则无需新建任务 |
+| `start_processing_sequence` | 课程或视频集合、可选 `steps`、必填 `request_id` | 仅本地的顺序任务，默认 ASR → PPT；逐视频、逐步骤保存状态，失败即停止 |
 | `preview_batch` | `course_id`、`video_ids`、`folders` 三选一，可附处理选项 | 范围、字幕覆盖、可用分析方案、导入与 AI 影响；不创建任务或调用模型 |
 | `start_batch_processing` | 同预览参数，另需 `request_id` | 提交已有完整批处理；返回持久任务 ID、模型、方案、统计及结果 |
 | `retry_batch` | 完整批次 `job_id`、新动作的 `request_id` | 重试失败、中断或等待 AI 的未完成项，复用字幕和已完成方案 |
 | `resume_batch` | 资源暂停的完整批次 `job_id`、新动作的 `request_id` | 使用已有恢复流程创建续跑任务，资源问题需先解除 |
-| `get_job` | `job_id`，完整批次明细可附 `limit`／`offset` | 纯转写或完整批次的状态、进度、统计、逐项结果及后续动作 |
-| `cancel_job` | `job_id` | 请求停止纯转写或完整批处理；保留已保存结果，不开放其他类型任务取消 |
+| `get_job` | `job_id`，顺序任务或完整批次明细可分页 | 状态、进度、统计、逐项结果及后续动作 |
+| `cancel_job` | `job_id` | 请求停止纯转写、顺序任务或完整批次；保留已保存结果，不开放其他类型任务取消 |
 
 完整批处理的 `options` 支持 `analysis_modes`、`asr_model_id`、`keywords`、
 `use_keyword_prefilter`、`filter_formula_noise`、`filter_formula` 和 `force_retranscribe`。
-默认中召回，可选择高／中／低召回、题目提取、旧兼容方案或有效自定义方案；
+省略 `analysis_modes` 时沿用 APP 已保存方案；首次无偏好时为中召回。
+可选择高／中／低召回、题目提取、旧兼容方案或有效自定义方案；
 预览返回可选方案 ID。处理直接复用应用现有入口，没有另建分析引擎。
+
+### APP 与 MCP 共用处理方案
+
+APP 将召回／题目提取选择保存在当前视频库的数据库中。
+升级后首次打开新版界面，会把原来同库 `localStorage` 的选择迁入后端；
+已有后端偏好时不覆盖，多个窗口同时迁移时只接受首个成功写入。
+空选择仍为空，分析时明确拒绝，不悄悄回退中召回；自定义方案保存及执行时均校验有效性。
+界面保存失败会显示错误，可重新读取；窗口重新聚焦或前台每 15 秒同步已保存选择。
+多窗口保存携带版本号，过期写入被拒绝，避免覆盖较新的选择。
+
+预览的 `analysis_modes_source` 区分 `app_saved`、`first_use_default`、`explicit`
+和仅导入时的 `not_used`，并返回 `recall_selection_revision`。
+按预览提交时将该版本作为 `expected_recall_revision`；APP 偏好变化则要求重新预览。
+不提供版本时，以提交时的已保存偏好为准；显式传入方案只覆盖本次任务，不改偏好。
+任务创建时保存实际处理方案，请求重放也不重新读取偏好。
+
+读写偏好接口为 `GET/PUT /api/settings/recall-selection`，写入包含
+`library_id`、`analysis_modes` 和 `expected_revision`。
+ASR、设备及 AI 连接继续沿用应用已有设置。关键词、过滤表达式与覆盖转写等
+页面临时输入不是全局偏好，MCP 仍需显式指定，不能宣称读到了未保存的表单状态。
 
 启动、重试和恢复必须携带 8–100 字符的 `request_id`，只允许字母、数字、下划线和连字符。
 请求标识与动作、参数摘要在创建任务时一同持久化。
@@ -105,7 +138,8 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 有未保存修改或桌面未就绪时返回错误，不覆盖用户操作。
 
 任务写入既有 `processing_jobs`：纯转写为 `course_transcribe`，
-完整批处理为原有 `batch_video_process`。MCP 可查询、取消和重试界面创建的完整批次。
+完整批处理为原有 `batch_video_process`，顺序任务为 `course_sequence`。
+MCP 可查询、取消和重试界面创建的完整批次。
 纯转写重复提交相同活动目标返回原任务，完整批处理按 `request_id` 复用；
 其他任务冲突继续遵循应用原有互斥规则。
 任务队列中的视频受文件变更保护，不因尚未轮到该视频而允许移动或改名。
@@ -125,7 +159,7 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 ## 维护与验证
 
 ```powershell
-python -m pytest tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py -q
+python -m pytest tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py tests/test_course_sequence.py -q
 npm test --prefix integrations/codex-desktop
 npm run check --prefix integrations/codex-desktop
 ```

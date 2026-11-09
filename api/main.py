@@ -454,6 +454,19 @@ class SlideExtractionPayload(BaseModel):
     force: bool = False
 
 
+class RecallSelectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    library_id: str = Field(min_length=1, max_length=100)
+    analysis_modes: list[ModeId] = Field(max_length=8)
+    expected_revision: int = Field(ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def visible_modes(self):
+        if "strict_exam_intent" in self.analysis_modes:
+            raise ValueError("旧兼容分析方案不能保存为界面处理偏好")
+        return self
+
+
 class RecallAnalysisPayload(BaseModel):
     analysis_mode: ModeId
 
@@ -589,7 +602,7 @@ class JobManager:
             "cleanup": json.loads(row["cleanup_json"]) if row["cleanup_json"] else None,
             "migration": json.loads(row["request_json"] or "{}").get("migration"),
             "model_id": (json.loads(row["request_json"] or "{}").get("model_id")
-                         or json.loads(row["request_json"] or "{}").get("selection", {}).get("model_id")),
+                         or (json.loads(row["request_json"] or "{}").get("selection") or {}).get("model_id")),
             **({"alignment": json.loads(row["request_json"] or "{}").get("alignment", {}).get("result")}
                if row["job_type"] == "secondary_view_align" else {}),
             "analysis_modes": options.get("analysis_modes") or ([options["analysis_mode"]] if options.get("analysis_mode") else []),
@@ -600,7 +613,7 @@ class JobManager:
 
     @staticmethod
     def _batch_payload(row: sqlite3.Row, store=None) -> dict:
-        if row["job_type"] == "course_transcribe":
+        if row["job_type"] in {"course_transcribe", "course_sequence"}:
             state = json.loads(row["request_json"] or "{}")
             entries = state.get("entries", [])
             counts = {status: sum(entry["status"] == status for entry in entries)
@@ -610,7 +623,10 @@ class JobManager:
                 status = entry["status"]
                 if status == "running" and row["status"] != "running":
                     status = "pending"
-                return {**entry, "status": status,
+                steps = [{**step, "status": "pending" if step["status"] == "running"
+                          and row["status"] != "running" else step["status"]}
+                         for step in entry.get("steps", [])]
+                return {**entry, "status": status, **({"steps": steps} if "steps" in entry else {}),
                         "label": (video["display_name"] or video["filename"]) if video else None}
             return {
                 "batch_summary": {**counts, "total": len(entries), "awaiting_ai": 0,
@@ -1525,7 +1541,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 snapshot = json.loads(row["request_json"] or "{}").get("alignment", {}).get("snapshot", {})
                 if snapshot.get("secondary_id"):
                     locked[int(snapshot["secondary_id"])] = reason
-            if row["job_type"] not in {"batch_video_process", "course_transcribe"}:
+            if row["job_type"] not in {"batch_video_process", "course_transcribe", "course_sequence"}:
                 continue
             try:
                 state = json.loads(row["request_json"] or "{}")
@@ -2741,6 +2757,21 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return video_payload(_video_or_404(provider.get(), video_id))
 
+    @api.get("/api/settings/recall-selection")
+    def get_recall_selection() -> dict:
+        return {"library_id": provider.library_id(), **provider.get().get_recall_selection()}
+
+    @api.put("/api/settings/recall-selection")
+    def put_recall_selection(payload: RecallSelectionPayload) -> dict:
+        with jobs._lock:
+            if payload.library_id != provider.library_id():
+                raise HTTPException(409, "视频库身份已变化，请重新读取处理方案")
+            try:
+                saved = provider.get().save_recall_selection(payload.analysis_modes, payload.expected_revision)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            return {"library_id": provider.library_id(), **saved}
+
     @api.get("/api/settings/recall-schemes")
     def list_recall_schemes() -> list[dict]:
         return provider.get().list_recall_schemes()
@@ -3494,32 +3525,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             if video["status"] == "processing":
                 raise HTTPException(status_code=409, detail="该视频正在处理中")
             options = payload or SlideExtractionPayload()
-            roi = options.roi.to_roi() if options.roi is not None else None
-            slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
-
-            def operation(
-                update: Callable[[float, str, str | None], None],
-                should_cancel: Callable[[], bool],
-            ) -> object:
-                result = extract_and_store_slides(
-                    store,
-                    video_id,
-                    slide_root,
-                    roi=roi,
-                    ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
-                    force=options.force,
-                    progress=update,
-                    should_stop=should_cancel,
-                )
-                from classcue.question_visuals import assign_after_extraction
-                assign_after_extraction(store, video_id, slide_root=slide_root, should_cancel=should_cancel)
-                return result
-
             try:
                 job_id = jobs.submit(
                     "slide_extract",
                     video_id,
-                    operation,
+                    slide_operation(video_id, options),
                     request={
                         "kind": "slide_extract",
                         "video_id": video_id,
@@ -3529,6 +3539,23 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             except RuntimeError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"job_id": job_id, "video_id": video_id, "status": "queued", "job_type": "slide_extract"}
+
+    def slide_operation(video_id, options=None):
+        options = options or SlideExtractionPayload()
+        store = provider.get()
+        slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
+
+        def operation(update, should_cancel):
+            result = extract_and_store_slides(
+                store, video_id, slide_root,
+                roi=options.roi.to_roi() if options.roi is not None else None,
+                ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
+                force=options.force, progress=update, should_stop=should_cancel,
+            )
+            from classcue.question_visuals import assign_after_extraction
+            assign_after_extraction(store, video_id, slide_root=slide_root, should_cancel=should_cancel)
+            return result
+        return operation
 
     @api.get("/api/videos/{video_id}/slides")
     def get_video_slides(
@@ -3983,6 +4010,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     def mcp_batch_options(payload):
         from classcue.course_tools import BatchOptions
         values = {key: value for key, value in payload.items() if key in BatchOptions.model_fields}
+        if "analysis_modes" not in values:
+            modes = ["medium_recall"] if payload.get("import_only") else provider.get().get_recall_selection()["analysis_modes"]
+            if not modes and not payload.get("import_only"):
+                raise ValueError("APP 当前未选择分析方案，请先选择或显式提供 analysis_modes")
+            values["analysis_modes"] = modes or ["medium_recall"]
         options = VideoProcessPayload.model_validate(values).model_copy(
             update={"asr_model_id": values.get("asr_model_id") or selected_model_id()},
         )
@@ -3990,6 +4022,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         return freeze_processing_options(options).model_dump()
 
     batch_tools = {
+        "slides": lambda video_id, update, should_cancel: slide_operation(video_id)(update, should_cancel),
         "moves_sources": lambda: asr_storage.delete_source_after_import(DIRECTORY_PROJECT_ROOT, provider.data_root()),
         "options": mcp_batch_options,
         "modes": lambda: [

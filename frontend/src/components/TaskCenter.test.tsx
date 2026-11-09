@@ -96,6 +96,25 @@ it("shows course transcription counts and failures and returns to the library", 
   expect(taskDestination(job)).toBe("/");
 });
 
+it("shows local sequence steps and routes the task back to the library", async () => {
+  const job = {
+    id: "sequence-job", status: "failed", job_type: "course_sequence", progress: 50,
+    batch_summary: { total: 1, completed: 0, skipped: 0, failed: 1, awaiting_ai: 0, pending_asr: 0 },
+    batch_entries: [{ video_id: 1, label: "合成课", status: "failed", error: "synthetic PPT failure",
+      steps: [{ name: "transcribe", status: "completed" }, { name: "extract_slides", status: "failed" }] }],
+  };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([job]);
+  vi.mocked(api.getJob).mockResolvedValue(job);
+  await mount();
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="查看任务详情"]')!.click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("顺序处理"));
+  const text = document.querySelector('[role="dialog"]')!.textContent!;
+  expect(text).toContain("字幕转写：已完成");
+  expect(text).toContain("PPT 提取：失败");
+  expect(text).not.toContain("待 AI");
+  expect(taskDestination(job)).toBe("/");
+});
+
 it("routes historical material tasks home while paused and restores their destination when enabled", () => {
   const job = { id: "materials-history", status: "completed", job_type: "material_preprocess" };
   expect(taskDestination(job)).toBe("/");

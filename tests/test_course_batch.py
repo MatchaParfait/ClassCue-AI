@@ -234,9 +234,12 @@ def test_ui_retry_does_not_copy_original_mcp_identity(batch):
     assert replay["job_id"] == first["job_id"] and replay["reused"]
 
 
-def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors(batch):
+def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors(batch, monkeypatch):
     """Only service discovery is redirected; production MCP, bridge and batch run."""
     import uvicorn
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "extract_and_store_slides", lambda *_a, **_k: {
+        "status": "completed", "count": 2})
 
     node = shutil.which("node")
     project = Path(__file__).resolve().parents[1]
@@ -279,8 +282,9 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
         assert result.returncode == 0, result.stdout + result.stderr
         evidence = json.loads(result.stdout)
         assert evidence == {
-            "version": "0.5.0", "preview": True, "completed": True,
+            "version": "0.6.0", "preview": True, "completed": True,
             "reused": True, "validationError": True, "requestConflict": True,
+            "sequenceCompleted": True, "sequenceReused": True,
         }
         assert len(batch.asr) == len(batch.ai) == 1
     finally:

@@ -433,7 +433,8 @@ def test_native_codex_restarts_and_keeps_unicode_title_and_images(tmp_path):
         servers = client.call("mcpServerStatus/list", {"threadId": first["thread_id"]})["data"]
         server = next(row for row in servers if row.get("pluginId") == "classcue@personal")
         assert server["toolsError"] is None
-        assert {"preview_batch", "start_batch_processing", "retry_batch", "resume_batch"} <= set(server["tools"])
+        assert {"preview_batch", "start_batch_processing", "retry_batch", "resume_batch",
+                "start_processing_sequence"} <= set(server["tools"])
         panel_tool = server["tools"]["classcue_discussion"]
         assert panel_tool["title"] == "ClassCue 题目"
         assert panel_tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": "thread"}]

@@ -73,7 +73,7 @@ test("MCP initializes and reads text and images over real stdio", async t => {
   t.after(() => client.close());
   await client.connect(transport);
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 16);
+  assert.equal(tools.tools.length, 17);
   assert.equal(tools.tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({ name: "read_discussion_context", arguments: { context_file: file } });
   assert.equal(result.isError, undefined);

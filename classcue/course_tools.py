@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -20,6 +20,7 @@ from classcue.transcriber import require_prepared_asr_model
 
 
 JOB_TYPE = "course_transcribe"
+SEQUENCE_TYPE = "course_sequence"
 ACTIVE = {"queued", "running", "resource_paused"}
 MAX_INTEGER = (1 << 53) - 1
 
@@ -103,6 +104,7 @@ class BatchTarget(Arguments):
         default=None, min_length=1, max_length=20)
     options: BatchOptions = Field(default_factory=BatchOptions)
     import_only: bool = Field(default=False, strict=True)
+    expected_recall_revision: int | None = Field(default=None, ge=0, strict=True)
 
     @model_validator(mode="after")
     def target(self):
@@ -128,6 +130,18 @@ class BatchCommand(Job):
     request_id: RequestId
 
 
+class SequenceStart(Start):
+    request_id: RequestId
+    steps: list[Literal["transcribe", "extract_slides"]] = Field(
+        default_factory=lambda: ["transcribe", "extract_slides"], min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def unique_steps(self):
+        if len(set(self.steps)) != len(self.steps):
+            raise ValueError("处理步骤不能重复")
+        return self
+
+
 class JobQuery(Job):
     limit: int = Field(default=50, ge=1, le=50, strict=True)
     offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
@@ -137,7 +151,7 @@ SCHEMAS = {"list_courses": Page, "list_videos": ScopedPage, "search_subtitles": 
            "read_transcript": Read, "open_video": Open, "start_transcription": Start,
            "get_job": JobQuery, "cancel_job": Job, "preview_batch": BatchTarget,
            "start_batch_processing": BatchStart, "retry_batch": BatchCommand,
-           "resume_batch": BatchCommand}
+           "resume_batch": BatchCommand, "start_processing_sequence": SequenceStart}
 
 
 class CourseTools:
@@ -231,12 +245,16 @@ class CourseTools:
         coverage = self._coverage(rows)
         active = {}
         for job in [*self.store.list_active_jobs(), *self.store.list_paused_jobs()]:
-            if job["job_type"] != JOB_TYPE:
+            if job["job_type"] not in {JOB_TYPE, SEQUENCE_TYPE}:
                 continue
             state = json.loads(job["request_json"] or "{}")
             for entry in state.get("entries", []):
                 if entry["status"] in {"pending", "running"}:
-                    active[entry["video_id"]] = job["id"]
+                    if job["job_type"] == JOB_TYPE or any(
+                        step["name"] == "transcribe" and step["status"] in {"pending", "running"}
+                        for step in entry.get("steps", [])
+                    ):
+                        active[entry["video_id"]] = job["id"]
         items = []
         for row in rows:
             has = self.store.has_transcript(row["id"])
@@ -340,7 +358,6 @@ class CourseTools:
             store.update_job(job_id, request_json=json.dumps(state, ensure_ascii=False))
 
         def operation(update, should_cancel):
-            from classcue.video_pipeline import _transcribe_video_with_fallback, _audio_path
             with frozen_selection(state["selection"]):
                 for index, entry in enumerate(state["entries"]):
                     if should_cancel():
@@ -356,22 +373,11 @@ class CourseTools:
                             entry["status"] = "skipped"
                             save()
                             continue
-                        require_prepared_asr_model(state["selection"]["model_id"])
                         entry["status"] = "running"
                         save()
-                        store.set_status(video_id, "processing")
-                        started = time.perf_counter()
-                        segments, _ = _transcribe_video_with_fallback(
-                            Path(row["video_path"]), _audio_path(store, row),
-                            asr_model_id=state["selection"]["model_id"], should_stop=should_cancel,
-                            progress=lambda value, message: update(
+                        self._transcribe_video(video_id, state["selection"], should_cancel,
+                            lambda value, message: update(
                                 (index + value) / len(state["entries"]), message, "transcribing"))
-                        if should_cancel():
-                            raise ProcessingCancelled("用户已停止转写")
-                        if not segments:
-                            raise ValueError("未识别到可保存的字幕，请确认视频包含可识别的语音后重试")
-                        store.mark_transcribed(video_id, segments, state["selection"]["model_id"])
-                        store.record_transcription_metrics(video_id, time.perf_counter() - started)
                         entry["status"] = "completed"
                     except (ProcessingCancelled, ResourcePaused) as exc:
                         if not store.has_transcript(video_id):
@@ -393,8 +399,106 @@ class CourseTools:
                     "message": f"转写结束，{failures} 个视频失败"}
         return operation
 
+    def _transcribe_video(self, video_id, selection, should_cancel, progress):
+        from classcue.video_pipeline import _transcribe_video_with_fallback, _audio_path
+        row = self._video(video_id)
+        if not Path(row["video_path"]).is_file():
+            raise ValueError("视频文件不可用")
+        with frozen_selection(selection):
+            require_prepared_asr_model(selection["model_id"])
+            self.store.set_status(video_id, "processing")
+            started = time.perf_counter()
+            segments, _ = _transcribe_video_with_fallback(
+                Path(row["video_path"]), _audio_path(self.store, row),
+                asr_model_id=selection["model_id"], should_stop=should_cancel, progress=progress)
+            if should_cancel():
+                raise ProcessingCancelled("用户已停止转写")
+            if not segments:
+                raise ValueError("未识别到可保存的字幕，请确认视频包含可识别的语音后重试")
+            self.store.mark_transcribed(video_id, segments, selection["model_id"])
+            self.store.record_transcription_metrics(video_id, time.perf_counter() - started)
+
+    def start_processing_sequence(self, args):
+        def submit(marker):
+            self.ensure_changes()
+            if self.batch is None:
+                raise RuntimeError("顺序处理连接不可用，请更新 ClassCue")
+            rows = self._videos(args.course_id) if args.course_id is not None else [
+                self._video(v) for v in dict.fromkeys(args.video_ids)]
+            if not rows:
+                raise ValueError("所选范围没有视频")
+            for row in rows:
+                if not Path(row["video_path"]).is_file():
+                    raise ValueError(f"视频 {row['id']} 文件不可用")
+            needs_asr = "transcribe" in args.steps and any(
+                not self.store.has_transcript(row["id"]) for row in rows)
+            selection = selection_snapshot() if "transcribe" in args.steps else None
+            if needs_asr:
+                with frozen_selection(selection):
+                    if get_model(selection["model_id"]).engine == "firered":
+                        require_firered_gpu()
+                    require_prepared_asr_model(selection["model_id"])
+            state = {"kind": SEQUENCE_TYPE, "target_ids": [row["id"] for row in rows],
+                     "selection": selection, "mcp_request": marker,
+                     "entries": [{"video_id": row["id"], "label": row["display_name"] or row["filename"],
+                                  "status": "pending", "error": "", "steps": [
+                                      {"name": step, "status": "pending"} for step in args.steps]} for row in rows]}
+            job_id = uuid4().hex
+            self.jobs.submit(SEQUENCE_TYPE, None, self._sequence_operation(job_id, state),
+                             request=state, job_id=job_id)
+            return {"job_id": job_id}
+        return self._batch_request("start_processing_sequence", args, submit)
+
+    def _sequence_operation(self, job_id, state):
+        def save():
+            self.store.update_job(job_id, request_json=json.dumps(state, ensure_ascii=False))
+
+        def operation(update, should_cancel):
+            total = sum(len(entry["steps"]) for entry in state["entries"])
+            done = 0
+            for entry in state["entries"]:
+                video_id = entry["video_id"]
+                for step in entry["steps"]:
+                    try:
+                        if should_cancel():
+                            raise ProcessingCancelled("用户已停止顺序处理")
+                        entry["status"] = step["status"] = "running"
+                        save()
+                        def progress(value, message, stage=None):
+                            update((done + value) / total, message, stage or step["name"])
+                        if step["name"] == "transcribe":
+                            if self.store.has_transcript(video_id):
+                                step["status"] = "skipped"
+                            else:
+                                self._transcribe_video(video_id, state["selection"], should_cancel, progress)
+                                step["status"] = "completed"
+                        else:
+                            result = self.batch["slides"](video_id, progress, should_cancel)
+                            step.update(status="skipped" if result.get("status") == "cached" else "completed",
+                                        count=result.get("count", 0))
+                        done += 1
+                        save()
+                    except (ProcessingCancelled, ResourcePaused) as exc:
+                        entry["status"] = step["status"] = "pending"
+                        state["interruption_reason"] = redact_text(exc)[:500]
+                        if step["name"] == "transcribe" and not self.store.has_transcript(video_id):
+                            self.store.set_status(video_id, "failed")
+                        save()
+                        raise ProcessingCancelled("顺序任务已中断，已保存结果保留；重新提交原步骤可复用") from None
+                    except Exception as exc:
+                        step["status"] = entry["status"] = "failed"
+                        entry["error"] = redact_text(exc)[:500]
+                        if step["name"] == "transcribe" and not self.store.has_transcript(video_id):
+                            self.store.set_status(video_id, "failed")
+                        save()
+                        return {"job_status": "failed", "message": "顺序任务失败，后续步骤未执行"}
+                entry["status"] = "completed"
+                save()
+            return {"message": "顺序任务完成", "committed": True}
+        return operation
+
     def _job(self, row, *, offset=0, limit=50):
-        if row is None or row["job_type"] not in {JOB_TYPE, "batch_video_process"}:
+        if row is None or row["job_type"] not in {JOB_TYPE, SEQUENCE_TYPE, "batch_video_process"}:
             raise KeyError("课程转写或批处理任务不存在")
         if row["job_type"] == "batch_video_process":
             return self._batch_job(row, offset=offset, limit=limit)
@@ -404,16 +508,22 @@ class CourseTools:
                   ("completed", "failed", "skipped")}
         counts["pending"] = len(entries) - sum(counts.values())
         return {"job_id": row["id"], "status": row["status"], "stage": row["stage"],
-                "job_type": JOB_TYPE,
+                "job_type": row["job_type"],
                 "progress": row["progress"], "message": state.get("interruption_reason") or row["message"],
                 "error_message": row["error_message"],
                 "resource": json.loads(row["resource_json"]) if row["resource_json"] else None,
-                "model_id": state.get("selection", {}).get("model_id"),
+                "model_id": (state.get("selection") or {}).get("model_id"),
                 "selection": state.get("selection"), "summary": counts,
+                **({"entries": entries[offset:offset + limit], "total_entries": len(entries),
+                    "has_more": offset + limit < len(entries),
+                    "next_offset": offset + limit if offset + limit < len(entries) else None}
+                   if row["job_type"] == SEQUENCE_TYPE else {}),
                 "current_video_id": (next((e["video_id"] for e in entries if e["status"] == "running"), None)
                                      if row["status"] == "running" else None),
                 "failures": [e for e in entries if e["status"] == "failed"][:20],
-                "next_action": "重新提交原范围，跳过已有字幕" if row["status"] in {"failed", "interrupted"} else None}
+                "next_action": ("使用新的 request_id 重新提交原步骤，复用已保存字幕和 PPT"
+                                if row["job_type"] == SEQUENCE_TYPE else "重新提交原范围，跳过已有字幕")
+                               if row["status"] in {"failed", "interrupted"} else None}
 
     def get_job(self, args):
         return self._job(self.store.get_job(args.job_id),
@@ -457,10 +567,18 @@ class CourseTools:
             raise RuntimeError("批处理连接不可用，请更新 ClassCue")
         rows = self._videos(args.course_id) if args.course_id is not None else [
             self._video(identity) for identity in dict.fromkeys(args.video_ids or [])]
+        saved = self.store.get_recall_selection()
+        explicit = "analysis_modes" in args.options.model_fields_set
+        if (not args.import_only and not explicit and args.expected_recall_revision is not None
+                and saved["revision"] != args.expected_recall_revision):
+            raise ValueError("APP 处理方案在预览后已变化，请重新预览")
         payload = {"video_ids": [row["id"] for row in rows], "folders": args.folders or [],
-                   "import_only": args.import_only, **args.options.model_dump()}
+                   "import_only": args.import_only, **args.options.model_dump(exclude_unset=True)}
         options = self.batch["options"](payload)
         payload.update(options)
+        payload["analysis_modes_source"] = ("not_used" if args.import_only else "explicit" if explicit
+                                            else "app_saved" if saved["initialized"] else "first_use_default")
+        payload["recall_selection_revision"] = saved["revision"]
         return rows, payload
 
     def preview_batch(self, args):
@@ -479,6 +597,8 @@ class CourseTools:
                          ("path", "video_count", "non_video_count", "subfolder_count", "valid", "error")}
                         for folder in inspection["folders"]],
             "options": {key: payload[key] for key in (*BatchOptions.model_fields, "import_only")},
+            "analysis_modes_source": payload["analysis_modes_source"],
+            "recall_selection_revision": payload["recall_selection_revision"],
             "available_analysis_modes": self.batch["modes"](),
             "effects": {
                 "calls_ai_service": not args.import_only,
@@ -499,11 +619,16 @@ class CourseTools:
 
     def _batch_request(self, action, args, operation):
         body = args.model_dump(exclude={"request_id"})
+        legacy_body = {key: value for key, value in body.items()
+                       if key != "expected_recall_revision" or value is not None}
+        legacy_digest = hashlib.sha256(json.dumps(legacy_body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if hasattr(args, "options"):
+            body["analysis_modes_explicit"] = "analysis_modes" in args.options.model_fields_set
         digest = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with self.jobs._lock:
             with self.store.connect() as db:
                 candidates = db.execute(
-                    "SELECT * FROM processing_jobs WHERE job_type='batch_video_process' "
+                    "SELECT * FROM processing_jobs WHERE job_type IN ('batch_video_process','course_sequence') "
                     "AND json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END, "
                     "'$.mcp_request.request_id') = ?",
                     (args.request_id,),
@@ -511,10 +636,11 @@ class CourseTools:
             if candidates:
                 row = candidates[0]
                 saved = json.loads(row["request_json"])["mcp_request"]
-                if saved["action"] != action or saved["digest"] != digest:
+                expected = digest if saved.get("version") == 2 else legacy_digest
+                if saved["action"] != action or saved["digest"] != expected:
                     raise ValueError("request_id 已用于其他参数或动作；新操作请使用新的 request_id")
                 return {**self._job(row), "reused": True}
-            marker = {"request_id": args.request_id, "action": action, "digest": digest}
+            marker = {"version": 2, "request_id": args.request_id, "action": action, "digest": digest}
             result = operation(marker)
             job_id = result.get("job_id") or result["id"]
             return {**self.get_job(Job(job_id=job_id)), "reused": False}

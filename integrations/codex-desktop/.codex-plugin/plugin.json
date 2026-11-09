@@ -1,7 +1,7 @@
 {
   "name": "classcue",
-  "version": "0.5.0",
-  "description": "检索 ClassCue 课程字幕、定位视频、管理本地转写与完整批处理，并继续原题讨论。",
+  "version": "0.6.0",
+  "description": "检索 ClassCue 课程字幕、定位视频、管理转写与 PPT 顺序任务和完整批处理，并继续原题讨论。",
   "skills": "./skills",
   "mcpServers": "./.mcp.json",
   "interface": {

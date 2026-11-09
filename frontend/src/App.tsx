@@ -60,7 +60,7 @@ import { MarkerImportanceCounts } from "./components/MarkerImportanceCounts";
 import { LibraryFileImport } from "./components/LibraryFileImport";
 import { LibraryProcessing, canSelectForProcessing, DEFAULT_LIBRARY_PROCESS_FORM } from "./components/LibraryProcessing";
 import type { ProcessForm } from "./processOptions";
-import { RecallSelectionScope, useRecallSelection } from "./hooks/useRecallSelection";
+import { RecallSelectionScope, RecallSelectionSync, useRecallSelection } from "./hooks/useRecallSelection";
 import { WorkbenchPanel } from "./components/WorkbenchPanel";
 import { ToolbarMenu } from "./components/ToolbarMenu";
 import { VideoMoveMenu } from "./components/VideoMoveMenu";
@@ -157,6 +157,7 @@ function Workbench({ visible }: { visible: boolean }) {
     if (library.data?.library_id) reviewTabs?.setLibrary(library.data.library_id);
   }, [library.data?.library_id, reviewTabs?.setLibrary]);
   return <RecallSelectionScope.Provider value={library.data?.library_id || library.data?.library_scope || library.data?.data_root || "default"}>
+    {library.data?.library_id && <RecallSelectionSync libraryId={library.data.library_id} />}
     <WorkbenchContents key={library.data?.library_scope || library.data?.data_root || "default"} visible={visible}
       libraryId={library.data?.library_id} workspaceSettled={library.isFetched} startupView={startup.view} onStartupRestored={startup.dismiss}
       scope={library.data?.library_scope || library.data?.data_root || "default"}

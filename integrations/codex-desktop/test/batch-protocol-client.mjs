@@ -43,6 +43,21 @@ try {
     ...request, options: { analysis_modes: ["high_recall"] },
   });
   evidence.requestConflict = conflict.isError === true;
+  const sequenceRequest = { ...args, steps: ["transcribe", "extract_slides"],
+    request_id: "stdio-sequence-request-001" };
+  const sequence = await call("start_processing_sequence", sequenceRequest);
+  assert.equal(sequence.isError, undefined);
+  let sequenceState = sequence.structuredContent;
+  for (let attempt = 0; attempt < 60 && ["queued", "running"].includes(sequenceState.status); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    sequenceState = (await call("get_job", { job_id: sequenceState.job_id })).structuredContent;
+  }
+  evidence.sequenceCompleted = sequenceState.status === "completed"
+    && sequenceState.entries[0].steps[0].status === "skipped"
+    && sequenceState.entries[0].steps[1].count === 2;
+  const sequenceReplay = await call("start_processing_sequence", sequenceRequest);
+  evidence.sequenceReused = sequenceReplay.structuredContent.reused
+    && sequenceReplay.structuredContent.job_id === sequenceState.job_id;
   assert.ok(Object.entries(evidence).every(([key, value]) => key === "version" || value === true));
   console.log(JSON.stringify(evidence));
 } finally {

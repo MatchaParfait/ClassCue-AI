@@ -30,7 +30,7 @@ const requestId = { type: "string", minLength: 8, maxLength: 100, pattern: "^[a-
 const batchOptions = { type: "object", additionalProperties: false, properties: {
   analysis_modes: { type: "array", minItems: 1, maxItems: 8,
     items: { type: "string", pattern: "^(high_recall|medium_recall|low_recall|question_extraction|strict_exam_intent|custom_[a-f0-9]{32})$" },
-    default: ["medium_recall"] },
+    description: "省略时沿用 APP 已保存的分析方案；显式指定只覆盖本次任务。" },
   asr_model_id: { type: "string", minLength: 1, maxLength: 100, description: "省略时使用当前默认 ASR。" },
   keywords: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 120 } },
   use_keyword_prefilter: { type: "boolean", default: false },
@@ -46,11 +46,13 @@ const batchTarget = {
     description: "用户指定的本机绝对目录。递归导入，归档校验后删除来源文件；重复视频保留来源。" },
   options: batchOptions, import_only: { type: "boolean", default: false,
     description: "仅适用于 folders，只导入而不转写或调用 AI。" },
+  expected_recall_revision: { type: "integer", minimum: 0,
+    description: "沿用 APP 方案时传入预览返回的 recall_selection_revision，设置变化则要求重新预览。" },
 };
 const batchTargetRule = { oneOf: ["course_id", "video_ids", "folders"].map(name => ({ required: [name] })) };
 function tool(name, description, properties, required = [], readOnly = true, annotations = {}, rules = {}) {
   const outputSchema = name === "preview_batch" ? batchPreviewSchema
-    : ["start_batch_processing", "retry_batch", "resume_batch", "get_job", "cancel_job"].includes(name)
+    : ["start_batch_processing", "retry_batch", "resume_batch", "start_processing_sequence", "get_job", "cancel_job"].includes(name)
       ? batchJobSchema : resultSchema;
   return { name, description, inputSchema: { type: "object", properties,
     required, additionalProperties: false, ...rules }, outputSchema,
@@ -74,6 +76,13 @@ export const courseTools = [
   tool("start_transcription", "使用当前默认的已准备本地 ASR 为课程或指定视频生成字幕；跳过已有字幕，返回后台任务 ID。不提取考点。",
     { course_id: course.course_id, video_ids: { type: "array", items: id, minItems: 1, maxItems: 500 } },
     [], false),
+  tool("start_processing_sequence", "按指定顺序在 APP 后台执行字幕转写和 PPT 提取，聊天结束不影响后续步骤。默认先转写再提取 PPT；失败或取消时停止后续步骤，保留已保存结果。不调用 AI，不下载模型；转写使用当前已准备 ASR、跳过已有字幕，PPT 复用现有提取缓存。",
+    { course_id: course.course_id, video_ids: { type: "array", items: id, minItems: 1, maxItems: 500 },
+      steps: { type: "array", minItems: 1, maxItems: 2, uniqueItems: true,
+        items: { type: "string", enum: ["transcribe", "extract_slides"] },
+        default: ["transcribe", "extract_slides"] },
+      request_id: requestId }, ["request_id"], false, { idempotentHint: true },
+    { oneOf: [{ required: ["course_id"] }, { required: ["video_ids"] }] }),
   tool("preview_batch", "预览已有完整批处理：课程、指定视频或本机目录三选一。返回范围、字幕覆盖、可选分析方案和操作影响；不创建任务、不导入、不调用 AI。",
     batchTarget, [], true, {}, batchTargetRule),
   tool("start_batch_processing", "启动应用已有完整批处理，按所选召回方案或题目提取进行分析。复用字幕，缺字幕时转写；会向当前 AI 服务发送字幕，可能产生 API 费用。目录导入会归档并删除来源。先用 preview_batch 核对影响；仅补字幕请用 start_transcription。",
@@ -87,10 +96,10 @@ export const courseTools = [
     { job_id: { type: "string", minLength: 1, maxLength: 100, pattern: "^[a-zA-Z0-9_-]+$" },
       request_id: requestId }, ["job_id", "request_id"], false,
     { destructiveHint: true, openWorldHint: true, idempotentHint: true }),
-  tool("get_job", "查询课程纯转写或完整批处理任务的进度、完成结果和失败原因。完整批次逐项结果可用 limit/offset 分页。",
+  tool("get_job", "查询课程纯转写、顺序处理或完整批次的进度、结果和失败原因。顺序任务与完整批次的逐项结果可用 limit/offset 分页。",
     { job_id: { type: "string", maxLength: 100 }, limit: { ...pagination.limit, default: 50 },
       offset: pagination.offset }, ["job_id"]),
-  tool("cancel_job", "请求停止课程纯转写或完整批处理任务，保留已保存结果。正在停止不等于已经停止；继续查询终态。",
+  tool("cancel_job", "请求停止课程纯转写、顺序处理或完整批次，保留已保存结果。顺序任务不再启动后续步骤。正在停止不等于已经停止；继续查询终态。",
     { job_id: { type: "string", maxLength: 100 } }, ["job_id"], false, { idempotentHint: true }),
 ];
 export async function callCourseTool(name, args, env = process.env) {
