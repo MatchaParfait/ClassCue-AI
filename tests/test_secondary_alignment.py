@@ -420,6 +420,43 @@ def wait_job(client, job_id):
     pytest.fail("alignment job did not finish")
 
 
+@pytest.mark.parametrize("change", ["removed", "replaced", "offset"])
+def test_automatic_start_rejects_a_changed_association_before_preparing_or_queuing(library, monkeypatch, change):
+    client, store, (primary, secondary) = library
+    if change == "removed":
+        store.remove_secondary_view(primary)
+    elif change == "replaced":
+        path = Path(store.get_video(secondary)["video_path"])
+        replacement = store.create_video("replacement-hash", "replacement.mp4", str(path),
+                                         str(path.with_suffix(".wav")), 120000)
+        store.set_secondary_view(primary, replacement, 5000)
+    else:
+        store.set_secondary_view_offset(primary, 6000)
+    monkeypatch.setattr(alignment_api, "require_prepared_asr_model",
+                        lambda _: pytest.fail("A stale import must not prepare ASR"))
+    monkeypatch.setattr(alignment_api, "run_worker",
+                        lambda *args: pytest.fail("A stale import must not start a worker"))
+    response = client.post(f"/api/videos/{primary}/secondary-view/alignment", json={
+        "expected_secondary_video_id": secondary, "expected_offset_ms": 5000,
+    })
+    assert response.status_code == 409, response.text
+    with store.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 0
+
+
+def test_automatic_start_accepts_the_imported_association(library, monkeypatch):
+    client, store, (primary, secondary) = library
+    monkeypatch.setattr(alignment_api, "run_worker", lambda *args: {
+        "outcome": "ready", "offset_ms": 8200, "message": "match", "evidence": [],
+    })
+    response = client.post(f"/api/videos/{primary}/secondary-view/alignment", json={
+        "expected_secondary_video_id": secondary, "expected_offset_ms": 5000,
+    })
+    assert response.status_code == 202, response.text
+    assert wait_job(client, response.json()["job_id"])["alignment"]["outcome"] == "applied"
+    assert store.get_secondary_view(primary)["offset_ms"] == 8200
+
+
 def test_auto_apply_result_and_guarded_undo(library, monkeypatch):
     client, store, (primary, secondary) = library
     monkeypatch.setattr(alignment_api, "run_worker", lambda *args: {

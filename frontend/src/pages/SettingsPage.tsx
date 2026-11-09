@@ -8,6 +8,7 @@ import { DshSettingsSection } from "../components/DshConnectionSettings";
 import { CodexSettingsSection } from "../components/CodexDiscussion";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { InteractionSettings } from "../components/InteractionSettings";
+import { SecondaryViewSettings } from "../components/SecondaryViewSettings";
 import { RecallSchemeSettings } from "../components/RecallSchemeSettings";
 import { ExperimentalSettings } from "../components/ExperimentalSettings";
 import { UpdateSettings } from "../components/UpdateSettings";
@@ -199,6 +200,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           }}
           onError={(error) => notify("error", errorMessage(error))}
         />
+        {!guidedSection && <SecondaryViewSettings />}
         {!guidedSection && <ApplicationDataSection active={active && section === "storage"} directories={directories.data} onError={(error) => notify("error", errorMessage(error))} />}
         </div>}
         {(!guidedSection || section === "asr") && <div hidden={section !== "asr"}>

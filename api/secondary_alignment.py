@@ -3,13 +3,20 @@
 import time
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from classcue.processing_control import ProcessingCancelled
+from classcue.subtitle_search import MAX_SQLITE_INTEGER
 from classcue.secondary_alignment_service import (
     JOB_TYPE, alignment_snapshot, change_result, latest_alignment,
     run_worker, save_result, snapshot_current,
 )
 from classcue.transcriber import require_prepared_asr_model
+
+
+class AlignmentStartPayload(BaseModel):
+    expected_secondary_video_id: int = Field(gt=0, le=MAX_SQLITE_INTEGER, strict=True)
+    expected_offset_ms: int = Field(ge=-MAX_SQLITE_INTEGER, le=MAX_SQLITE_INTEGER, strict=True)
 
 
 def router(provider, jobs, migrating):
@@ -25,13 +32,18 @@ def router(provider, jobs, migrating):
         return result
 
     @routes.post("/api/videos/{video_id}/secondary-view/alignment", status_code=202)
-    def start(video_id: int):
+    def start(video_id: int, payload: AlignmentStartPayload | None = None):
         with jobs._lock:
             if migrating():
                 raise HTTPException(409, "存储迁移期间暂不能自动对齐")
             store = provider.get()
             if store.get_video(video_id) is None:
                 raise HTTPException(404, "视频不存在")
+            if payload is not None:
+                view = store.get_secondary_view(video_id)
+                if (view is None or view["video_id"] != payload.expected_secondary_video_id
+                        or view["offset_ms"] != payload.expected_offset_ms):
+                    raise HTTPException(409, "副视角关联或时间偏移已变化，未启动自动对齐")
             try:
                 snapshot = alignment_snapshot(store, video_id, provider.library_id())
                 existing = latest_alignment(store, video_id, snapshot["secondary_id"])

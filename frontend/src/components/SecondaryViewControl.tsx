@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeftRight, Check, LoaderCircle, SlidersHorizontal, Trash2, Undo2 } from "lucide-react";
-import { createPicker, getSecondaryView, importSecondaryView, pollPicker, removeSecondaryView, setSecondaryViewAudio, setSecondaryViewOffset, uploadSecondaryView } from "../api/client";
+import { createPicker, getSecondaryView, importSecondaryView, pollPicker, removeSecondaryView, setSecondaryViewAudio, setSecondaryViewOffset, startSecondaryAlignment, uploadSecondaryView } from "../api/client";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
+import { readAutoAlignSecondary } from "../secondaryViewPreferences";
 import type { SecondaryView } from "../types";
 import { AnimatePresence, AnimatedPopup } from "./Motion";
 import { SecondaryAlignmentControl, useSecondaryAlignment } from "./SecondaryAlignmentControl";
@@ -77,11 +78,24 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
   const offsetMs = Math.round(Number(offset) * 1000);
   const validOffset = offset.trim() !== "" && Number.isSafeInteger(offsetMs);
   const label = secondary ? active ? "切换到主视角" : "切换到副视角" : "导入副视角";
-  const showImported = (imported: Awaited<ReturnType<typeof importSecondaryView>>) => {
-    if (!alive.current || videoIdRef.current !== videoId) return;
-    onChangeRef.current(imported.secondary_view);
-    setOpen(true);
-    if (imported.video.storage_warning) setError(imported.video.storage_warning);
+  const showImported = async (imported: Awaited<ReturnType<typeof importSecondaryView>>) => {
+    const isCurrent = () => alive.current && videoIdRef.current === videoId;
+    if (isCurrent()) {
+      onChangeRef.current(imported.secondary_view);
+      setOpen(true);
+      if (imported.video.storage_warning) setError(imported.video.storage_warning);
+    }
+    if (!readAutoAlignSecondary()) return;
+    try {
+      const started = await startSecondaryAlignment(videoId, imported.secondary_view);
+      if (isCurrent()) {
+        onChangeRef.current({ ...imported.secondary_view, alignment_job_id: started.job_id });
+      }
+    } catch (failure) {
+      if (isCurrent()) {
+        setError([imported.video.storage_warning, `副视角已导入，自动对齐未启动：${message(failure)}`].filter(Boolean).join("；"));
+      }
+    }
   };
 
   return <div ref={containerRef} className="secondary-view-control">
@@ -91,7 +105,7 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
         event.currentTarget.value = "";
         if (!file) return;
         void run(async () => {
-          showImported(await uploadSecondaryView(videoId, file));
+          await showImported(await uploadSecondaryView(videoId, file));
         });
       }} />
     <button className={`secondary-view-button secondary-view-switch${active ? " is-active" : ""}`} type="button"
@@ -102,7 +116,7 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
         if (secondary) onSwitch();
         else if (desktop) void run(async () => {
           const path = await pollPicker(await createPicker("file"), 15 * 60_000);
-          if (path && alive.current && videoIdRef.current === videoId) showImported(await importSecondaryView(videoId, path));
+          if (path && alive.current && videoIdRef.current === videoId) await showImported(await importSecondaryView(videoId, path));
         });
         else fileRef.current?.click();
       }}>
@@ -137,6 +151,7 @@ export function SecondaryViewControl({ videoId, demo, secondary, active, switchi
         <span className="secondary-view-mapping">副视角时间 = 主视频时间 {secondary.offset_ms < 0 ? "-" : "+"} {Math.abs(secondary.offset_ms) / 1000} 秒</span>
         <SecondaryAlignmentControl alignment={alignment}
           disabled={demo || busy || switching || loading || !validOffset || offsetMs !== secondary.offset_ms}
+          onStart={() => setError(null)}
         />
         <label className="secondary-view-audio-option">
           <input type="checkbox" checked={Boolean(secondary.use_primary_audio)} disabled={busy || switching}

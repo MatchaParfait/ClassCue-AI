@@ -93,8 +93,8 @@ export function useSecondaryAlignment({ videoId, secondary, onChange }: {
   return { jobId, job, busy, error, running, command };
 }
 
-export function SecondaryAlignmentControl({ alignment, disabled }: {
-  alignment: ReturnType<typeof useSecondaryAlignment>; disabled: boolean;
+export function SecondaryAlignmentControl({ alignment, disabled, onStart }: {
+  alignment: ReturnType<typeof useSecondaryAlignment>; disabled: boolean; onStart?: () => void;
 }) {
   const { jobId, job, busy, error, running, command } = alignment;
   const result = job?.alignment;
@@ -103,7 +103,7 @@ export function SecondaryAlignmentControl({ alignment, disabled }: {
       <button type="button" className="secondary-view-button secondary-view-switch"
         disabled={disabled || busy || running} aria-label="自动对齐"
         title={disabled ? "请先保存或恢复手动偏移，等待视角切换完成" : "自动对齐"}
-        onClick={() => void command("start")}>
+        onClick={() => { onStart?.(); void command("start"); }}>
         {running || busy ? <LoaderCircle size={14} className="spin" /> : <WandSparkles size={14} />}自动对齐
       </button>
       {running && <button type="button" className="secondary-view-button" disabled={busy}

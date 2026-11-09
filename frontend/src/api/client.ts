@@ -923,8 +923,11 @@ export async function removeSecondaryView(videoId: number): Promise<void> {
   await request(`/api/videos/${videoId}/secondary-view`, { method: "DELETE" });
 }
 
-export function startSecondaryAlignment(videoId: number): Promise<{ job_id: string; status: string }> {
-  return request(`/api/videos/${videoId}/secondary-view/alignment`, { method: "POST" });
+export function startSecondaryAlignment(videoId: number, expected?: Pick<SecondaryView, "video_id" | "offset_ms">): Promise<{ job_id: string; status: string }> {
+  return request(`/api/videos/${videoId}/secondary-view/alignment`, expected ? {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_secondary_video_id: expected.video_id, expected_offset_ms: expected.offset_ms }),
+  } : { method: "POST" });
 }
 
 export function changeSecondaryAlignment(videoId: number, jobId: string, action: "apply" | "undo"): Promise<SecondaryView> {

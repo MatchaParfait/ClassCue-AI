@@ -90,6 +90,17 @@ it("exposes the onboarding entry in the settings sidebar rather than the hidden 
   }
 });
 
+it("places the remembered secondary alignment switch under storage and import settings", async () => {
+  vi.resetAllMocks();
+  const page = mountSettings("/settings?section=storage");
+  try {
+    const toggle = page.container.querySelector<HTMLInputElement>('[aria-label="导入副视角后自动对齐"]')!;
+    expect(toggle).not.toBeNull();
+    expect(toggle.closest("[hidden]")).toBeNull();
+    expect(toggle.closest('section[aria-label="副视角"]')).not.toBeNull();
+  } finally { await page.dispose(); }
+});
+
 it.each(["gpu", "cpu"] as const)("clears only the chosen Dolphin %s environment and displays real cleanup counts", async (device) => {
   vi.resetAllMocks();
   const models: AsrModel[] = catalogue.map((model) => model.engine === "dolphin"

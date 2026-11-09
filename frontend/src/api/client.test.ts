@@ -1,9 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { searchSubtitles, getSearchPreviewUrl, getRecentJobs, uploadSecondaryView } from "./client";
+import { searchSubtitles, getSearchPreviewUrl, getRecentJobs, uploadSecondaryView, startSecondaryAlignment } from "./client";
 import { getAiSettings, saveAiSettings } from "./client";
 import { createManualQuestion, renameManualQuestion, getAsrModels, getAsrModelStatus, getStorageDirectories, saveStorageDirectories, updateMarkerJumpTime, updateMarkerImportance, updateQuestionEmphasis, getMarkers, previewBatch, getLatestBatch, retryBatch, getThumbnailUrl, uploadVideo, processSelectedVideos } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("guards automatic secondary alignment with the imported association while preserving manual requests", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ job_id: "alignment", status: "queued" }) });
+  vi.stubGlobal("fetch", fetch);
+  await startSecondaryAlignment(1, { video_id: 2, offset_ms: 5000 });
+  expect(fetch).toHaveBeenLastCalledWith("/api/videos/1/secondary-view/alignment", expect.objectContaining({
+    method: "POST", headers: expect.objectContaining({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ expected_secondary_video_id: 2, expected_offset_ms: 5000 }),
+  }));
+  await startSecondaryAlignment(1);
+  expect(fetch.mock.calls[1][1].body).toBeUndefined();
+});
 
 it("normalizes recent tasks with the same progress and identity rules as individual tasks", async () => {
   const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [

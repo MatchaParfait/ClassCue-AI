@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { SecondaryViewControl } from "./SecondaryViewControl";
 import type { SecondaryView, Video } from "../types";
+import { saveAutoAlignSecondary } from "../secondaryViewPreferences";
 
 vi.mock("./Motion", () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => children,
@@ -24,6 +25,11 @@ const bridge = () => ({
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -34,6 +40,8 @@ beforeEach(() => {
   vi.spyOn(api, "pollPicker").mockResolvedValue("D:/synthetic/camera.mp4");
   vi.spyOn(api, "importSecondaryView").mockResolvedValue({ secondary_view: secondary, video });
   vi.spyOn(api, "uploadSecondaryView");
+  vi.spyOn(api, "startSecondaryAlignment").mockResolvedValue({ job_id: "alignment", status: "queued" });
+  vi.spyOn(api, "getJob").mockResolvedValue({ id: "alignment", status: "interrupted" });
 });
 
 afterEach(() => {
@@ -67,6 +75,7 @@ it("uses the desktop picker and sends only the local path", async () => {
   expect(onChange).toHaveBeenCalledWith(secondary);
   expect(pickerClick).not.toHaveBeenCalled();
   expect(api.uploadSecondaryView).not.toHaveBeenCalled();
+  expect(api.startSecondaryAlignment).not.toHaveBeenCalled();
 });
 
 it("handles a desktop bridge that becomes ready after mounting", async () => {
@@ -145,7 +154,8 @@ it("discards a picker selection after changing to another video", async () => {
   expect(onChange).not.toHaveBeenCalled();
 });
 
-it("discards an import result after changing to another video", async () => {
+it("aligns the imported video after changing videos without updating the new player", async () => {
+  saveAutoAlignSecondary(true);
   vi.stubGlobal("pywebview", { api: bridge() });
   let resolveImport!: (value: { secondary_view: SecondaryView; video: Video }) => void;
   vi.mocked(api.importSecondaryView).mockReturnValue(new Promise(resolve => { resolveImport = resolve; }));
@@ -153,6 +163,34 @@ it("discards an import result after changing to another video", async () => {
   await act(async () => importButton().click());
   await mount(null, 3);
   await act(async () => resolveImport({ secondary_view: secondary, video }));
+  expect(onChange).not.toHaveBeenCalled();
+  expect(api.startSecondaryAlignment).toHaveBeenCalledOnce();
+  expect(api.startSecondaryAlignment).toHaveBeenCalledWith(1, secondary);
+});
+
+it.each(["desktop", "browser"] as const)("aligns a successful %s import after leaving the player without updating it", async entry => {
+  saveAutoAlignSecondary(true);
+  let resolveImport!: (value: { secondary_view: SecondaryView; video: Video }) => void;
+  const pending = new Promise<{ secondary_view: SecondaryView; video: Video }>(resolve => { resolveImport = resolve; });
+  if (entry === "desktop") {
+    vi.stubGlobal("pywebview", { api: bridge() });
+    vi.mocked(api.importSecondaryView).mockReturnValue(pending);
+  } else {
+    vi.mocked(api.uploadSecondaryView).mockReturnValue(pending);
+  }
+  await mount();
+  await act(async () => {
+    if (entry === "desktop") importButton().click();
+    else {
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { value: [new File(["synthetic camera"], "camera.mp4")] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  act(() => root.render(null));
+  await act(async () => resolveImport({ secondary_view: secondary, video }));
+  expect(api.startSecondaryAlignment).toHaveBeenCalledOnce();
+  expect(api.startSecondaryAlignment).toHaveBeenCalledWith(1, secondary);
   expect(onChange).not.toHaveBeenCalled();
 });
 
@@ -174,11 +212,119 @@ it("saves the main-audio option without changing the saved offset", async () => 
   expect(onChange).toHaveBeenCalledWith({ ...view, use_primary_audio: true });
 });
 
-function AlignmentPlayer() {
-  const [view, setView] = useState<SecondaryView | null>(secondary);
+function AlignmentPlayer({ initialView = secondary }: { initialView?: SecondaryView | null }) {
+  const [view, setView] = useState<SecondaryView | null>(initialView);
   return <SecondaryViewControl videoId={1} demo={false} secondary={view} active={false} switching={false}
     onChange={next => { onChange(next); setView(next); }} onSwitch={onSwitch} />;
 }
+
+it.each(["desktop", "browser"] as const)("automatically aligns a successful %s import when enabled", async entry => {
+  saveAutoAlignSecondary(true);
+  if (entry === "desktop") vi.stubGlobal("pywebview", { api: bridge() });
+  else vi.mocked(api.uploadSecondaryView).mockResolvedValue({ secondary_view: secondary, video });
+  await mount();
+  await act(async () => {
+    if (entry === "desktop") {
+      importButton().click();
+      importButton().click();
+    } else {
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      Object.defineProperty(input, "files", { value: [new File(["synthetic camera"], "camera.mp4")] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  expect(api.startSecondaryAlignment).toHaveBeenCalledOnce();
+  expect(api.startSecondaryAlignment).toHaveBeenCalledWith(1, secondary);
+  expect(onChange).toHaveBeenLastCalledWith({ ...secondary, alignment_job_id: "alignment" });
+});
+
+it("keeps browser imports manual when automatic alignment is disabled", async () => {
+  vi.mocked(api.uploadSecondaryView).mockResolvedValue({ secondary_view: secondary, video });
+  await mount();
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(input, "files", { value: [new File(["synthetic camera"], "camera.mp4")] });
+  await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+  expect(onChange).toHaveBeenCalledWith(secondary);
+  expect(api.startSecondaryAlignment).not.toHaveBeenCalled();
+});
+
+it("does not align existing views on reopening or after changing the preference", async () => {
+  saveAutoAlignSecondary(true);
+  await mount(secondary);
+  act(() => { saveAutoAlignSecondary(false); saveAutoAlignSecondary(true); });
+  expect(api.startSecondaryAlignment).not.toHaveBeenCalled();
+});
+
+it("preserves an imported view and its storage warning when automatic alignment fails, allowing manual retry", async () => {
+  saveAutoAlignSecondary(true);
+  vi.stubGlobal("pywebview", { api: bridge() });
+  vi.mocked(api.importSecondaryView).mockResolvedValue({
+    secondary_view: secondary, video: { ...video, storage_warning: "来源文件已保留" },
+  });
+  vi.mocked(api.startSecondaryAlignment).mockRejectedValueOnce(new Error("主字幕缺少可对齐的长句"));
+  await act(async () => root.render(<AlignmentPlayer initialView={null} />));
+  await act(async () => importButton().click());
+  expect(onChange).toHaveBeenLastCalledWith(secondary);
+  expect(container.querySelector('[role="alert"]')?.textContent)
+    .toBe("来源文件已保留；副视角已导入，自动对齐未启动：主字幕缺少可对齐的长句");
+  expect(container.querySelector('[aria-label="切换到副视角"]')).not.toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="自动对齐"]')!.click());
+  expect(api.startSecondaryAlignment).toHaveBeenCalledTimes(2);
+  expect(onChange).toHaveBeenLastCalledWith({ ...secondary, alignment_job_id: "alignment" });
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("polls an automatically started task and applies its result to the player", async () => {
+  saveAutoAlignSecondary(true);
+  vi.stubGlobal("pywebview", { api: bridge() });
+  vi.mocked(api.getJob).mockResolvedValue({ id: "alignment", status: "completed",
+    alignment: { outcome: "applied", offset_ms: 8000, message: "已自动对齐", evidence: [] } });
+  const aligned = { ...secondary, alignment_job_id: "alignment", offset_ms: 8000 };
+  vi.mocked(api.getSecondaryView).mockResolvedValueOnce(null).mockResolvedValue(aligned);
+  await act(async () => root.render(<AlignmentPlayer initialView={null} />));
+  await act(async () => importButton().click());
+  expect(api.startSecondaryAlignment).toHaveBeenCalledOnce();
+  expect(api.getJob).toHaveBeenCalledWith("alignment");
+  expect(onChange).toHaveBeenLastCalledWith(aligned);
+  expect(container.querySelector('[aria-label="撤销自动对齐"]')).not.toBeNull();
+});
+
+it("does not align a cancelled selection or a failed import", async () => {
+  saveAutoAlignSecondary(true);
+  vi.stubGlobal("pywebview", { api: bridge() });
+  vi.mocked(api.pollPicker).mockResolvedValueOnce(null);
+  vi.mocked(api.importSecondaryView).mockRejectedValueOnce(new Error("导入失败"));
+  await mount();
+  await act(async () => importButton().click());
+  await act(async () => importButton().click());
+  expect(api.startSecondaryAlignment).not.toHaveBeenCalled();
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+it("discards a late automatic-start response after changing videos", async () => {
+  saveAutoAlignSecondary(true);
+  vi.stubGlobal("pywebview", { api: bridge() });
+  let resolveStart!: (value: { job_id: string; status: string }) => void;
+  vi.mocked(api.startSecondaryAlignment).mockReturnValue(new Promise(resolve => { resolveStart = resolve; }));
+  await mount();
+  await act(async () => importButton().click());
+  await mount(null, 3);
+  await act(async () => resolveStart({ job_id: "alignment", status: "queued" }));
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+it("respects disabling automatic alignment while a file is still importing", async () => {
+  saveAutoAlignSecondary(true);
+  vi.stubGlobal("pywebview", { api: bridge() });
+  let resolveImport!: (value: { secondary_view: SecondaryView; video: Video }) => void;
+  vi.mocked(api.importSecondaryView).mockReturnValue(new Promise(resolve => { resolveImport = resolve; }));
+  await mount();
+  await act(async () => importButton().click());
+  saveAutoAlignSecondary(false);
+  await act(async () => resolveImport({ secondary_view: secondary, video }));
+  expect(onChange).toHaveBeenCalledWith(secondary);
+  expect(api.startSecondaryAlignment).not.toHaveBeenCalled();
+});
 
 it("updates the player when alignment finishes with settings closed", async () => {
   vi.useFakeTimers();
