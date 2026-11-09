@@ -1,0 +1,20 @@
+{
+  "name": "classcue",
+  "interface": {
+    "displayName": "ClassCue 可选配套"
+  },
+  "plugins": [
+    {
+      "name": "classcue",
+      "source": {
+        "source": "local",
+        "path": "./integrations/codex-desktop"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

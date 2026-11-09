@@ -2,10 +2,7 @@
   "mcpServers": {
     "classcue": {
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/server.mjs"],
-      "env": {
-        "CLASSCUE_CODEX_ROOT": "${CLASSCUE_CODEX_ROOT}"
-      }
+      "args": ["${PLUGIN_ROOT}/server.bundle.mjs"]
     }
   }
 }

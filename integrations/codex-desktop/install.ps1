@@ -4,7 +4,7 @@ param(
     [string]$Destination,
     [string]$MarketplaceRoot = $env:USERPROFILE,
     [string]$NodeExecutable,
-    [string]$NpmExecutable,
+    [string]$NpmExecutable, # Accepted for compatibility with older install commands.
     [string]$PythonExecutable,
     [string]$CodexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" })
 )
@@ -18,10 +18,6 @@ if (-not $Destination) {
 $workspacePath = (Resolve-Path -LiteralPath $WorkspaceRoot).Path
 if (-not (Test-Path -LiteralPath $workspacePath -PathType Container)) { throw "Workspace must be a directory." }
 $pluginDestination = [IO.Path]::GetFullPath($Destination)
-$existingLockPath = Join-Path $pluginDestination "package-lock.json"
-$existingLockHash = if (Test-Path -LiteralPath $existingLockPath) {
-    (Get-FileHash -LiteralPath $existingLockPath -Algorithm SHA256).Hash
-} else { "" }
 $marketplaceRoot = [IO.Path]::GetFullPath($MarketplaceRoot)
 $relativePlugin = [IO.Path]::GetRelativePath($marketplaceRoot, $pluginDestination).Replace("\", "/")
 if ($relativePlugin.StartsWith("../") -or [IO.Path]::IsPathRooted($relativePlugin)) {
@@ -30,7 +26,6 @@ if ($relativePlugin.StartsWith("../") -or [IO.Path]::IsPathRooted($relativePlugi
 if (-not $NodeExecutable) {
     $NodeExecutable = if ($env:CODEX_MCP_NODE_PATH) { $env:CODEX_MCP_NODE_PATH } else { (Get-Command node -ErrorAction Stop).Source }
 }
-if (-not $NpmExecutable) { $NpmExecutable = (Get-Command npm.cmd -ErrorAction Stop).Source }
 $nodePath = (Resolve-Path -LiteralPath $NodeExecutable).Path
 & $nodePath -e 'if (Number(process.versions.node.split(".")[0]) < 24) process.exit(1); require("node:sqlite");'
 if ($LASTEXITCODE -ne 0) { throw "ClassCue requires Node.js 24 or newer with node:sqlite." }
@@ -53,6 +48,7 @@ if (Test-Path -LiteralPath $pluginDestination) {
 }
 New-Item -ItemType Directory -Path $pluginDestination -Force | Out-Null
 $sourcePaths = @("package.json", "package-lock.json", "server.mjs", "context.mjs",
+    "server.bundle.mjs", "discussion.html", "LICENSE.txt", "THIRD_PARTY_NOTICES.txt",
     "connection.mjs", "course-tools.mjs", "drafts.mjs", "draft-controller.mjs", "app.mjs", "resource.mjs", "view.html", "icon.png", ".codex-plugin", "skills")
 foreach ($name in $sourcePaths) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $pluginDestination -Recurse -Force
@@ -89,25 +85,12 @@ $mcp = @{
     mcpServers = @{
         classcue = @{
             command = $nodePath
-            args = @((Join-Path $pluginDestination "server.mjs"))
+            args = @((Join-Path $pluginDestination "server.bundle.mjs"))
             env = @{ CLASSCUE_CODEX_ROOT = $workspacePath; CLASSCUE_CODEX_CONNECTION_FILE = $connectionPath }
         }
     }
 }
 $mcp | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $pluginDestination ".mcp.json") -Encoding utf8
-Push-Location $pluginDestination
-try {
-    $sourceLockHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot "package-lock.json") -Algorithm SHA256).Hash
-    $dependenciesReady = $false
-    if ($existingLockHash -eq $sourceLockHash) {
-        & $nodePath --input-type=module -e 'import("./resource.mjs").then(m => m.discussionResource()).catch(() => process.exit(1))'
-        $dependenciesReady = $LASTEXITCODE -eq 0
-    }
-    if (-not $dependenciesReady) {
-        & $NpmExecutable ci --omit=dev --ignore-scripts --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { throw "Could not install the bundled MCP dependencies." }
-    }
-} finally { Pop-Location }
 $marketplaceDirectory = Join-Path $marketplaceRoot ".agents\plugins"
 New-Item -ItemType Directory -Path $marketplaceDirectory -Force | Out-Null
 $catalogPath = Join-Path $marketplaceDirectory "marketplace.json"

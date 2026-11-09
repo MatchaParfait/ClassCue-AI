@@ -12,15 +12,24 @@ from filelock import FileLock
 from classcue.sqlite_connection import ClosingConnection
 
 
-def connect_workspace(home, root):
-    """Update only the installer's ClassCue connection file; running plugins reread it."""
+def connect_workspace(home, root, *, create=False):
+    """Register a workspace; explicit APP setup may create the first connection."""
     path = Path(home) / "classcue" / "connection.json"
-    if not path.exists():
+    if not create and not path.exists():
         return False
-    if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 128 * 1024:
+    if (path.is_symlink() or path.parent.is_symlink()
+            or (path.exists() and path.stat().st_size > 128 * 1024)):
         raise ValueError("插件连接设置不可用")
+    if create:
+        path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(path.with_suffix(".lock")), timeout=2):
-        value = json.loads(path.read_text(encoding="utf-8-sig"))
+        if path.exists():
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        elif create:
+            value = {"format": "classcue-codex-connection", "version": 1,
+                     "roots": [str(Path(root).resolve())]}
+        else:
+            return False
         if (not isinstance(value, dict) or value.get("format") != "classcue-codex-connection" or value.get("version") != 1
                 or not isinstance(value.get("roots"), list) or not value["roots"]
                 or len(value["roots"]) > 32
@@ -31,7 +40,7 @@ def connect_workspace(home, root):
                              if os.path.normcase(p) != os.path.normcase(selected)]]
         if len(roots) > 32:
             raise ValueError("插件已登记的工作区过多，请检查连接设置")
-        if value["roots"] != roots:
+        if not path.exists() or value["roots"] != roots:
             value["roots"] = roots
             temporary = path.with_name(f"connection.{uuid4().hex}.tmp")
             try:

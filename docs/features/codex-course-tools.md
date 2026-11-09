@@ -1,6 +1,6 @@
 # Codex 课程检索与转写工具
 
-插件源码版本：`0.7.0`。19 个课程工具与课程 Skill 已实现；
+插件源码版本：`0.8.0`。19 个课程工具与课程 Skill 已实现；
 真实调用和单列的 ASR 环境验证限制见
 [验收记录](../validation/codex-course-tools-validation.md)。
 
@@ -83,7 +83,7 @@ Agent 负责选择候选和解释。没有 PPT 时工具返回空列表，不自
 ## 使用
 
 正常导入本地视频、选择并准备默认 ASR 后，按
-[Codex 插件安装步骤](codex-desktop-bridge.md#安装)更新插件，重新启动 ClassCue 和 Codex。
+[Codex 可选配套安装与更新](codex-plugin-install.md)更新插件，重新启动 ClassCue 和 Codex。
 课程工具可用于任意聊天，不要求当前聊天绑定题目。
 旧版安装后也可在 ClassCue 重新保存 Codex 连接，登记当前应用位置；
 更新 MCP 工具和 Skill 本身仍需更新插件。

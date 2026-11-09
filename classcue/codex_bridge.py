@@ -96,7 +96,7 @@ class CodexBridge:
         with self.client_factory(cli, config["home"]) as client:
             identity = client.identity
         config["version"] = identity.get("userAgent", "")
-        connect_workspace(config["home"], config["root"])
+        connect_workspace(config["home"], config["root"], create=True)
         connection = Path(config["home"]) / "classcue" / "connection.json"
         if connection.is_file():
             from classcue.course_connection import register_application

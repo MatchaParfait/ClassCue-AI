@@ -538,6 +538,22 @@ def test_invalid_connection_never_replaced(tmp_path, value):
     assert connection.read_text(encoding="utf-8") == original
 
 
+def test_explicit_setup_creates_connection_and_registers_application(service, tmp_path):
+    bridge, _, _ = service
+    home = tmp_path / "new-profile"
+    workspace = tmp_path / "new-workspace"
+    workspace.mkdir()
+    assert not connect_workspace(home, workspace)
+    assert not home.exists()
+    bridge.configure(str(workspace), executable=__file__, home=str(home))
+    file = home / "classcue" / "connection.json"
+    value = json.loads(file.read_text(encoding="utf-8"))
+    assert value["roots"] == [str(workspace.resolve())]
+    assert Path(value["application"]["project_root"]) == Path(__file__).resolve().parents[1]
+    assert Path(value["application"]["python"]).is_file()
+    assert not list(file.parent.glob("*.tmp"))
+
+
 def test_primary_button_transfers_native_images_once_without_opening_plugin_panel(service):
     bridge, client, _ = service
     def native(**kwargs):

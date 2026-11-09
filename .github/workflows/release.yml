@@ -81,6 +81,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm --prefix frontend ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix integrations/codex-desktop ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix integrations/codex-desktop run build:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix integrations/codex-desktop run check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix integrations/codex-desktop test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --locked --group dev python -m pytest tests -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Push-Location frontend

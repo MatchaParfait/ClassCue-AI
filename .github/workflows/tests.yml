@@ -45,6 +45,27 @@ jobs:
           python -m compileall -q classcue api scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  codex-plugin:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: integrations/codex-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: integrations/codex-desktop/package-lock.json
+      - name: Install build dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify shipped plugin artifacts
+        run: npm run build:check
+      - name: Check syntax
+        run: npm run check
+      - name: Test plugin
+        run: npm test
+
   frontend:
     runs-on: windows-latest
     defaults:

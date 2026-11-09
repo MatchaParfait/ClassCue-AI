@@ -1,11 +1,13 @@
 {
   "name": "classcue-codex-desktop",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node build.mjs",
+    "build:check": "node build.mjs --check",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check server.mjs && node --check course-tools.mjs && node --check context.mjs && node --check drafts.mjs && node --check connection.mjs && node --check app.mjs && node --check draft-controller.mjs && node --check resource.mjs"
+    "check": "node --check server.mjs && node --check server.bundle.mjs && node --check course-tools.mjs && node --check context.mjs && node --check drafts.mjs && node --check connection.mjs && node --check app.mjs && node --check draft-controller.mjs && node --check resource.mjs && node --check build.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

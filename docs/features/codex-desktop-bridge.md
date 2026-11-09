@@ -1,6 +1,6 @@
 # Codex 桌面讨论插件
 
-日期：2026-11-06，插件版本 `0.3.0`。
+讨论流程始于 2026-11-06，当前插件版本 `0.8.0`。
 
 ClassCue 保存课程、资料、原题快照和讨论绑定。Codex 保存独立对话及后续上下文。
 所有讨论使用同一机制，不区分资料讨论和题目讨论。同一份资料可有多个独立讨论，
@@ -56,14 +56,16 @@ Codex 通过 `threadSection/create` 和 `thread/section/move` 建立课程分组
 
 ## 安装
 
-需要 Windows、Codex CLI、Node.js 24 及以上、npm、PowerShell 7。
+推荐使用同仓库 marketplace，见[可选配套安装与更新](codex-plugin-install.md)。
+本节保留个人来源的本机安装器，方便已有安装继续更新。
+需要 Windows、Codex CLI、Node.js 24 及以上、PowerShell 7。
 先创建学习工作区，然后执行：
 
 ```powershell
 pwsh -File integrations/codex-desktop/install.ps1 -WorkspaceRoot '<学习工作区>'
 ```
 
-安装器复制插件源码，安装锁定依赖，合并个人 marketplace 中的 ClassCue 条目，
+安装器复制插件源码及预构建运行文件，合并个人 marketplace 中的 ClassCue 条目，
 保留其他插件。安装后的绝对路径只保留在本机，不覆盖回源码。
 重启 Codex，在个人插件来源安装或更新 ClassCue。CLI 也可执行：
 

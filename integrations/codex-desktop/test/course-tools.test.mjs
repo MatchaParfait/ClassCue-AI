@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { courseTools, callCourseTool } from "../course-tools.mjs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("course tools are independent from bound discussion metadata", () => {
   assert.deepEqual(courseTools.map(t => t.name), ["list_courses", "list_videos", "search_subtitles",
@@ -17,8 +20,10 @@ test("course tools are independent from bound discussion metadata", () => {
   assert.equal(courseTools.find(t => t.name === "search_subtitles").annotations.readOnlyHint, true);
 });
 
-test("missing connection never guesses a library or launches a program", async () => {
-  await assert.rejects(callCourseTool("list_courses", {}, {}), /重新安装/);
+test("missing connection never guesses a library or launches a program", async t => {
+  const home = await mkdtemp(join(tmpdir(), "classcue-unconnected-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await assert.rejects(callCourseTool("list_courses", {}, { CODEX_HOME: home }), /尚未连接.*设置/);
   await assert.rejects(callCourseTool("list_courses", {}, { CLASSCUE_CODEX_CONNECTION_FILE: "relative.json" }),
-    /重新安装/);
+    /设置无效/);
 });

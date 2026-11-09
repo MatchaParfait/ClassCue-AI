@@ -280,6 +280,7 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
     connection_file = fake_install / "connection.json"
     connection_file.write_text(json.dumps({
         "format": "classcue-codex-connection", "version": 1,
+        "roots": [str(fake_install)],
         "application": {"project_root": str(fake_install), "python": sys.executable},
     }), encoding="utf-8")
     try:
@@ -290,7 +291,7 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
         assert result.returncode == 0, result.stdout + result.stderr
         evidence = json.loads(result.stdout)
         assert evidence == {
-            "version": "0.7.0", "preview": True, "completed": True,
+            "version": "0.8.0", "preview": True, "completed": True,
             "reused": True, "validationError": True, "requestConflict": True,
             "sequenceCompleted": True, "sequenceReused": True,
             "retrieval": True, "nativeImages": True, "analysis": True,

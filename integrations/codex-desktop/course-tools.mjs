@@ -1,6 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
+import { readConnection } from "./connection.mjs";
 
 const string = { type: "string", maxLength: 120 };
 const id = { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
@@ -199,13 +199,10 @@ export const courseTools = [
     {}),
 ];
 export async function callCourseTool(name, args, env = process.env) {
-  const file = env.CLASSCUE_CODEX_CONNECTION_FILE;
-  if (!file || !isAbsolute(file) || (await stat(file)).size > 128 * 1024)
-    throw new Error("请重新安装或连接 ClassCue 插件。");
-  const connection = JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""));
+  const connection = await readConnection(env);
   const app = connection.application;
-  if (connection.format !== "classcue-codex-connection" || connection.version !== 1
-      || !app || !isAbsolute(app.project_root || "") || !isAbsolute(app.python || ""))
+  if (!app || typeof app.project_root !== "string" || !isAbsolute(app.project_root)
+      || typeof app.python !== "string" || !isAbsolute(app.python))
     throw new Error("请在 ClassCue 中重新保存 Codex 连接，登记课程工具。");
   return new Promise((resolve, reject) => {
     const child = spawn(app.python, [join(app.project_root, "scripts", "codex_course_tools.py"), "--tool", name],
