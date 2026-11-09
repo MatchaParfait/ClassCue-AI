@@ -12,6 +12,7 @@ import type { SearchSeek } from "../searchNavigation";
 import { useReviewTabs } from "./ReviewTabs";
 import { playbackProgressKey, savePlaybackProgress } from "../playbackProgress";
 import { SecondaryViewControl } from "./SecondaryViewControl";
+import { ClipRangeSelector, type ClipRange } from "./ClipRangeSelector";
 
 export interface PlayerTimeline {
   getCurrentTime: () => number;
@@ -36,6 +37,8 @@ interface VideoPanelProps {
   studyPositionMs?: number;
   studyObservedAt?: number;
   onStudyProgress?: (seconds: number, duration: number, keepalive?: boolean) => void;
+  clipRange?: ClipRange | null;
+  onClipRangeChange?: (range: ClipRange) => void;
 }
 
 const PREFERENCES_KEY = "classroom-player-subtitles";
@@ -64,7 +67,7 @@ function readSubtitlePreferences() {
 }
 
 export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false, currentTime, onTimeUpdate, onDurationChange, videoRef, timelineRef, navigationSeek, autoPlay = false,
-  studyProgressReady = true, studyPositionMs, studyObservedAt, onStudyProgress }: VideoPanelProps) {
+  studyProgressReady = true, studyPositionMs, studyObservedAt, onStudyProgress, clipRange, onClipRangeChange }: VideoPanelProps) {
   const shortcuts = useShortcuts();
   const headingRef = useRef<HTMLDivElement>(null);
   useEntryMotion(headingRef, { duration: .14 });
@@ -142,6 +145,7 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
   const keyboardNavigation = useRef(true);
   const activeSubtitle = subtitles.find((subtitle) => currentTime * 1000 >= subtitle.start_ms && currentTime * 1000 < subtitle.end_ms);
   const progress = duration > 0 ? Math.min(100, currentTime / duration * 100) : 0;
+  const clipMaxMs = Math.floor(Math.min(video.duration_ms, duration * 1000));
   const visiblePlaybackError = playbackError ?? (usePrimaryAudio ? primaryAudioError : null);
 
   const publishTime = (time: number) => {
@@ -777,21 +781,31 @@ export function VideoPanel({ video, subtitles, videoId, libraryId, demo = false,
           if (event.detail > 0 && button && !button.hasAttribute("aria-expanded")
             && !button.closest(PLAYER_POPOVERS)) focusPlayer();
         }}>
-          <input
-            className="player-progress"
-            type="range"
-            aria-label="播放进度"
-            aria-valuetext={`${formatTime(currentTime * 1000)} / ${formatTime(duration * 1000)}`}
-            min={0}
-            max={duration || 1}
-            step={0.1}
-            value={Math.min(currentTime, duration)}
-            disabled={duration <= 0}
-            style={{ "--progress": `${progress}%` } as CSSProperties}
-            onChange={(event) => seek(Number(event.target.value))}
-            onPointerUp={(event) => { if (event.button === 0) focusPlayer(); }}
-            onClick={focusPlayer}
-          />
+          <div className="player-progress-area">
+            <input
+              className="player-progress"
+              type="range"
+              aria-label="播放进度"
+              aria-valuetext={`${formatTime(currentTime * 1000)} / ${formatTime(duration * 1000)}`}
+              min={0}
+              max={duration || 1}
+              step={0.1}
+              value={Math.min(currentTime, duration)}
+              disabled={duration <= 0}
+              style={{ "--progress": `${progress}%` } as CSSProperties}
+              onChange={(event) => seek(Number(event.target.value))}
+              onPointerUp={(event) => { if (event.button === 0) focusPlayer(); }}
+              onClick={focusPlayer}
+            />
+            {clipRange && onClipRangeChange && clipMaxMs > 0 && <ClipRangeSelector
+              range={clipRange} durationMs={duration * 1000} maxMs={clipMaxMs} onChange={onClipRangeChange}
+              onSeek={milliseconds => {
+                if (pendingSource.current) pendingSource.current.resume = false;
+                videoRef.current?.pause();
+                setPlaying(false);
+                seek(milliseconds / 1000);
+              }} />}
+          </div>
           <div className="player-toolbar">
             <button className="player-control" type="button" aria-label={playing ? "暂停" : "播放"} title={shortcutTitle(playing ? "暂停" : "播放", shortcuts, "playPause")} aria-keyshortcuts={shortcutAria(shortcuts, "playPause")} onClick={() => void togglePlay()}>
               {playing ? <Pause size={20} /> : <Play size={20} />}

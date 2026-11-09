@@ -2,13 +2,14 @@ import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, Link, RouterProvider, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { UnsavedChangesProvider, useUnsavedDraft, useUnsavedLeave } from "./UnsavedChanges";
+import { UnsavedChangesProvider, UnsavedDraftScope, useUnsavedDraft, useUnsavedLeave } from "./UnsavedChanges";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { DesktopControls } from "./DesktopControls";
 import { defaultShortcuts, readShortcuts } from "../shortcuts";
 import type { DesktopAPI } from "../hooks/useDesktopAPI";
 let host: HTMLDivElement, root: Root, router: ReturnType<typeof createMemoryRouter>;
 const save = vi.fn<() => Promise<boolean | void>>(), discard = vi.fn(), exit = vi.fn();
+const review = vi.fn();
 function Draft() {
   const [dirty, setDirty] = useState(false);
   const location = useLocation();
@@ -21,14 +22,16 @@ function Draft() {
 }
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  save.mockReset().mockResolvedValue(true); discard.mockReset(); exit.mockReset();
+  save.mockReset().mockResolvedValue(true); discard.mockReset(); exit.mockReset(); review.mockReset();
   const values = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); router?.dispose(); host.remove(); delete window.pywebview; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 async function mount(shortcuts = false) {
-  router = createMemoryRouter([{ path: "*", element: <UnsavedChangesProvider>{shortcuts ? <><ShortcutSettings /><Link to="/">返回</Link><DesktopControls /></> : <Draft />}</UnsavedChangesProvider> }], {
+  router = createMemoryRouter([{ path: "*", element: <UnsavedChangesProvider><UnsavedDraftScope onReview={review}>
+    {shortcuts ? <><ShortcutSettings /><Link to="/">返回</Link><DesktopControls /></> : <Draft />}
+  </UnsavedDraftScope></UnsavedChangesProvider> }], {
     initialEntries: ["/", "/settings?section=shortcuts"], initialIndex: 1,
   });
   await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
@@ -37,14 +40,28 @@ function button(label: string) { return [...document.querySelectorAll<HTMLButton
 async function click(label: string) { await act(async () => button(label).click()); }
 async function link(label: string) { await act(async () => [...host.querySelectorAll("a")].find(item => item.textContent === label)!.click()); }
 function unload() { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; }
-it("blocks category changes, cancels without losing edits, and discards before navigation", async () => {
+it("keeps drafts while switching settings categories and prompts only when leaving settings", async () => {
   await mount(); await click("修改"); expect(unload()).toBe(true);
-  await link("切换分类"); expect(router.state.location.search).toBe("?section=shortcuts");
+  await link("切换分类"); expect(router.state.location.search).toBe("?section=ai");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  expect(save).not.toHaveBeenCalled(); expect(discard).not.toHaveBeenCalled();
+  expect(unload()).toBe(true);
+  await link("返回"); expect(router.state.location.pathname).toBe("/settings");
   expect(document.activeElement?.textContent).toBe("继续编辑");
   await click("继续编辑"); expect(discard).not.toHaveBeenCalled(); expect(unload()).toBe(true);
-  await link("切换分类"); await click("放弃修改");
-  expect(router.state.location.search).toBe("?section=ai"); expect(discard).toHaveBeenCalledTimes(1);
+  await link("返回"); await click("放弃修改");
+  expect(router.state.location.pathname).toBe("/"); expect(discard).toHaveBeenCalledTimes(1);
   expect(unload()).toBe(false);
+});
+it("still protects query navigation outside the settings page", async () => {
+  await mount();
+  await act(async () => { await router.navigate("/study-materials?document=first"); });
+  await click("修改");
+  await act(async () => { await router.navigate("/study-materials?document=second"); });
+  expect(router.state.location.search).toBe("?document=first");
+  expect(document.querySelector(".unsaved-dialog")).not.toBeNull();
+  await click("放弃修改");
+  expect(router.state.location.search).toBe("?document=second");
 });
 it("keeps the page and draft on save failure and proceeds only after a successful retry", async () => {
   await mount(); await click("修改"); await link("返回");
@@ -64,10 +81,10 @@ it("guards back navigation and preserves forward history", async () => {
   expect(router.state.location.search).toBe("?section=shortcuts");
 });
 it("uses the latest destination if another navigation arrives while the prompt is open", async () => {
-  await mount(); await click("修改"); await link("切换分类");
-  await act(async () => { await router.navigate("/"); });
+  await mount(); await click("修改"); await link("返回");
+  await act(async () => { await router.navigate("/process"); });
   await click("放弃修改");
-  expect(router.state.location.pathname).toBe("/");
+  expect(router.state.location.pathname).toBe("/process");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(discard).toHaveBeenCalledTimes(1);
 });
@@ -76,6 +93,7 @@ it("retains migration drafts when save opens a required confirmation", async () 
   await link("返回"); await click("保存并离开");
   expect(router.state.location.pathname).toBe("/settings");
   expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(unload()).toBe(true);
+  await vi.waitFor(() => expect(review).toHaveBeenCalledTimes(1));
   await link("返回"); expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
 it("disables duplicate actions during save and guards explicit desktop exit requests", async () => {

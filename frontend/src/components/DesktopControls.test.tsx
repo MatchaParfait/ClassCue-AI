@@ -170,9 +170,57 @@ it("allows resetting the remembered choice in desktop settings", async () => {
   const api = bridge();
   api.describe.mockResolvedValue({ name: "课堂重点复习", tray: true, dialog: null, hotkey: "", close_behavior: "exit" } as Awaited<ReturnType<typeof api.describe>>);
   await mount(api, true);
-  const select = document.querySelector('[aria-label="关闭窗口行为"]') as HTMLSelectElement;
-  expect(select.value).toBe("exit");
-  await act(async () => { select.value = "ask"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  const group = document.querySelector('[aria-label="关闭窗口行为"]')!;
+  expect(group.querySelectorAll('input[type="radio"]')).toHaveLength(3);
+  expect(group.querySelector("select")).toBeNull();
+  const ask = group.querySelector<HTMLInputElement>('input[value="ask"]')!;
+  const exit = group.querySelector<HTMLInputElement>('input[value="exit"]')!;
+  expect(exit.checked).toBe(true);
+  await act(async () => ask.click());
   expect(api.set_close_behavior).toHaveBeenCalledWith("ask");
-  expect(select.value).toBe("ask");
+  expect(ask.checked).toBe(true);
+  expect(exit.checked).toBe(false);
+});
+
+it("keeps the saved close selection until the native save finishes and locks duplicate changes", async () => {
+  const api = bridge(); await mount(api, true);
+  let finish: (value: { close_behavior: CloseBehavior }) => void = () => {};
+  api.set_close_behavior.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const group = document.querySelector('[aria-label="关闭窗口行为"]')!;
+  const ask = group.querySelector<HTMLInputElement>('input[value="ask"]')!;
+  const exit = group.querySelector<HTMLInputElement>('input[value="exit"]')!;
+  await act(async () => exit.click());
+  expect(ask.checked).toBe(true);
+  for (const input of group.querySelectorAll("input")) expect(input.matches(":disabled")).toBe(true);
+  await act(async () => ask.click());
+  expect(api.set_close_behavior).toHaveBeenCalledTimes(1);
+  await act(async () => finish({ close_behavior: "exit" }));
+  expect(exit.checked).toBe(true);
+  expect(ask.checked).toBe(false);
+  expect(exit.matches(":disabled")).toBe(false);
+});
+
+it("preserves the selected close behavior and reports a failed save", async () => {
+  const api = bridge(); await mount(api, true);
+  api.set_close_behavior.mockRejectedValueOnce(new Error("无法保存设置"));
+  const group = document.querySelector('[aria-label="关闭窗口行为"]')!;
+  await act(async () => group.querySelector<HTMLInputElement>('input[value="exit"]')!.click());
+  expect(group.querySelector<HTMLInputElement>('input[value="ask"]')!.checked).toBe(true);
+  expect(group.querySelector<HTMLInputElement>('input[value="exit"]')!.checked).toBe(false);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("无法保存设置");
+});
+
+it("disables only the tray choice when the system tray is unavailable", async () => {
+  const api = bridge();
+  api.describe.mockResolvedValue({ name: "课堂重点复习", tray: false, dialog: null, hotkey: "" });
+  await mount(api, true);
+  const group = document.querySelector('[aria-label="关闭窗口行为"]')!;
+  const background = group.querySelector<HTMLInputElement>('input[value="background"]')!;
+  const exit = group.querySelector<HTMLInputElement>('input[value="exit"]')!;
+  expect(background.disabled).toBe(true);
+  expect(exit.matches(":disabled")).toBe(false);
+  await act(async () => background.click());
+  expect(api.set_close_behavior).not.toHaveBeenCalled();
+  await act(async () => exit.click());
+  expect(api.set_close_behavior).toHaveBeenCalledWith("exit");
 });

@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { assignQuestionImages, getQuestionVisuals } from "../api/questionVisuals";
 import { QuestionVisualButton } from "./QuestionVisualButton";
 import "./ReviewModeGroups.css";
+import { BILIBILI_STUDY_ENABLED } from "../featureFlags";
 
 interface ReviewSidebarProps {
   analysisVideoId?: number;
@@ -318,7 +319,7 @@ export function ReviewSidebar({
                 onClick={() => setExpandedQuotes((current) => { const next = new Set(current); if (next.has(marker.id)) next.delete(marker.id); else next.add(marker.id); return next; })}>{expandedQuotes.has(marker.id) ? "收起原文" : "展开原文"}<ChevronDown size={14} /></button>}
             </div>}
             <div className="marker-actions">
-              {onSearchBilibili && <button className="text-button compact" type="button"
+              {BILIBILI_STUDY_ENABLED && onSearchBilibili && <button className="text-button compact" type="button"
                 title={`查找 B 站讲解：${marker.title}`} onClick={() => onSearchBilibili(marker)}>
                 <Search size={14} /><span>B 站讲解</span>
               </button>}

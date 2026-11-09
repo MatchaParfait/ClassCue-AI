@@ -86,6 +86,41 @@ it("requests autoplay only after processing completion without resetting saved p
   expect(button('播放')).not.toBeNull();
 });
 
+it("selects a clip on the existing progress bar and seeks the picture without starting playback", () => {
+  const change = vi.fn();
+  act(() => root.render(<VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+    currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+    clipRange={{ startMs: 10_000, endMs: 30_000 }} onClipRangeChange={change} />));
+  expect(container.querySelector('[role="slider"]')).toBeNull();
+  loadMetadata();
+  const start = container.querySelector<HTMLButtonElement>('[aria-label="片段开始时间"]')!;
+  expect(container.querySelector(".player-progress-area .player-progress")).not.toBeNull();
+  expect(start.closest(".player-progress-area")).not.toBeNull();
+  act(() => start.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(change).toHaveBeenCalledWith({ startMs: 11_000, endMs: 30_000 });
+  expect(videoRef.current!.currentTime).toBe(11);
+  expect(timeUpdate).toHaveBeenLastCalledWith(11);
+  expect(videoRef.current!.pause).toHaveBeenCalled();
+  expect(videoRef.current!.play).not.toHaveBeenCalled();
+});
+
+it.each([
+  [59.99975, 59_999],
+  [70.00075, 60_000],
+])("keeps clip selections inside saved and actual durations on a %s second timeline", (seconds, expected) => {
+  const change = vi.fn();
+  act(() => root.render(<VideoPanel video={video} subtitles={[]} videoId={1} libraryId="test"
+    currentTime={0} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+    clipRange={{ startMs: 10_000, endMs: 30_000 }} onClipRangeChange={change} />));
+  loadMetadata(seconds);
+  const end = container.querySelector<HTMLButtonElement>('[aria-label="片段结束时间"]')!;
+  act(() => end.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(change).toHaveBeenCalledWith({ startMs: 10_000, endMs: expected });
+  expect(end.getAttribute("aria-valuemax")).toBe(String(expected));
+  expect(container.querySelector<HTMLInputElement>(".player-progress")!.max).toBe(String(seconds));
+  expect(videoRef.current!.currentTime).toBe(expected / 1000);
+});
+
 it("saves the last position and pauses the detached player when leaving a video", () => {
   mount();
   const element = videoRef.current!;
@@ -655,6 +690,27 @@ describe("secondary camera and primary timeline", () => {
     act(() => button("切换到主视角").click());
     loadMetadata();
     expect(element.currentTime).toBe(25);
+  });
+
+  it("keeps a pending camera switch paused after adjusting a clip boundary", async () => {
+    await mountSecondary();
+    const change = vi.fn();
+    act(() => root.render(<VideoPanel video={video} subtitles={subtitles} videoId={1} libraryId="test"
+      currentTime={20} onTimeUpdate={timeUpdate} onDurationChange={durationChange} videoRef={videoRef}
+      clipRange={{ startMs: 10_000, endMs: 30_000 }} onClipRangeChange={change} />));
+    const element = videoRef.current!;
+    Object.defineProperty(element, "paused", { configurable: true, value: false });
+    act(() => element.dispatchEvent(new Event("play")));
+    act(() => button("切换到副视角").click());
+    expect(element.getAttribute("src")).toContain("/2/stream");
+    const start = container.querySelector<HTMLButtonElement>('[aria-label="片段开始时间"]')!;
+    act(() => start.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(change).toHaveBeenCalledWith({ startMs: 11_000, endMs: 30_000 });
+    loadMetadata(120);
+    expect(element.currentTime).toBe(16);
+    expect(timeUpdate).toHaveBeenLastCalledWith(11);
+    expect(element.play).not.toHaveBeenCalled();
+    expect(button("播放")).not.toBeNull();
   });
 
   it("queues timestamp jumps made before primary metadata is ready", () => {

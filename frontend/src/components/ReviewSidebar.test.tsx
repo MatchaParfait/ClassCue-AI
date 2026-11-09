@@ -128,8 +128,9 @@ describe("recall review navigation", () => {
       expect(props.onSelectMarker).toHaveBeenCalledTimes(1);
       expect(props.onSelectMarker).toHaveBeenCalledWith(markers[0]);
       props.onSelectMarker.mockClear();
-      act(() => container.querySelector<HTMLButtonElement>('[title^="查找 B 站讲解"]')!.click());
-      expect(props.onSearchBilibili).toHaveBeenCalledWith(markers[0]);
+      expect(container.querySelector('[title^="查找 B 站讲解"]')).toBeNull();
+      expect(container.textContent).not.toContain("B 站讲解");
+      expect(props.onSearchBilibili).not.toHaveBeenCalled();
       expect(props.onSelectMarker).not.toHaveBeenCalled();
       for (const selector of [".marker-main strong", ".marker-note", ".marker-quote", ".marker-evidence", ".marker-item"]) {
         act(() => container.querySelector<HTMLElement>(selector)!.click());

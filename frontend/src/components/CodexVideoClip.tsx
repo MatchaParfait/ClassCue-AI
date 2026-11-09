@@ -1,7 +1,7 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock3, ExternalLink, LoaderCircle, MessageSquare, Plus, RotateCcw, X } from "lucide-react";
+import { ExternalLink, LoaderCircle, MessageSquare, Pencil, Plus, RotateCcw, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { attachCodexDiscussion, getCodexClipDiscussions, openCodexDiscussion, prepareCodexClip,
   previewCodexClip, type CodexClipPreview, type CodexDiscussion } from "../api/codexBridge";
@@ -9,17 +9,7 @@ import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { formatTime } from "../utils";
 import "./CodexVideoClip.css";
-
-function timeInput(milliseconds: number) {
-  const rounded = Math.max(0, Math.round(milliseconds));
-  const seconds = Math.floor(rounded / 1000), fraction = rounded % 1000;
-  return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}${fraction ? `.${String(fraction).padStart(3, "0")}` : ""}`;
-}
-
-export function parseClipTime(value: string): number | null {
-  const match = /^(\d{1,3}):([0-5]\d):([0-5]\d(?:\.\d{1,3})?)$/.exec(value.trim());
-  return match ? Math.round((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000) : null;
-}
+import { formatClipTime, type ClipRange } from "./ClipRangeSelector";
 
 function createdTime(value?: string) {
   if (!value) return "";
@@ -28,35 +18,51 @@ function createdTime(value?: string) {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "";
 }
 
-export function CodexVideoClip({ videoId, libraryId, title, durationMs, getCurrentTimeMs }: {
+export function CodexVideoClip({ videoId, libraryId, title, durationMs, getCurrentTimeMs, range, onRangeChange }: {
   videoId: number; libraryId: string; title: string; durationMs: number; getCurrentTimeMs: () => number;
+  range: ClipRange | null; onRangeChange: (range: ClipRange | null) => void;
 }) {
   const desktop = useDesktopAPI();
-  const [position, setPosition] = useState<number | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const limitMs = Number.isFinite(durationMs) ? Math.floor(durationMs) : 0;
+  useEffect(() => {
+    if (!desktop || !range) return;
+    if (limitMs < 1) {
+      setPreviewing(false);
+      onRangeChange(null);
+    } else if (range.endMs > limitMs) {
+      onRangeChange({ startMs: Math.min(range.startMs, limitMs - 1), endMs: limitMs });
+    }
+  }, [desktop, range, limitMs, onRangeChange]);
   if (!desktop) return null;
-  return <>
-    <button type="button" className="secondary-button compact" aria-haspopup="dialog" onClick={() => {
+  return <div className="codex-clip-tools">
+    {!range ? <button type="button" className="secondary-button compact" disabled={limitMs < 1} onClick={() => {
       const now = getCurrentTimeMs();
-      setPosition(Number.isFinite(now) ? Math.min(durationMs, Math.max(0, now)) : 0);
-    }}><MessageSquare size={15} />讲解片段</button>
-    {position !== null && <CodexClipDialog videoId={videoId} libraryId={libraryId} title={title}
-      durationMs={durationMs} positionMs={position} getCurrentTimeMs={getCurrentTimeMs}
-      onClose={() => setPosition(null)} />}
-  </>;
+      const endMs = Math.max(1, Math.min(limitMs, Math.round(Number.isFinite(now) && now > 0 ? now : 60_000)));
+      onRangeChange({ startMs: Math.max(0, endMs - 60_000), endMs });
+    }}><MessageSquare size={15} />讲解片段</button> : <>
+      <output className="codex-clip-time" aria-label="已选讲解片段">{formatClipTime(range.startMs)} – {formatClipTime(range.endMs)}</output>
+      <button type="button" className="secondary-button compact" aria-haspopup="dialog"
+        onClick={() => setPreviewing(true)}><MessageSquare size={15} />预览片段</button>
+      <button type="button" className="icon-button" aria-label="取消片段选择" title="取消片段选择"
+        onClick={() => { setPreviewing(false); onRangeChange(null); }}><X size={15} /></button>
+    </>}
+    {range && previewing && <CodexClipDialog key={`${range.startMs}:${range.endMs}`} videoId={videoId} libraryId={libraryId} title={title}
+      durationMs={durationMs} range={range} autoPreview onEditRange={() => setPreviewing(false)}
+      onClose={() => setPreviewing(false)} />}
+  </div>;
 }
 
-export function CodexClipDialog({ videoId, libraryId, title, durationMs, positionMs, getCurrentTimeMs, onClose }: {
-  videoId: number; libraryId: string; title: string; durationMs: number; positionMs: number;
-  getCurrentTimeMs: () => number; onClose: () => void;
+export function CodexClipDialog({ videoId, libraryId, title, durationMs, range, autoPreview = false, onEditRange, onClose }: {
+  videoId: number; libraryId: string; title: string; durationMs: number; range: ClipRange;
+  autoPreview?: boolean; onEditRange?: () => void; onClose: () => void;
 }) {
   const id = useId();
   const dialog = useRef<HTMLElement>(null);
-  const initial = useRef<HTMLInputElement>(null);
+  const initial = useRef<HTMLButtonElement>(null);
   const busyRef = useRef(false);
   const [operation, setOperation] = useState<"preview" | "prepare" | "open" | "attach" | null>(null);
   const busy = operation !== null;
-  const [start, setStart] = useState(timeInput(Math.max(0, positionMs - 60_000)));
-  const [end, setEnd] = useState(timeInput(Math.min(durationMs, positionMs || 60_000)));
   const [preview, setPreview] = useState<CodexClipPreview | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
   const [result, setResult] = useState<CodexDiscussion | null>(null);
@@ -68,8 +74,8 @@ export function CodexClipDialog({ videoId, libraryId, title, durationMs, positio
   const historyKey = ["codex-video-clips", libraryId, videoId];
   const history = useQuery({ queryKey: historyKey, queryFn: () => getCodexClipDiscussions(videoId), retry: false });
   useModalFocus(true, dialog, initial, () => { if (!busyRef.current) onClose(); });
-  const startMs = parseClipTime(start), endMs = parseClipTime(end);
-  const validRange = startMs !== null && endMs !== null && startMs < endMs && endMs <= durationMs;
+  const { startMs, endMs } = range;
+  const validRange = Number.isInteger(startMs) && Number.isInteger(endMs) && startMs >= 0 && startMs < endMs && endMs <= durationMs;
   const changed = () => { setPreview(null); setSelected([]); setFailedImages([]); setResult(null); setResultForSelection(false); setAttemptedPrepare(false); setError(""); };
   const run = async (kind: NonNullable<typeof operation>, action: () => Promise<void>) => {
     if (busyRef.current) return;
@@ -96,6 +102,15 @@ export function CodexClipDialog({ videoId, libraryId, title, durationMs, positio
   });
   const operationLabel = operation === "preview" ? "正在读取片段…"
     : operation === "open" ? "正在打开讨论…" : operation === "attach" ? "正在追加片段…" : "正在准备草稿…";
+  const readPreview = () => {
+    if (!validRange) return;
+    void run("preview", async () => {
+      changed();
+      const value = await previewCodexClip({ video_id: videoId, start_ms: startMs, end_ms: endMs });
+      setPreview(value); setSelected(value.images.map(image => image.slide_id));
+    });
+  };
+  useEffect(() => { if (autoPreview) readPreview(); }, []);
   return createPortal(<div className="modal-backdrop codex-clip-backdrop" onClick={event => {
     if (event.target === event.currentTarget && !busyRef.current) onClose();
   }}>
@@ -106,32 +121,16 @@ export function CodexClipDialog({ videoId, libraryId, title, durationMs, positio
         <button className="icon-button" type="button" aria-label="关闭片段讲解" title="关闭" disabled={busy} onClick={onClose}><X size={18} /></button>
       </header>
       <div className="codex-clip-content">
-        <fieldset disabled={busy} className="codex-clip-range">
-          <legend>原视频时间 · 总长 {formatTime(durationMs)}</legend>
-          {(["start", "end"] as const).map(side => <label key={side}>
-            <span>{side === "start" ? "开始时间" : "结束时间"}</span>
-            <div>
-              <input ref={side === "start" ? initial : undefined} type="text" inputMode="decimal"
-                aria-label={side === "start" ? "开始时间" : "结束时间"} placeholder="00:00:00"
-                value={side === "start" ? start : end} onChange={event => {
-                  changed(); (side === "start" ? setStart : setEnd)(event.target.value);
-                }} />
-              <button type="button" className="icon-button" aria-label={`将当前播放位置设为${side === "start" ? "开始" : "结束"}时间`}
-                title="使用当前播放位置" onClick={() => {
-                  const now = getCurrentTimeMs();
-                  if (!Number.isFinite(now)) { setError("当前播放位置不可用，请稍后重试"); return; }
-                  changed(); (side === "start" ? setStart : setEnd)(timeInput(Math.min(durationMs, Math.max(0, now))));
-                }}><Clock3 size={16} /></button>
-            </div>
-          </label>)}
-        </fieldset>
-        {!validRange && <p className="field-error" role="alert">请输入 00:00:00 格式的时间，结束须晚于开始且不超过视频时长。</p>}
+        <div className="codex-clip-range">
+          <span>原视频时间 · 总长 {formatTime(durationMs)}</span>
+          <output aria-label="已选讲解片段">{formatClipTime(startMs)} – {formatClipTime(endMs)}</output>
+          {onEditRange && <button type="button" className="text-button compact" disabled={busy}
+            onClick={onEditRange}><Pencil size={14} />调整片段</button>}
+        </div>
+        {!validRange && <p className="field-error" role="alert">片段范围不可用，请返回进度条重新选择。</p>}
         <div className="codex-clip-preview-action">
-          <button className="secondary-button compact" type="button" disabled={busy || !validRange} onClick={() => void run("preview", async () => {
-            changed();
-            const value = await previewCodexClip({ video_id: videoId, start_ms: startMs!, end_ms: endMs! });
-            setPreview(value); setSelected(value.images.map(image => image.slide_id)); setResult(null);
-          })}>{operation === "preview" ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}
+          <button ref={initial} className="secondary-button compact" type="button" disabled={busy || !validRange} onClick={readPreview}>
+            {operation === "preview" ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}
             {operation === "preview" ? "正在读取片段…" : "预览片段"}</button>
           {preview && <span>{preview.subtitles.length} 条字幕 · {selected.length} 张精选 PPT</span>}
         </div>
@@ -185,8 +184,8 @@ export function CodexClipDialog({ videoId, libraryId, title, durationMs, positio
             <RotateCcw size={14} />重试读取记录</button></div>}
       </div>
       <footer>
-        <Link to="/settings?section=codex" className="text-button compact" aria-disabled={busy} tabIndex={busy ? -1 : undefined}
-          onClick={event => { if (busyRef.current) event.preventDefault(); else onClose(); }}>Codex 设置</Link>
+        <Link to="/settings?section=discussion" className="text-button compact" aria-disabled={busy} tabIndex={busy ? -1 : undefined}
+          onClick={event => { if (busyRef.current) event.preventDefault(); else onClose(); }}>讨论工具设置</Link>
         {attemptedPrepare && <button className="secondary-button compact" type="button" disabled={!canPrepare}
           title="使用当前片段新建独立讨论" onClick={() => prepare(true)}><Plus size={15} />新建独立讨论</button>}
         <button className="primary-button compact" type="button"

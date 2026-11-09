@@ -37,16 +37,32 @@ const { spawn } = require("node:child_process");
     });
     page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     page.on("pageerror", error => errors.push(error.message));
+    let chosenPath = "";
     await page.route("**/api/**", async route => {
       const url = new URL(route.request().url());
       if (!url.pathname.startsWith("/api/")) return route.continue();
-      const response = await route.fetch({ url: `${api}${url.pathname}${url.search}` });
+      if (url.pathname === "/api/pickers" && route.request().method() === "POST") {
+        return route.fulfill({ json: { picker_id: "fixture-picker" } });
+      }
+      if (url.pathname === "/api/pickers/fixture-picker") {
+        return route.fulfill({ json: { status: "selected", path: chosenPath } });
+      }
+      // Match the same-origin API transport used by the desktop application.
+      const headers = { ...route.request().headers(), origin: api, "sec-fetch-site": "same-origin" };
+      delete headers.host;
+      const response = await route.fetch({ url: `${api}${url.pathname}${url.search}`, headers });
       await route.fulfill({ response });
     });
+    const chooseDirectory = async (label, destination) => {
+      chosenPath = destination;
+      await page.getByRole("button", { name: `选择${label}`, exact: true }).click();
+      await page.waitForFunction(({ label, destination }) =>
+        document.querySelector(`output[aria-label="${label}"]`)?.value === destination, { label, destination });
+    };
     await page.goto(`${process.env.FRONTEND_URL || "http://127.0.0.1:5175"}/settings?section=storage`);
     const cache = page.getByLabel("视频与音频存储目录", { exact: true });
     await cache.waitFor();
-    await cache.fill(path.join(output, "blocked-media"));
+    await chooseDirectory("视频与音频存储目录", path.join(output, "blocked-media"));
     await page.getByRole("button", { name: "检查并迁移", exact: true }).click();
     await page.getByRole("heading", { name: "确认迁移范围" }).waitFor();
     await page.getByRole("button", { name: "开始迁移", exact: true }).click();
@@ -55,10 +71,10 @@ const { spawn } = require("node:child_process");
     assert.ok(fs.existsSync(path.join(output, "library", "temporary_audio", "lesson.wav")));
     await page.screenshot({ path: path.join(output, "failed-migration.png"), fullPage: true });
     await page.getByRole("button", { name: "关闭提示", exact: true }).click();
-    await cache.fill(path.join(output, "new-media"));
+    await chooseDirectory("视频与音频存储目录", path.join(output, "new-media"));
     assert.equal(await page.locator('input[aria-label="视频库目录"]').count(), 0);
     assert.equal(await page.locator('input[aria-label="临时音频与转写缓存"]').count(), 0);
-    await page.getByLabel("ASR 资源目录", { exact: true }).fill(path.join(output, "new-assets"));
+    await chooseDirectory("ASR 资源目录", path.join(output, "new-assets"));
     await page.getByRole("button", { name: "检查并迁移", exact: true }).click();
     await page.getByRole("heading", { name: "确认迁移范围" }).waitFor();
     for (const width of [856, 1316, 1540, 1920]) {
@@ -72,7 +88,7 @@ const { spawn } = require("node:child_process");
     await page.screenshot({ path: path.join(output, "progress.png"), fullPage: true });
     await page.reload();
     await page.waitForFunction(() => document.querySelector(".storage-migration-progress")?.textContent.includes("目录迁移完成"));
-    await page.waitForFunction(expected => document.querySelector('input[aria-label="视频与音频存储目录"]')?.value === expected, path.join(output, "new-media"));
+    await page.waitForFunction(expected => document.querySelector('output[aria-label="视频与音频存储目录"]')?.value === expected, path.join(output, "new-media"));
     await page.screenshot({ path: path.join(output, "completed.png"), fullPage: true });
     const data = await (await fetch(`${api}/api/settings/directories`)).json();
     const videos = await (await fetch(`${api}/api/videos`)).json();
@@ -89,7 +105,7 @@ const { spawn } = require("node:child_process");
     assert.ok(fs.existsSync(path.join(output, "new-assets", "models", "asr", "fixture", "weights.bin")));
     await page.reload();
     await cache.waitFor();
-    assert.equal(await cache.inputValue(), path.join(output, "new-media"));
+    assert.equal(await cache.textContent(), path.join(output, "new-media"));
     assert.equal(await page.locator(".storage-migration-progress").count(), 0);
     await page.screenshot({ path: path.join(output, "completed-after-reload.png"), fullPage: true });
     assert.deepEqual(errors, []);

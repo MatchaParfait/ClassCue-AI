@@ -5,30 +5,38 @@ import { useModalFocus } from "../hooks/useModalFocus";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import "../unsaved.css";
 
-type Draft = { label: string; dirty: boolean; busy?: boolean; save: () => Promise<boolean | void>; discard: () => void };
-type Leave = { proceed: () => void | Promise<unknown>; cancel?: () => void; source?: "navigation" };
+type Draft = { id?: string; label: string; dirty: boolean; busy?: boolean; save: () => Promise<boolean | void>; discard: () => void; review?: () => void };
+type Leave = { proceed: (resolvedDrafts?: boolean) => void | Promise<unknown>; cancel?: () => void; source?: "navigation"; excludeDraftId?: string };
 type Guard = {
   register: (draft: MutableRefObject<Draft>) => () => void;
   notify: () => void;
-  isDirty: () => boolean;
+  isDirty: (excludeDraftId?: string) => boolean;
   lockNavigation: (allow?: (location: Location) => boolean) => () => void;
   isNavigationLocked: (location: Location) => boolean;
-  request: (proceed: Leave["proceed"], cancel?: Leave["cancel"], source?: Leave["source"]) => void;
+  request: (proceed: Leave["proceed"], cancel?: Leave["cancel"], source?: Leave["source"], excludeDraftId?: string) => void;
 };
 const Context = createContext<Guard | null>(null);
+const DraftReviewContext = createContext<(() => void) | undefined>(undefined);
 const noop = () => {};
-const unprotectedRequest = (proceed: Leave["proceed"]) => { void proceed(); };
+const unprotectedRequest = (proceed: Leave["proceed"]) => { void proceed(false); };
 export function useUnsavedDraft(draft: Draft) {
   const guard = useContext(Context);
+  const review = useContext(DraftReviewContext);
   const current = useRef(draft);
-  current.current = draft;
+  current.current = { ...draft, review: draft.review ?? review };
   useLayoutEffect(() => guard?.register(current), [guard]);
   useLayoutEffect(() => { guard?.notify(); }, [guard, draft.dirty, draft.busy]);
   return useCallback(() => { current.current.dirty = false; guard?.notify(); }, [guard]);
 }
-export function useUnsavedLeave() {
+export function UnsavedDraftScope({ onReview, children }: { onReview: () => void; children: ReactNode }) {
+  return <DraftReviewContext.Provider value={onReview}>{children}</DraftReviewContext.Provider>;
+}
+export function useUnsavedLeave(excludeDraftId?: string) {
   const guard = useContext(Context);
-  return guard?.request ?? unprotectedRequest;
+  return useCallback((proceed: Leave["proceed"], cancel?: Leave["cancel"]) => {
+    if (guard) guard.request(proceed, cancel, undefined, excludeDraftId);
+    else unprotectedRequest(proceed);
+  }, [guard, excludeDraftId]);
 }
 export function useNavigationLock(active: boolean, allow?: (location: Location) => boolean) {
   const guard = useContext(Context);
@@ -41,6 +49,7 @@ export function useNavigationLock(active: boolean, allow?: (location: Location) 
 function NavigationGuard({ guard }: { guard: Guard }) {
   const blocker = useBlocker(useCallback(({ currentLocation, nextLocation }: { currentLocation: Location; nextLocation: Location }) =>
     guard.isNavigationLocked(nextLocation) || (guard.isDirty()
+      && !(currentLocation.pathname === "/settings" && nextLocation.pathname === "/settings")
       && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search)), [guard]));
   const pending = useRef<string | null>(null);
   useEffect(() => {
@@ -58,6 +67,7 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0);
   const [pending, setPending] = useState<Leave | null>(null);
   const pendingRef = useRef<Leave | null>(null);
+  const reviewAfterCancel = useRef<(() => void) | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const running = useRef(false);
   const [error, setError] = useState("");
@@ -65,8 +75,9 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const router = useContext(UNSAFE_DataRouterContext);
   const api = useDesktopAPI();
   const notify = useCallback(() => setRevision(value => value + 1), []);
-  const isDirty = useCallback(() => [...drafts.current].some(item => item.current.dirty), []);
-  const request = useCallback((proceed: Leave["proceed"], cancel?: Leave["cancel"], source?: Leave["source"]) => {
+  const isDirty = useCallback((excludeDraftId?: string) => [...drafts.current].some(item =>
+    item.current.dirty && (!excludeDraftId || item.current.id !== excludeDraftId)), []);
+  const request = useCallback((proceed: Leave["proceed"], cancel?: Leave["cancel"], source?: Leave["source"], excludeDraftId?: string) => {
     if (pendingRef.current) {
       // Router replaces its blocked destination on another back/link action.
       // Retain the prompt but use the latest callbacks instead of resetting it.
@@ -75,8 +86,9 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
       } else cancel?.();
       return;
     }
-    if (!isDirty()) { void Promise.resolve().then(proceed).catch(failure => setError(String(failure))); return; }
-    const next = { proceed, cancel, source };
+    if (!isDirty(excludeDraftId)) { void Promise.resolve().then(() => proceed(false)).catch(failure => setError(String(failure))); return; }
+    reviewAfterCancel.current = undefined;
+    const next = { proceed, cancel, source, excludeDraftId };
     pendingRef.current = next; setPending(next); setError("");
   }, [isDirty]);
   const guard = useMemo<Guard>(() => ({
@@ -91,10 +103,14 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   }), [notify, isDirty, request]);
   const dirty = [...drafts.current].filter(item => item.current.dirty);
   const hasChanges = dirty.length > 0;
-  const busy = saving || dirty.some(item => item.current.busy);
+  const pendingDirty = dirty.filter(item => !pending?.excludeDraftId || item.current.id !== pending.excludeDraftId);
+  const busy = saving || pendingDirty.some(item => item.current.busy);
   const cancel = () => {
     if (running.current) return;
     pendingRef.current?.cancel?.(); pendingRef.current = null; setPending(null); setError("");
+    const review = reviewAfterCancel.current;
+    reviewAfterCancel.current = undefined;
+    if (review) requestAnimationFrame(review);
   };
   useModalFocus(Boolean(pending), modal, cancelButton, cancel);
   useEffect(() => {
@@ -117,20 +133,25 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     try {
       for (const ref of [...drafts.current]) {
         const item = ref.current;
-        if (!item.dirty) continue;
+        if (!item.dirty || (pendingRef.current?.excludeDraftId && item.id === pendingRef.current.excludeDraftId)) continue;
         if (save) {
+          reviewAfterCancel.current = item.review;
           const done = await item.save();
           if (done === false) {
-            // Directory changes open their existing migration/restart confirmation.
-            pendingRef.current?.cancel?.(); pendingRef.current = null; setPending(null); return;
+            // Keep the draft and reveal its validation or required confirmation.
+            pendingRef.current?.cancel?.(); pendingRef.current = null; setPending(null);
+            reviewAfterCancel.current = undefined;
+            if (item.review) requestAnimationFrame(item.review);
+            return;
           }
+          reviewAfterCancel.current = undefined;
         } else item.discard();
         ref.current.dirty = false;
       }
       notify();
       const leave = pendingRef.current;
       pendingRef.current = null; setPending(null);
-      await leave?.proceed();
+      await leave?.proceed(true);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { running.current = false; setSaving(false); }
   };
@@ -140,8 +161,8 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     {pending && createPortal(<div className="unsaved-backdrop" onClick={cancel}>
       <div ref={modal} className="unsaved-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-title" aria-describedby="unsaved-description" tabIndex={-1} onClick={event => event.stopPropagation()}>
         <h2 id="unsaved-title">有未保存的修改</h2>
-        <p id="unsaved-description">{dirty.map(item => item.current.label).join("、") || "设置"}尚未保存。是否保存后离开？</p>
-        <p className="settings-hint">放弃修改会恢复已保存的设置。{dirty.some(item => ["存储与导入", "应用数据目录"].includes(item.current.label)) && "目录迁移仍需确认迁移范围及重启提示。"}</p>
+        <p id="unsaved-description">{pendingDirty.map(item => item.current.label).join("、") || "设置"}尚未保存。是否保存后离开？</p>
+        <p className="settings-hint">放弃修改会恢复已保存的设置。{pendingDirty.some(item => ["存储与导入", "应用数据目录"].includes(item.current.label)) && "目录迁移仍需确认迁移范围及重启提示。"}</p>
         {error && <p role="alert" className="field-error">{error}</p>}
         <div className="unsaved-actions">
           <button type="button" className="primary-button" disabled={busy} onClick={() => void finish(true)}>{saving ? "正在处理…" : "保存并离开"}</button>

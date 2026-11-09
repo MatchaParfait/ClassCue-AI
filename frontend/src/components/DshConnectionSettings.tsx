@@ -1,22 +1,10 @@
 import { useEffect, useState, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, LoaderCircle, MessageSquare } from "lucide-react";
+import { FolderOpen, LoaderCircle } from "lucide-react";
 import { createPicker, pollPicker } from "../api/client";
 import { connectDsh, connectDshAuto, getDshStatus, getDshWorkspaceRoot, setDshWorkspaceRoot,
   type DshStatus } from "../api/dshBridge";
-import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import "./DshQuestionActions.css";
-
-export function DshSettingsSection({ active = true, scope = "default" }: { active?: boolean; scope?: string }) {
-  const desktop = useDesktopAPI();
-  if (!desktop) return null;
-  return <section className="settings-section dsh-settings-section" aria-labelledby="dsh-settings-title">
-    <div className="settings-section-heading"><div className="settings-section-title">
-      <MessageSquare size={20} /><h2 id="dsh-settings-title">DSH 讨论</h2>
-    </div></div>
-    <DshConnectionSettings active={active} scope={scope} />
-  </section>;
-}
 
 export function DshConnectionSettings({ active = true, scope = "default", initialRef, onBusyChange }: {
   active?: boolean; scope?: string; initialRef?: RefObject<HTMLButtonElement>; onBusyChange?: (busy: boolean) => void;

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApplicationDataSection } from "./ApplicationDataSection";
-import { getStorageDirectories, migrateApplicationData, previewApplicationData } from "../api/client";
+import { createPicker, getStorageDirectories, migrateApplicationData, pollPicker, previewApplicationData } from "../api/client";
 import type { StorageDirectories } from "../types";
 
 vi.mock("../api/client", () => ({
@@ -19,15 +19,15 @@ const plan = { destination: "E:\\small", database_dir: "E:\\small\\library", con
   files_total: 3, bytes_total: 1124, free_bytes: 99999, plan_id: "reviewed" };
 let container: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient;
 const onError = vi.fn();
-function change(value: string) {
-  act(() => {
-    const input = container.querySelector<HTMLInputElement>('input[aria-label="应用数据目录"]')!;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+async function choose(value: string | null) {
+  vi.mocked(createPicker).mockResolvedValue("picker-app");
+  vi.mocked(pollPicker).mockResolvedValue(value);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('[aria-label="选择应用数据目录"]')!.click();
   });
 }
 async function openConfirmation() {
-  change("E:\\small");
+  await choose("E:\\small");
   await act(async () => {
     const button = [...container.querySelectorAll("button")].find(b => b.textContent?.includes("检查迁移范围"))!;
     button.focus(); button.click();
@@ -52,7 +52,13 @@ afterEach(async () => {
 });
 
 it("warns in a modal and does not restart on choosing or previewing a directory", async () => {
+  expect(container.querySelector('input[aria-label="应用数据目录"]')).toBeNull();
+  const path = container.querySelector<HTMLOutputElement>('output[aria-label="应用数据目录"]')!;
+  path.focus();
+  expect(document.activeElement).not.toBe(path);
   await openConfirmation();
+  expect(createPicker).toHaveBeenCalledWith("directory");
+  expect(pollPicker).toHaveBeenCalledWith("picker-app");
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.getAttribute("aria-modal")).toBe("true");
   expect(dialog.textContent).toContain("软件会自动立即重启");
@@ -62,11 +68,19 @@ it("warns in a modal and does not restart on choosing or previewing a directory"
   expect(document.activeElement?.textContent).toBe("取消");
 });
 
+it("preserves the original path when the native folder picker is canceled", async () => {
+  await choose(null);
+  expect(container.querySelector<HTMLOutputElement>('output[aria-label="应用数据目录"]')!.value).toBe("尚未选择目录");
+  expect(container.querySelector("fieldset")!.disabled).toBe(false);
+  expect(previewApplicationData).not.toHaveBeenCalled();
+  expect(migrateApplicationData).not.toHaveBeenCalled();
+});
+
 it("cancels the restart warning without requesting migration", async () => {
   await openConfirmation();
   await act(async () => { [...document.querySelectorAll("button")].find(b => b.textContent === "取消")!.click(); });
   expect(migrateApplicationData).not.toHaveBeenCalled();
-  expect(container.querySelector<HTMLInputElement>('input[aria-label="应用数据目录"]')!.value).toBe("E:\\small");
+  expect(container.querySelector<HTMLOutputElement>('output[aria-label="应用数据目录"]')!.value).toBe("E:\\small");
   expect(document.activeElement?.textContent).toBe("检查迁移范围");
 });
 
@@ -110,5 +124,5 @@ it("reports a failed migration after restarting with the original data", async (
   await act(async () => { [...document.querySelectorAll("button")].find(b => b.textContent === "迁移并立即重启")!.click(); });
   await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "目标文件冲突" })));
   expect(sessionStorage.getItem("classroom-application-data-restart")).toBeNull();
-  expect(container.querySelector<HTMLInputElement>('input[aria-label="应用数据目录"]')!.value).toBe("E:\\small");
+  expect(container.querySelector<HTMLOutputElement>('output[aria-label="应用数据目录"]')!.value).toBe("E:\\small");
 });

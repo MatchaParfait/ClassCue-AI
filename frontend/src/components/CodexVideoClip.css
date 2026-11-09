@@ -5,12 +5,11 @@
 .codex-clip-dialog h2 { margin: 0; font-size: 17px; }
 .codex-clip-dialog header p { margin: 4px 0 0; font-size: 12px; color: var(--ui-muted); overflow-wrap: anywhere; }
 .codex-clip-content { padding: 18px 20px; overflow-y: auto; min-height: 0; }
-.codex-clip-range { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-width: 0; }
-.codex-clip-range legend { margin-bottom: 12px; font-size: 12px; color: var(--ui-muted); }
-.codex-clip-range label { min-width: 0; font-size: 13px; }
-.codex-clip-range label > div { display: flex; gap: 6px; margin-top: 6px; }
-.codex-clip-range input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface); color: inherit; font: inherit; }
-.codex-clip-range input { font-variant-numeric: tabular-nums; }
+.codex-clip-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.codex-clip-time, .codex-clip-range output { font-size: 13px; font-variant-numeric: tabular-nums; }
+.codex-clip-range { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; min-width: 0; }
+.codex-clip-range > span { flex-basis: 100%; font-size: 12px; color: var(--ui-muted); }
+.codex-clip-range output { font-weight: 600; overflow-wrap: anywhere; }
 .codex-clip-preview-action { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
 .codex-clip-preview-action > span, .codex-clip-slides p { font-size: 12px; color: var(--ui-muted); }
 .codex-clip-progress { display: flex; align-items: center; gap: 8px; color: var(--ui-muted); font-size: 13px; margin: 8px 0; }
@@ -30,7 +29,6 @@
 .codex-clip-dialog > footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--ui-border); }
 @media (max-width: 540px) {
   .codex-clip-content, .codex-clip-dialog > header, .codex-clip-dialog > footer { padding: 14px; }
-  .codex-clip-range { grid-template-columns: minmax(0, 1fr); }
   .codex-clip-images { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .codex-clip-dialog > footer { flex-wrap: wrap; }
 }

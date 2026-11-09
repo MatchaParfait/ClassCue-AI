@@ -201,7 +201,7 @@
 .recall-scheme-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
 .recall-scheme-entry { flex: 1 1 100%; display: grid; gap: 4px; min-width: 0; padding: 10px; text-align: left; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ui-text); }
 .recall-scheme-entry strong { overflow-wrap: anywhere; font-size: 14px; }
-.recall-scheme-entry span, .recall-scheme-archive, .recall-archived { font-size: 12px; color: var(--ui-muted); }
+.recall-scheme-entry span, .recall-scheme-archive { font-size: 12px; color: var(--ui-muted); }
 .recall-scheme-entry:hover:not(:disabled), .recall-scheme-entry.is-selected { background: var(--ui-accent-soft); border-color: var(--ui-border); }
 .recall-scheme-form { display: grid; align-content: start; gap: 20px; min-width: 0; container-type: inline-size; }
 .recall-scheme-form input, .recall-scheme-form select, .recall-scheme-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--ui-border); background: var(--ui-surface); }
@@ -231,7 +231,6 @@
 .recall-scheme-form .recall-notes .field-label { color: var(--ui-text); font-weight: 600; }
 .recall-scheme-form .field-label { display: flex; justify-content: space-between; gap: 10px; }
 .recall-scheme-form .field-label small { color: var(--ui-muted); font-weight: 400; }
-.recall-archived { margin-top: 16px; overflow-wrap: anywhere; }
 .recall-settings-notice { margin-top: 12px; color: var(--ui-green); font-size: 13px; }
 .recall-basic-fields { display: grid; gap: 20px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .recall-basic-fields:disabled { opacity: .6; }

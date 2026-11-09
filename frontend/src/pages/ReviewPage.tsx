@@ -20,6 +20,8 @@ import { AnimatePresence, AnimatedPopup } from "../components/Motion";
 import { useStudyProgress } from "../hooks/useStudyProgress";
 import { StudyBookmarksDialog, type BookmarkScope } from "../components/StudyBookmarks";
 import { CodexVideoClip } from "../components/CodexVideoClip";
+import type { ClipRange } from "../components/ClipRangeSelector";
+import { BILIBILI_STUDY_ENABLED } from "../featureFlags";
 
 type ReviewChange =
   | { kind: "time"; previous: number | null; next: number | null }
@@ -101,6 +103,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
   const [createdMarkerId, setCreatedMarkerId] = useState<number | null>(null);
   const [editingMarkerId, setEditingMarkerId] = useState<number | null>(null);
   const [bilibiliMarkerId, setBilibiliMarkerId] = useState<number | null>(null);
+  const [clipRange, setClipRange] = useState<ClipRange | null>(null);
   const reviewBackground = useRef<HTMLDivElement>(null);
   const [noticeState, setNoticeState] = useState<{ text: string | null }>({ text: null });
   const notice = noticeState.text;
@@ -501,10 +504,14 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               studyPositionMs={savedStudy.position}
               studyObservedAt={savedStudy.observedAt}
               onStudyProgress={savedStudy.save}
+              clipRange={clipRange}
+              onClipRangeChange={setClipRange}
             />
             {!mockMode && video.library_id && <div className="review-study-tools">
               <CodexVideoClip videoId={videoId} libraryId={libraryId} title={video.display_name}
-                durationMs={video.duration_ms} getCurrentTimeMs={() => (getPlayerTime() ?? currentTime) * 1000} />
+                durationMs={Math.floor(Math.min(video.duration_ms, duration > 0 ? duration * 1000 : video.duration_ms))}
+                getCurrentTimeMs={() => (getPlayerTime() ?? currentTime) * 1000}
+                range={clipRange} onRangeChange={setClipRange} />
               <button type="button" className="secondary-button compact" aria-haspopup="dialog" onClick={() => {
                 const time = getPlayerTime();
                 if (!timelineRef.current?.isReady() || time === undefined || !Number.isFinite(time)) {
@@ -549,7 +556,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
               onSaveTime={saveJumpTime}
               onChangeImportance={(marker, importance) => saveChange(marker, { kind: "importance", previous: marker.importance ?? "standard", next: importance })}
               onChangeQuestionEmphasis={(marker, emphasized) => saveChange(marker, { kind: "emphasis", previous: marker.question_emphasis_override ?? null, next: emphasized })}
-              onSearchBilibili={mockMode ? undefined : marker => setBilibiliMarkerId(marker.id)}
+              onSearchBilibili={mockMode || !BILIBILI_STUDY_ENABLED ? undefined : marker => setBilibiliMarkerId(marker.id)}
               onCaptureQuestion={mockMode ? undefined : captureQuestion}
               onRemoveQuestionImage={mockMode ? undefined : removeQuestionImage}
               imageSaving={imageSaving || undoing}
@@ -569,7 +576,7 @@ function ReviewSession({ videoId, demo }: { videoId: number; demo: boolean }) {
         </div>
       </main>
       </div>
-      {!mockMode && allMarkers.some(marker => marker.id === bilibiliMarkerId) && <BilibiliStudyPanel
+      {BILIBILI_STUDY_ENABLED && !mockMode && allMarkers.some(marker => marker.id === bilibiliMarkerId) && <BilibiliStudyPanel
         key={bilibiliMarkerId} marker={allMarkers.find(marker => marker.id === bilibiliMarkerId)!}
         onCaptureFrame={captureFrame}
         backgroundRef={reviewBackground} onClose={() => setBilibiliMarkerId(null)} />}

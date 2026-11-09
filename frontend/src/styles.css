@@ -452,7 +452,22 @@ h1, h2, p { margin: 0; }
 .firered-resource-status .job-error { min-width: 0; overflow-wrap: anywhere; }
 .firered-resource-status { margin: 12px 0; }
 .storage-directory-fields { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-choice-selector { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-choice-selector legend { margin-bottom: 8px; color: var(--ui-muted); font-size: 12px; font-weight: 600; }
+.settings-choice-options { display: flex; flex-wrap: wrap; gap: 10px; }
+.settings-choice-options > label { display: flex; align-items: flex-start; gap: 8px; min-height: 44px; max-width: 100%; padding: 10px 12px; border: 1px solid var(--ui-border); border-bottom-width: 2px; border-radius: 6px; color: var(--ui-text); background: var(--ui-surface); font-size: 13px; cursor: pointer; }
+.settings-choice-options input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--ui-accent-strong); }
+.settings-choice-options > label > span { min-width: 0; overflow-wrap: anywhere; }
+.settings-choice-options > label:has(input:checked) { border-color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
+.settings-choice-options > label:hover:not(:has(input:disabled)) { border-color: var(--ui-accent-strong); background: color-mix(in srgb, var(--ui-accent-soft) 70%, var(--ui-surface)); }
+.settings-choice-options > label:has(input:focus-visible) { outline: 2px solid var(--ui-accent-strong); outline-offset: 3px; }
+.settings-choice-options > label:has(input:disabled) { cursor: default; opacity: .6; }
+.settings-choice-options input:focus-visible { outline: none; }
+.storage-import-options label > span { display: grid; gap: 4px; min-width: 0; }
+.storage-import-options strong { color: var(--ui-text); font-size: 13px; font-weight: 500; }
+.storage-import-options small { color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; }
 .storage-directory-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.storage-directory-path { display: flex; align-items: center; width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-muted); background: var(--ui-surface-soft); font-size: 13px; font-weight: 400; overflow-wrap: anywhere; cursor: default; user-select: text; }
 .storage-directory-row .settings-field { min-width: 0; }
 .storage-directory-row .settings-field > span { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .storage-directory-row small { color: var(--ui-muted); font-size: 12px; font-weight: 400; }

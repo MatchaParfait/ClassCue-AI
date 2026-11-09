@@ -1,28 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardCopy, ExternalLink, FolderOpen, LoaderCircle, MessageSquare, Plus, Settings2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPicker, pollPicker } from "../api/client";
 import { attachCodexDiscussion, copyCodexImages, getCodexDiscussion, getCodexDiscussions, getCodexSettings, openCodexDiscussion, prepareCodexDiscussion,
   setCodexSettings } from "../api/codexBridge";
-import { useDesktopAPI } from "../hooks/useDesktopAPI";
-import { setDiscussionProvider, useDiscussionProvider } from "../hooks/useDiscussionProvider";
 import "./DshQuestionActions.css";
 
-export function CodexSettingsSection({ active = true, scope = "default" }: { active?: boolean; scope?: string }) {
-  const desktop = useDesktopAPI();
-  if (!desktop) return null;
-  return <section className="settings-section" aria-labelledby="codex-settings-title">
-    <div className="settings-section-heading"><div className="settings-section-title">
-      <MessageSquare size={20} /><h2 id="codex-settings-title">Codex 讨论</h2>
-    </div></div>
-    <CodexSettingsForm active={active} scope={scope} />
-  </section>;
-}
-
-function CodexSettingsForm({ active, scope }: { active: boolean; scope: string }) {
+export function CodexConnectionSettings({ active, scope, onBusyChange }: {
+  active: boolean; scope: string; onBusyChange?: (busy: boolean) => void;
+}) {
   const cache = useQueryClient();
-  const provider = useDiscussionProvider();
   const [error, setError] = useState("");
   const [picking, setPicking] = useState(false);
   const [executable, setExecutable] = useState("");
@@ -32,18 +20,15 @@ function CodexSettingsForm({ active, scope }: { active: boolean; scope: string }
     onSuccess: value => {
       cache.setQueryData(["codex-settings", scope], value);
       void cache.invalidateQueries({ queryKey: ["codex-settings"] });
-      setDiscussionProvider("codex");
     },
     onError: reason => setError(reason.message),
   });
   const busy = picking || save.isPending;
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
   return <div className="dsh-connection-settings">
-    <label className="settings-field"><span>默认讨论工具</span>
-      <select aria-label="默认讨论工具" value={provider} disabled={busy || !active}
-        onChange={event => setDiscussionProvider(event.target.value as "dsh" | "codex")}>
-        <option value="codex">Codex</option><option value="dsh">DSH</option>
-      </select>
-    </label>
     <div className="dsh-root-setting">
       <span className="dsh-root-label">默认工作区</span>
       <output className="dsh-root-path" aria-label="Codex 默认工作区">
@@ -107,8 +92,8 @@ export function CodexQuestionActions({ questionId, scope }: { questionId: string
       </button>
       <button className="icon-button" type="button" title="新建独立讨论" aria-label="新建独立讨论" disabled={busy}
         onClick={() => { reset(); prepare.mutate(true); }}><Plus size={16} /></button>
-      <Link className="icon-button" title="Codex 讨论设置" aria-label="Codex 讨论设置"
-        to="/settings?section=codex"><Settings2 size={16} /></Link>
+      <Link className="icon-button" title="讨论工具设置" aria-label="讨论工具设置"
+        to="/settings?section=discussion"><Settings2 size={16} /></Link>
     </div>
     {(prepare.error || open.error || copy.error || attach.error || history.error) && <p role="alert" className="field-error">
       {(prepare.error || open.error || copy.error || attach.error || history.error)?.message}

@@ -121,8 +121,8 @@ async function main() {
   await screenshot({ path: path.join(fixture.project, "desktop-close-choice.png") });
   await page.getByRole("button", { name: "取消关闭", exact: true }).click();
   await page.goto(`${api}/settings?section=desktop`);
-  await page.getByRole("combobox", { name: "关闭窗口行为" }).waitFor();
-  await page.getByRole("combobox", { name: "关闭窗口行为" }).selectOption("background");
+  await page.getByRole("group", { name: "关闭窗口行为" }).waitFor();
+  await page.getByRole("radio", { name: "最小化到托盘，后台继续", exact: true }).click();
   await page.getByText("关闭窗口行为已保存。", { exact: true }).waitFor();
   assert.equal((await page.evaluate(() => window.pywebview.api.describe())).close_behavior, "background");
   await screenshot({ path: path.join(fixture.project, "desktop-settings.png") });
@@ -130,7 +130,7 @@ async function main() {
   await until(() => ipc("status"), state => !state.visible);
   await ipc("activate");
   await until(() => ipc("status"), state => state.visible);
-  await page.getByRole("combobox", { name: "关闭窗口行为" }).selectOption("ask");
+  await page.getByRole("radio", { name: "每次询问", exact: true }).click();
   await until(() => page.evaluate(() => window.pywebview.api.describe()), state => state.close_behavior === "ask");
   await page.goto(`${api}/settings?section=shortcuts`);
   const wakeInput = page.getByRole("textbox", { name: "启动或唤起快捷键", exact: true });

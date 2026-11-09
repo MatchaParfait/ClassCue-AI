@@ -14,6 +14,7 @@ let ai: AiSettings, models: AsrModel[], storage: StorageDirectories;
 const onSaved = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks();
+  sessionStorage.clear();
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -52,7 +53,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => { root.unmount(); client.clear(); router.dispose(); });
-  host.remove(); vi.restoreAllMocks();
+  host.remove(); sessionStorage.clear(); vi.restoreAllMocks();
 });
 async function mount(section: string) {
   router = createMemoryRouter([{ path: "*", element: <QueryClientProvider client={client}><UnsavedChangesProvider>
@@ -65,13 +66,15 @@ async function settle(check: () => void) {
   await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); }); check(); });
 }
 async function click(text: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === text)!;
+  const scope = document.querySelector(".unsaved-dialog") ?? document;
+  const button = [...scope.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === text)!;
   expect(button, text).toBeDefined(); await act(async () => button.click());
 }
 function input(label: string) {
   return host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
     ?? [...host.querySelectorAll("label")].find(item => item.textContent === label)!.querySelector<HTMLInputElement>("input")!;
 }
+const directory = (label: string) => host.querySelector<HTMLOutputElement>(`output[aria-label="${label}"]`)!;
 async function change(label: string, value: string) {
   await act(async () => {
     const field = input(label);
@@ -79,58 +82,216 @@ async function change(label: string, value: string) {
     field.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
-it("keeps an AI draft and key when save fails, retries once, and resumes only the requested category", async () => {
+async function chooseDirectory(label: string, path: string) {
+  vi.mocked(api.createPicker).mockResolvedValue("picker-settings");
+  vi.mocked(api.pollPicker).mockResolvedValue(path);
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>(`[aria-label="选择${label}"]`)!.click();
+  });
+  await settle(() => expect(directory(label).value).toBe(path));
+}
+async function leaveSettings() {
+  await act(async () => { await router.navigate("/"); });
+}
+async function openSettings(section: string) {
+  await act(async () => { await router.navigate(`/settings?section=${section}`); });
+}
+it("retains the AI draft across categories and retries a failed save only when leaving settings", async () => {
   await mount("ai"); await change("模型名称", "draft-model"); await change("API Key", "fixture-secret");
   await click("快捷键");
-  expect(router.state.location.search).toBe("?section=ai");
+  expect(router.state.location.search).toBe("?section=shortcuts");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await click("AI 服务");
+  expect(input("模型名称").value).toBe("draft-model");
+  expect(input("API Key").value).toBe("fixture-secret");
+  await click("快捷键"); await leaveSettings();
   vi.mocked(api.saveAiSettings).mockRejectedValueOnce(new Error("fixture save failure"));
   await click("保存并离开");
   expect(document.querySelector('.unsaved-dialog [role="alert"]')?.textContent).toContain("fixture save failure");
   expect(input("模型名称").value).toBe("draft-model"); expect(input("API Key").value).toBe("fixture-secret");
   await click("保存并离开");
-  expect(router.state.location.search).toBe("?section=shortcuts");
+  expect(router.state.location.pathname).toBe("/");
   expect(api.saveAiSettings).toHaveBeenLastCalledWith(expect.objectContaining({ model: "draft-model" }), { api_key: "fixture-secret" });
   expect(api.saveAiSettings).toHaveBeenCalledTimes(2); expect(onSaved).not.toHaveBeenCalled();
-  await click("AI 服务"); expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await openSettings("ai"); expect(document.querySelector(".unsaved-dialog")).toBeNull();
 });
 it("discards AI edits without saving, including a newly created connection", async () => {
-  await mount("ai"); await change("模型名称", "unsaved"); await click("存储与导入"); await click("放弃修改");
-  await click("AI 服务"); expect(input("模型名称").value).toBe("saved-model");
-  await click("新增"); await click("快捷键"); await click("放弃修改"); await click("AI 服务");
+  await mount("ai"); await change("模型名称", "unsaved"); await click("存储与导入");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await leaveSettings(); await click("放弃修改");
+  expect(router.state.location.pathname).toBe("/");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await openSettings("ai");
+  expect(router.state.location.pathname).toBe("/settings");
+  expect(router.state.location.search).toBe("?section=ai");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  expect(input("模型名称").value).toBe("saved-model");
+  await click("新增"); await click("快捷键");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await leaveSettings(); await click("放弃修改"); await openSettings("ai");
   expect(input("模型名称").value).toBe("saved-model");
   expect(api.saveAiSettings).not.toHaveBeenCalled(); expect(api.createAiConnection).not.toHaveBeenCalled();
 });
 it("guards ASR device changes and does not prompt again after saving", async () => {
   await mount("asr");
   const cpu = () => host.querySelector<HTMLInputElement>('[data-model-id="paraformer-large"] input[value="cpu"]')!;
-  await act(async () => cpu().click()); await click("快捷键"); await click("放弃修改"); await click("ASR 模型");
+  await act(async () => cpu().click()); await click("快捷键");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await click("ASR 模型"); expect(cpu().checked).toBe(true);
+  await click("快捷键"); await leaveSettings(); await click("放弃修改"); await openSettings("asr");
   expect(cpu().checked).toBe(false); expect(api.selectAsrModel).not.toHaveBeenCalled();
-  await act(async () => cpu().click()); await click("快捷键"); await click("保存并离开");
+  await act(async () => cpu().click()); await click("快捷键"); await leaveSettings(); await click("保存并离开");
   expect(api.selectAsrModel).toHaveBeenCalledWith("paraformer-large", undefined, "cpu");
-  expect(router.state.location.search).toBe("?section=shortcuts"); expect(onSaved).not.toHaveBeenCalled();
-  await click("ASR 模型"); await click("快捷键"); expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  expect(router.state.location.pathname).toBe("/"); expect(onSaved).not.toHaveBeenCalled();
+  await openSettings("asr"); await leaveSettings(); expect(document.querySelector(".unsaved-dialog")).toBeNull();
 });
 it("saves ordinary storage preferences but requires a separate confirmation for moving files", async () => {
   await mount("storage"); await act(async () => {
-    const select = host.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
-    select.value = "copy"; select.dispatchEvent(new Event("change", { bubbles: true }));
+    host.querySelector<HTMLInputElement>('.storage-import-options input[value="copy"]')!.click();
   });
-  await click("快捷键"); await click("保存并离开");
+  await click("ASR 模型");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await click("存储与导入");
+  expect(host.querySelector<HTMLInputElement>('.storage-import-options input[value="copy"]')!.checked).toBe(true);
+  await click("ASR 模型"); await leaveSettings(); await click("保存并离开");
   expect(api.saveStorageDirectories).toHaveBeenCalledWith(expect.objectContaining({ delete_source_after_import: false }));
-  await click("存储与导入"); await change("视频与音频存储目录", "E:/new");
-  await click("快捷键"); await click("保存并离开");
-  expect(router.state.location.search).toBe("?section=storage");
+  await openSettings("storage"); await chooseDirectory("视频与音频存储目录", "E:/new");
+  await click("ASR 模型"); await leaveSettings(); await click("保存并离开");
+  await settle(() => expect(router.state.location.search).toBe("?section=storage"));
   expect(host.querySelector('[aria-label="迁移确认"]')).not.toBeNull();
   expect(api.previewStorageMigration).toHaveBeenCalledTimes(1); expect(api.startStorageMigration).not.toHaveBeenCalled();
-  await click("快捷键"); await click("放弃修改"); await click("存储与导入");
-  expect(input("视频与音频存储目录").value).toBe("D:/course");
+  expect(host.querySelector('[aria-label="迁移确认"]')!.closest("[hidden]")).toBeNull();
+  await click("快捷键"); await leaveSettings(); await click("放弃修改"); await openSettings("storage");
+  expect(directory("视频与音频存储目录").value).toBe("D:/course");
 });
 it("keeps the application data restart confirmation before any migration can begin", async () => {
-  await mount("storage"); await change("应用数据目录", "E:/new");
-  await click("快捷键"); await click("保存并离开");
-  expect(router.state.location.search).toBe("?section=storage");
-  expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull();
+  await mount("storage"); await chooseDirectory("应用数据目录", "E:/new");
+  await click("ASR 模型"); await leaveSettings(); await click("保存并离开");
+  await settle(() => expect(router.state.location.search).toBe("?section=storage"));
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
   expect(api.migrateApplicationData).not.toHaveBeenCalled();
-  await click("取消"); await click("快捷键"); await click("放弃修改");
-  expect(input("应用数据目录").value).toBe("");
+  await click("取消"); await click("快捷键"); await leaveSettings(); await click("放弃修改"); await openSettings("storage");
+  expect(directory("应用数据目录").value).toBe("尚未选择目录");
+});
+it("saves drafts from several categories together when leaving the settings page", async () => {
+  await mount("storage");
+  await act(async () => host.querySelector<HTMLInputElement>('.storage-import-options input[value="copy"]')!.click());
+  await click("AI 服务"); await settle(() => expect(input("模型名称").value).toBe("saved-model"));
+  await change("模型名称", "combined-model");
+  await click("ASR 模型");
+  await settle(() => expect(host.querySelector('[data-model-id="paraformer-large"] input[value="cpu"]')).not.toBeNull());
+  await act(async () => host.querySelector<HTMLInputElement>('[data-model-id="paraformer-large"] input[value="cpu"]')!.click());
+  await click("快捷键");
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  expect(api.saveStorageDirectories).not.toHaveBeenCalled();
+  expect(api.saveAiSettings).not.toHaveBeenCalled();
+  expect(api.selectAsrModel).not.toHaveBeenCalled();
+  await leaveSettings();
+  const description = document.querySelector("#unsaved-description")!.textContent;
+  expect(description).toContain("存储与导入");
+  expect(description).toContain("AI 服务连接");
+  expect(description).toContain("ASR 模型与设备");
+  await click("保存并离开");
+  expect(router.state.location.pathname).toBe("/");
+  expect(api.saveStorageDirectories).toHaveBeenCalledWith(expect.objectContaining({ delete_source_after_import: false }));
+  expect(api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({ model: "combined-model" }), undefined);
+  expect(api.selectAsrModel).toHaveBeenCalledWith("paraformer-large", undefined, "cpu");
+  expect(onSaved).not.toHaveBeenCalled();
+});
+it("returns to the responsible category when continuing to edit after a hidden draft fails validation", async () => {
+  await mount("ai"); await change("模型名称", "draft-model");
+  await click("快捷键"); await leaveSettings();
+  vi.mocked(api.saveAiSettings).mockRejectedValueOnce(new Error("请检查 AI 连接"));
+  await click("保存并离开");
+  expect(router.state.location.search).toBe("?section=shortcuts");
+  expect(document.querySelector(".unsaved-dialog")).not.toBeNull();
+  await click("继续编辑");
+  await settle(() => expect(router.state.location.search).toBe("?section=ai"));
+  expect(input("模型名称").value).toBe("draft-model");
+});
+it.each(["direct", "leaving"] as const)("protects other category drafts before an application data restart through %s confirmation", async entry => {
+  await mount("storage"); await chooseDirectory("应用数据目录", "E:/new");
+  await click("ASR 模型");
+  await settle(() => expect(host.querySelector('[data-model-id="paraformer-large"] input[value="cpu"]')).not.toBeNull());
+  await act(async () => host.querySelector<HTMLInputElement>('[data-model-id="paraformer-large"] input[value="cpu"]')!.click());
+  await click("AI 服务"); await settle(() => expect(input("模型名称").value).toBe("saved-model"));
+  await change("模型名称", "draft-model");
+  if (entry === "leaving") {
+    await leaveSettings(); await click("保存并离开");
+    await settle(() => expect(router.state.location.search).toBe("?section=storage"));
+  } else {
+    await click("存储与导入"); await click("检查迁移范围");
+  }
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  await click("迁移并立即重启");
+  expect(document.querySelector("#unsaved-description")!.textContent).toContain("AI 服务连接");
+  expect(document.querySelector("#unsaved-description")!.textContent).toContain("ASR 模型与设备");
+  expect(document.querySelector("#unsaved-description")!.textContent).not.toContain("应用数据目录");
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  vi.mocked(api.previewApplicationData).mockResolvedValue({ plan_id: "refreshed-plan", destination: "E:/new",
+    database_dir: "E:/new/library", config_dir: "E:/new/config", files_total: 3, bytes_total: 300, free_bytes: 10000 });
+  await click("保存并离开");
+  await settle(() => expect(api.previewApplicationData).toHaveBeenCalledTimes(2));
+  expect(api.selectAsrModel).toHaveBeenCalledWith("paraformer-large", undefined, "cpu");
+  expect(api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({ model: "draft-model" }), undefined);
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  vi.mocked(api.migrateApplicationData).mockResolvedValue({ id: "app-migration", status: "restarting" });
+  await click("迁移并立即重启");
+  await settle(() => expect(api.migrateApplicationData).toHaveBeenCalledWith({
+    destination: "E:/new", library_id: "fixture", plan_id: "refreshed-plan",
+  }));
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+});
+it("allows canceling or discarding other drafts while preserving the application data destination", async () => {
+  await mount("storage"); await chooseDirectory("应用数据目录", "E:/new");
+  await click("AI 服务"); await settle(() => expect(input("模型名称").value).toBe("saved-model"));
+  await change("模型名称", "unsaved-model"); await click("存储与导入"); await click("检查迁移范围");
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  await click("迁移并立即重启"); await click("继续编辑");
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  expect(api.saveAiSettings).not.toHaveBeenCalled();
+  expect(input("模型名称").value).toBe("unsaved-model");
+  expect(directory("应用数据目录").value).toBe("E:/new");
+  await click("检查迁移范围");
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  await click("迁移并立即重启"); await click("放弃修改");
+  await settle(() => expect(api.previewApplicationData).toHaveBeenCalledTimes(3));
+  expect(input("模型名称").value).toBe("saved-model");
+  expect(directory("应用数据目录").value).toBe("E:/new");
+  expect(api.saveAiSettings).not.toHaveBeenCalled();
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  expect(document.querySelector(".unsaved-dialog")).toBeNull();
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+});
+it("prevents application data migration when another category fails to save", async () => {
+  await mount("storage"); await chooseDirectory("应用数据目录", "E:/new");
+  await click("AI 服务"); await settle(() => expect(input("模型名称").value).toBe("saved-model"));
+  await change("模型名称", "draft-model"); await click("存储与导入"); await click("检查迁移范围");
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  await click("迁移并立即重启");
+  vi.mocked(api.saveAiSettings).mockRejectedValueOnce(new Error("fixture save failure"));
+  await click("保存并离开");
+  expect(document.querySelector('.unsaved-dialog [role="alert"]')?.textContent).toContain("fixture save failure");
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  expect(api.previewApplicationData).toHaveBeenCalledTimes(1);
+  await click("继续编辑");
+  await settle(() => expect(router.state.location.search).toBe("?section=ai"));
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).toBeNull());
+  expect(input("模型名称").value).toBe("draft-model");
+});
+it("requires other directory migration confirmation before restarting for application data", async () => {
+  await mount("storage"); await chooseDirectory("应用数据目录", "E:/new");
+  await chooseDirectory("视频与音频存储目录", "E:/media");
+  await click("检查迁移范围");
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).not.toBeNull());
+  await click("迁移并立即重启"); await click("保存并离开");
+  await settle(() => expect(document.querySelector(".unsaved-dialog")).toBeNull());
+  await settle(() => expect(document.querySelector('[aria-labelledby="application-data-confirm-title"]')).toBeNull());
+  expect(host.querySelector('[aria-label="迁移确认"]')).not.toBeNull();
+  expect(api.previewStorageMigration).toHaveBeenCalledTimes(1);
+  expect(api.startStorageMigration).not.toHaveBeenCalled();
+  expect(api.migrateApplicationData).not.toHaveBeenCalled();
+  expect(directory("应用数据目录").value).toBe("E:/new");
 });

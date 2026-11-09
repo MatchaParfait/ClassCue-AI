@@ -1,5 +1,5 @@
-import { useUnsavedDraft } from "./UnsavedChanges";
-import { useEffect, useRef, useState } from "react";
+import { useUnsavedDraft, useUnsavedLeave } from "./UnsavedChanges";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, FolderOpen, LoaderCircle, RotateCcw } from "lucide-react";
@@ -19,6 +19,8 @@ export function ApplicationDataSection({ directories, onError, active = true }: 
   directories?: StorageDirectories; onError: (error: unknown) => void; active?: boolean;
 }) {
   const client = useQueryClient();
+  const draftId = useId();
+  const leave = useUnsavedLeave(draftId);
   const [draft, setDraft] = useState<string | null>(null);
   const [plan, setPlan] = useState<ApplicationDataPlan | null>(null);
   const [picker, setPicker] = useState(false);
@@ -59,11 +61,11 @@ export function ApplicationDataSection({ directories, onError, active = true }: 
   });
   useModalFocus(active && Boolean(plan), dialog, cancelButton, () => { if (!move.isPending) setPlan(null); },
     undefined, previewButton.current);
-  const clearUnsaved = useUnsavedDraft({ label: "应用数据目录",
+  const clearUnsaved = useUnsavedDraft({ id: draftId, label: "应用数据目录",
     dirty: Boolean(data && draft !== null && draft.trim() !== (data.root ?? "") && !restart),
     busy: preview.isPending || move.isPending || picker,
     save: async () => {
-      if (!draft?.trim()) throw new Error("请填写应用数据目录。");
+      if (!draft?.trim()) throw new Error("请选择应用数据目录。");
       if (!directories || directories.busy || restart) throw new Error("当前有任务或迁移，请稍后修改目录。");
       await preview.mutateAsync(); return false;
     },
@@ -80,8 +82,8 @@ export function ApplicationDataSection({ directories, onError, active = true }: 
     <fieldset className="storage-directory-fields" disabled={busy}>
       <div className="storage-directory-row">
         <label className="settings-field grow"><span>应用数据目录<small>迁移并立即重启</small></span>
-          <input aria-label="应用数据目录" value={value} placeholder="选择目录，自动创建 library 和 config"
-            onChange={event => { setDraft(event.target.value); setPlan(null); }} spellCheck={false} autoComplete="off" />
+          <output className="storage-directory-path" aria-label="应用数据目录"
+            title={value}>{value || "尚未选择目录"}</output>
         </label>
         <button className="icon-button settings-picker-button" aria-label="选择应用数据目录" title="选择应用数据目录" type="button" onClick={async () => {
           setPicker(true);
@@ -114,7 +116,13 @@ export function ApplicationDataSection({ directories, onError, active = true }: 
       <dl className="storage-derived-paths"><div><dt>数据库</dt><dd>{plan.database_dir}</dd></div>
         <div><dt>设置与凭据</dt><dd>{plan.config_dir}</dd></div></dl>
       <p>原数据库和配置保留为备份；现有视频文件位置不变。</p>
-      <div className="settings-action-row"><button className="primary-button" disabled={busy} onClick={() => move.mutate()}>
+      <div className="settings-action-row"><button className="primary-button" disabled={busy} onClick={() => leave(async resolvedDrafts => {
+        if (resolvedDrafts) {
+          // Saving another category can invalidate the reviewed migration plan.
+          setPlan(null);
+          await preview.mutateAsync();
+        } else move.mutate();
+      }, () => setPlan(null))}>
         {move.isPending ? <LoaderCircle className="spin" size={16} /> : <RotateCcw size={16} />}迁移并立即重启</button>
         <button ref={cancelButton} className="secondary-button" disabled={busy} onClick={() => setPlan(null)}>取消</button></div>
       </section></AnimatedPopup>

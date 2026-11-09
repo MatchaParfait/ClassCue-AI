@@ -28,18 +28,20 @@ function render(value = data, flags = {}) {
     data={value} isLoading={false} isError={false} onSuccess={onSuccess} onError={onError} onRetry={onRetry} {...flags}
   /></QueryClientProvider>));
 }
-const input = (label: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+const directory = (label: string) => container.querySelector<HTMLOutputElement>(`output[aria-label="${label}"]`)!;
 const save = () => [...container.querySelectorAll("button")].find((button) => /保存设置|检查并迁移/.test(button.textContent ?? ""))!;
 const plan = { plan_id: "plan", files_total: 2, bytes_total: 1024,
   sections: [{ label: "临时音频与转写缓存", source: data.audio_cache_dir, target: "E:\\cache", files: 2, bytes: 1024 }],
   disks: [{ path: "E:\\", required_bytes: 1024, free_bytes: 4096 }], warnings: ["旧运行环境保留"] };
-function change(label: string, value: string) {
-  act(() => {
-    const field = input(label);
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+async function choose(label: string, value: string | null) {
+  vi.mocked(createPicker).mockResolvedValue("picker-1");
+  vi.mocked(pollPicker).mockResolvedValue(value);
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>(`[aria-label="选择${label}"]`)!.click();
   });
+  await settle(() => expect(container.querySelector(".storage-directory-fields")!.matches(":disabled")).toBe(false));
 }
+const mode = (value: "copy" | "move") => container.querySelector<HTMLInputElement>(`.storage-import-options input[value="${value}"]`)!;
 async function settle(check: () => void) {
   await vi.waitFor(async () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
@@ -65,8 +67,8 @@ afterEach(async () => {
 });
 
 it("shows saved paths and derived directories without changing anything", () => {
-  expect(input("ASR 资源目录").value).toBe(data.asr_storage_root);
-  expect(input("视频与音频存储目录").value).toBe(data.media_storage_root);
+  expect(directory("ASR 资源目录").value).toBe(data.asr_storage_root);
+  expect(directory("视频与音频存储目录").value).toBe(data.media_storage_root);
   expect(container.querySelector('input[aria-label="视频库目录"]')).toBeNull();
   expect(container.querySelector('input[aria-label="临时音频与转写缓存"]')).toBeNull();
   expect(container.textContent).toContain(data.video_library_dir);
@@ -75,10 +77,17 @@ it("shows saved paths and derived directories without changing anything", () => 
   expect(container.textContent).toContain("下方“应用数据”中迁移");
   expect(save().disabled).toBe(true);
   expect(saveStorageDirectories).not.toHaveBeenCalled();
+  for (const label of ["视频与音频存储目录", "ASR 资源目录", "诊断日志目录"]) {
+    expect(container.querySelector(`input[aria-label="${label}"]`)).toBeNull();
+    directory(label).focus();
+    expect(document.activeElement).not.toBe(directory(label));
+  }
+  expect(container.querySelector('select[aria-label="本机视频导入方式"]')).toBeNull();
+  expect(container.querySelectorAll('.storage-import-options input[type="radio"]')).toHaveLength(2);
 });
 
 it("previews trimmed paths and starts a reviewed background migration before displaying the persisted result", async () => {
-  change("视频与音频存储目录", " E:\\cache ");
+  await choose("视频与音频存储目录", " E:\\cache ");
   expect(save().disabled).toBe(false);
   const result = { ...data, media_storage_root: "E:\\cache", media_storage_bound: true,
     audio_cache_dir: "E:\\cache\\audio", video_library_dir: "E:\\cache\\videos" };
@@ -95,25 +104,25 @@ it("previews trimmed paths and starts a reviewed background migration before dis
     delete_source_after_import: true,
     plan_id: "plan",
   });
-  expect(input("视频与音频存储目录").value).toBe("E:\\cache");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\cache");
   expect(save().disabled).toBe(true);
   expect(container.querySelector('[aria-label="目录迁移进度"]')?.textContent).toContain("目录迁移完成");
   await act(async () => { root.unmount(); });
   root = createRoot(container);
   render({ ...result, migration_job: { id: "move-1", status: "completed", progress: 1, message: "目录迁移完成" } });
   expect(container.querySelector('[aria-label="目录迁移进度"]')).toBeNull();
-  expect(input("视频与音频存储目录").value).toBe("E:\\cache");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\cache");
   expect(getJobStatus).toHaveBeenCalledTimes(1);
 });
 
 it("keeps the edit and reports a failed preflight instead of claiming success", async () => {
-  change("诊断日志目录", "E:\\logs");
+  await choose("诊断日志目录", "E:\\logs");
   const error = new Error("Access denied");
   vi.mocked(previewStorageMigration).mockRejectedValue(error);
   await act(async () => { save().click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
   await settle(() => expect(onError).toHaveBeenCalledWith(error));
   expect(onSuccess).not.toHaveBeenCalled();
-  expect(input("诊断日志目录").value).toBe("E:\\logs");
+  expect(directory("诊断日志目录").value).toBe("E:\\logs");
   expect(save().disabled).toBe(false);
 });
 
@@ -121,7 +130,7 @@ it("uses the native directory picker but waits for explicit save", async () => {
   vi.mocked(createPicker).mockResolvedValue("picker-1");
   vi.mocked(pollPicker).mockResolvedValue("E:\\assets");
   await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="选择ASR 资源目录"]')!.click(); });
-  await settle(() => expect(input("ASR 资源目录").value).toBe("E:\\assets"));
+  await settle(() => expect(directory("ASR 资源目录").value).toBe("E:\\assets"));
   expect(createPicker).toHaveBeenCalledWith("directory");
   expect(pollPicker).toHaveBeenCalledWith("picker-1");
   expect(saveStorageDirectories).not.toHaveBeenCalled();
@@ -131,7 +140,7 @@ it("one directory picker derives both videos and audio and migrates them togethe
   vi.mocked(createPicker).mockResolvedValue("picker-media");
   vi.mocked(pollPicker).mockResolvedValue("E:\\media");
   await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="选择视频与音频存储目录"]')!.click(); });
-  await settle(() => expect(input("视频与音频存储目录").value).toBe("E:\\media"));
+  await settle(() => expect(directory("视频与音频存储目录").value).toBe("E:\\media"));
   expect(container.textContent).toContain("E:\\media\\videos");
   expect(container.textContent).toContain("E:\\media\\audio");
   const result = { ...data, media_storage_root: "E:\\media", media_storage_bound: true,
@@ -148,7 +157,7 @@ it("one directory picker derives both videos and audio and migrates them togethe
     delete_source_after_import: true,
     plan_id: "plan",
   });
-  expect(input("视频与音频存储目录").value).toBe("E:\\media");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\media");
 });
 
 it("preserves paths when the directory picker is canceled", async () => {
@@ -156,7 +165,7 @@ it("preserves paths when the directory picker is canceled", async () => {
   vi.mocked(pollPicker).mockResolvedValue(null);
   await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="选择ASR 资源目录"]')!.click(); });
   await settle(() => expect(container.querySelector("fieldset")!.disabled).toBe(false));
-  expect(input("ASR 资源目录").value).toBe(data.asr_storage_root);
+  expect(directory("ASR 资源目录").value).toBe(data.asr_storage_root);
   expect(save().disabled).toBe(true);
 });
 
@@ -164,12 +173,12 @@ it("restores the default parent directory for both videos and audio and can reve
   render({ ...data, media_storage_root: "E:\\custom", media_storage_bound: true,
     video_library_dir: "E:\\custom\\videos", audio_cache_dir: "E:\\custom\\audio" });
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="恢复默认存储目录"]')!.click());
-  expect(input("视频与音频存储目录").value).toBe(data.media_storage_default_root);
+  expect(directory("视频与音频存储目录").value).toBe(data.media_storage_default_root);
   expect(container.textContent).toContain("D:\\course\\videos");
   expect(container.textContent).toContain("D:\\course\\audio");
   expect(save().disabled).toBe(false);
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="撤销未保存的目录修改"]')!.click());
-  expect(input("视频与音频存储目录").value).toBe("E:\\custom");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\custom");
   expect(save().disabled).toBe(true);
 });
 
@@ -181,17 +190,17 @@ it.each([false, true])("locks changes while jobs are active (paused=%s)", (pause
   if (paused) expect(container.textContent).toContain("暂停的任务仍依赖原缓存");
 });
 
-it("shows pending restart paths and keeps drafts during background status refresh", () => {
-  change("诊断日志目录", "E:\\draft");
+it("shows pending restart paths and keeps drafts during background status refresh", async () => {
+  await choose("诊断日志目录", "E:\\draft");
   render({ ...data, restart_required: true, active_asr_storage_root: "C:\\old-assets", busy: true });
-  expect(input("诊断日志目录").value).toBe("E:\\draft");
+  expect(directory("诊断日志目录").value).toBe("E:\\draft");
   expect(container.textContent).toContain("C:\\old-assets");
   render({ ...data, restart_required: true });
   expect(container.textContent).toContain("已保存，待重启生效");
 });
 
 it("does not save blank paths and supports retry after loading failure", () => {
-  change("ASR 资源目录", "   ");
+  render({ ...data, asr_storage_root: "" });
   expect(save().disabled).toBe(true);
   render(data, { isError: true });
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="重新读取存储目录"]')!.click());
@@ -199,10 +208,10 @@ it("does not save blank paths and supports retry after loading failure", () => {
 });
 
 it("preserves the saved move preference and can select copy mode", async () => {
-  const select = container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
-  expect(select.value).toBe("move");
-  act(() => { select.value = "copy"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(select.value).toBe("copy");
+  expect(mode("move").checked).toBe(true);
+  act(() => mode("copy").click());
+  expect(mode("copy").checked).toBe(true);
+  expect(mode("move").checked).toBe(false);
   expect(save().disabled).toBe(false);
   const result = { ...data, delete_source_after_import: false };
   vi.mocked(saveStorageDirectories).mockResolvedValue(result);
@@ -210,28 +219,28 @@ it("preserves the saved move preference and can select copy mode", async () => {
   await act(async () => { save().click(); });
   await settle(() => expect(onSuccess).toHaveBeenCalledWith(result));
   expect(saveStorageDirectories).toHaveBeenCalledWith(expect.objectContaining({ delete_source_after_import: false }));
-  expect(container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!.value).toBe("copy");
+  expect(mode("copy").checked).toBe(true);
   expect(save().disabled).toBe(true);
 });
 
-it("preserves copy-only mode when editing directories and reverting drafts", () => {
+it("preserves copy-only mode when editing directories and reverting drafts", async () => {
   render({ ...data, delete_source_after_import: false });
-  change("视频与音频存储目录", "E:\\videos");
-  const select = container.querySelector<HTMLSelectElement>('[aria-label="本机视频导入方式"]')!;
-  expect(select.value).toBe("copy");
-  act(() => { select.value = "move"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(select.value).toBe("move");
+  await choose("视频与音频存储目录", "E:\\videos");
+  expect(mode("copy").checked).toBe(true);
+  act(() => mode("move").click());
+  expect(mode("move").checked).toBe(true);
+  expect(mode("copy").checked).toBe(false);
   act(() => container.querySelector<HTMLButtonElement>('[aria-label="撤销未保存的目录修改"]')!.click());
-  expect(select.value).toBe("copy");
-  expect(input("视频与音频存储目录").value).toBe(data.media_storage_root);
+  expect(mode("copy").checked).toBe(true);
+  expect(directory("视频与音频存储目录").value).toBe(data.media_storage_root);
   expect(save().disabled).toBe(true);
 });
 
 it("invalidates the reviewed plan if the destination is edited", async () => {
-  change("视频与音频存储目录", "E:\\cache");
+  await choose("视频与音频存储目录", "E:\\cache");
   await act(async () => { save().click(); });
   await settle(() => expect(container.textContent).toContain("确认迁移范围"));
-  change("视频与音频存储目录", "F:\\cache");
+  await choose("视频与音频存储目录", "F:\\cache");
   expect(container.textContent).not.toContain("确认迁移范围");
   expect(startStorageMigration).not.toHaveBeenCalled();
 });
@@ -249,22 +258,22 @@ it("recovers running progress after remount and disables editing until it finish
 
 it("retains draft and reports a background migration failure", async () => {
   vi.mocked(getJobStatus).mockResolvedValue({ id: "move-1", status: "failed", error_message: "磁盘空间不足" });
-  change("视频与音频存储目录", "E:\\cache");
+  await choose("视频与音频存储目录", "E:\\cache");
   await act(async () => { save().click(); });
   await settle(() => expect(container.textContent).toContain("确认迁移范围"));
   await act(async () => { [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("开始迁移"))!.click(); });
   await settle(() => expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "磁盘空间不足" })));
-  expect(input("视频与音频存储目录").value).toBe("E:\\cache");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\cache");
   expect(onSuccess).not.toHaveBeenCalled();
 });
 
-it("hides historical completed migration progress without polling or overwriting fresh edits", () => {
+it("hides historical completed migration progress without polling or overwriting fresh edits", async () => {
   render({ ...data, migration_job: { id: "old-move", status: "completed" } });
   expect(container.querySelector('[aria-label="目录迁移进度"]')).toBeNull();
   expect(getJobStatus).not.toHaveBeenCalled();
-  change("视频与音频存储目录", "E:\\draft");
+  await choose("视频与音频存储目录", "E:\\draft");
   expect(getStorageDirectories).not.toHaveBeenCalled();
-  expect(input("视频与音频存储目录").value).toBe("E:\\draft");
+  expect(directory("视频与音频存储目录").value).toBe("E:\\draft");
 });
 
 it.each(["failed", "interrupted"])("keeps historical %s migration errors visible after restarting", (status) => {
@@ -274,20 +283,21 @@ it.each(["failed", "interrupted"])("keeps historical %s migration errors visible
   expect(container.querySelector("fieldset")!.disabled).toBe(false);
 });
 
-it("keeps legacy split directories until a parent is explicitly selected", () => {
+it("keeps legacy split directories until a parent is explicitly selected", async () => {
   render({ ...data, media_storage_root: null, video_library_dir: "E:\\old-videos", audio_cache_dir: "F:\\old-audio" });
-  expect(input("视频与音频存储目录").value).toBe("");
+  expect(directory("视频与音频存储目录").value).toBe("尚未选择目录");
   expect(container.textContent).toContain("E:\\old-videos");
   expect(container.textContent).toContain("F:\\old-audio");
   expect(save().disabled).toBe(true);
-  change("视频与音频存储目录", "G:\\media");
+  await choose("视频与音频存储目录", "G:\\media");
   expect(container.textContent).toContain("G:\\media\\videos");
   expect(container.textContent).toContain("G:\\media\\audio");
   expect(save().disabled).toBe(false);
 });
 
-it("rejects an empty parent draft without starting a migration", () => {
-  change("视频与音频存储目录", "   ");
+it("keeps the selection unchanged when the folder picker returns no path", async () => {
+  await choose("视频与音频存储目录", null);
+  expect(directory("视频与音频存储目录").value).toBe(data.media_storage_root);
   expect(save().disabled).toBe(true);
   expect(previewStorageMigration).not.toHaveBeenCalled();
   expect(startStorageMigration).not.toHaveBeenCalled();

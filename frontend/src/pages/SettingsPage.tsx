@@ -1,11 +1,10 @@
-import { useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
+import { UnsavedDraftScope, useUnsavedDraft, useUnsavedLeave } from "../components/UnsavedChanges";
 import { CharacterEye } from "../components/CharacterAccent";
 import { WarmAtmosphere } from "../components/WarmAtmosphere";
 import { SettingsHerons } from "../components/SettingsHerons";
 import { ShortcutSettings } from "../components/ShortcutSettings";
 import { DesktopSettings } from "../components/DesktopSettings";
-import { DshSettingsSection } from "../components/DshConnectionSettings";
-import { CodexSettingsSection } from "../components/CodexDiscussion";
+import { DiscussionSettingsSection } from "../components/DiscussionSettings";
 import { useDesktopAPI } from "../hooks/useDesktopAPI";
 import { InteractionSettings } from "../components/InteractionSettings";
 import { SecondaryViewSettings } from "../components/SecondaryViewSettings";
@@ -110,7 +109,10 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const section = guidedSection ?? (["storage", "asr", "ai", "recall", "dsh", "codex", "experimental", "desktop", "shortcuts", "updates"].includes(searchParams.get("section") ?? "") ? searchParams.get("section")! : "storage");
+  const requestedSection = searchParams.get("section") ?? "";
+  const section = guidedSection ?? (["dsh", "codex"].includes(requestedSection) ? "discussion"
+    : ["storage", "asr", "ai", "recall", "discussion", "experimental", "desktop", "shortcuts", "updates"].includes(requestedSection) ? requestedSection : "storage");
+  const showSection = (value: string) => setSearchParams({ section: value }, { replace: true, state: location.state });
   const asr = useQuery({ queryKey: ["settings", "asr"], queryFn: getAsrModels, enabled: active && section === "asr", staleTime: 60_000 });
   const ai = useQuery({ queryKey: ["settings", "ai"], queryFn: getAiSettings, enabled: active && section === "ai" });
   const directoriesKey = ["settings", "directories"];
@@ -165,8 +167,8 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
 
         <div className="settings-layout">
           {!guidedSection && <nav className="settings-navigation" aria-label="设置分类">
-            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["dsh", "DSH 讨论", MessageSquare], ["codex", "Codex 讨论", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => !["dsh", "codex"].includes(key) || desktop).map(([key, label, Icon]) =>
-              <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => setSearchParams({ section: key }, { replace: true, state: location.state })}>
+            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["ai", "AI 服务", Server], ["discussion", "讨论工具", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => key !== "discussion" || desktop).map(([key, label, Icon]) =>
+              <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => showSection(key)}>
                 {section === key && <SelectionIndicator id={`${selectionScope}-settings`} />}<Icon size={18} /><span>{label}</span>
               </button>)}
             <button className="settings-onboarding-trigger" type="button"
@@ -176,13 +178,16 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           </nav>}
           <div ref={contentRef} className="settings-content">
         {!guidedSection && <div hidden={section !== "updates"}><UpdateSettings active={active && section === "updates"} /></div>}
-        {!guidedSection && <div hidden={section !== "recall"}><RecallSchemeSettings active={active && section === "recall"} onSaved={onConfigurationSaved} /></div>}
-        {(!guidedSection || section === "shortcuts") && <div hidden={section !== "shortcuts"}><ShortcutSettings /></div>}
+        {!guidedSection && <div hidden={section !== "recall"}><UnsavedDraftScope onReview={() => showSection("recall")}>
+          <RecallSchemeSettings active={active && section === "recall"} onSaved={onConfigurationSaved} />
+        </UnsavedDraftScope></div>}
+        {(!guidedSection || section === "shortcuts") && <div hidden={section !== "shortcuts"}><UnsavedDraftScope onReview={() => showSection("shortcuts")}>
+          <ShortcutSettings />
+        </UnsavedDraftScope></div>}
         {!guidedSection && <div hidden={section !== "desktop"}><DesktopSettings active={active && section === "desktop"} /><InteractionSettings /></div>}
-        {!guidedSection && desktop && section === "dsh" && <DshSettingsSection active={active} scope={scope} />}
-        {!guidedSection && desktop && section === "codex" && <CodexSettingsSection active={active} scope={scope} />}
+        {!guidedSection && desktop && section === "discussion" && <div><DiscussionSettingsSection active={active} scope={scope} /></div>}
         {!guidedSection && <div hidden={section !== "experimental"}><ExperimentalSettings active={active && section === "experimental"} /></div>}
-        {(!guidedSection || section === "storage") && <div hidden={section !== "storage"}>
+        {(!guidedSection || section === "storage") && <div hidden={section !== "storage"}><UnsavedDraftScope onReview={() => showSection("storage")}>
         <StorageDirectoriesSection
           data={directories.data}
           isLoading={directories.isLoading}
@@ -202,8 +207,8 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
         />
         {!guidedSection && <SecondaryViewSettings />}
         {!guidedSection && <ApplicationDataSection active={active && section === "storage"} directories={directories.data} onError={(error) => notify("error", errorMessage(error))} />}
-        </div>}
-        {(!guidedSection || section === "asr") && <div hidden={section !== "asr"}>
+        </UnsavedDraftScope></div>}
+        {(!guidedSection || section === "asr") && <div hidden={section !== "asr"}><UnsavedDraftScope onReview={() => showSection("asr")}>
         <AsrSection
           active={active && section === "asr"}
           guided={guidedSection === "asr"}
@@ -218,8 +223,8 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           }}
           onError={(error) => notify("error", errorMessage(error))}
         />
-        </div>}
-        {(!guidedSection || section === "ai") && <div hidden={section !== "ai"}>
+        </UnsavedDraftScope></div>}
+        {(!guidedSection || section === "ai") && <div hidden={section !== "ai"}><UnsavedDraftScope onReview={() => showSection("ai")}>
         <AiSection
           active={active && section === "ai"}
           onSaved={onConfigurationSaved}
@@ -238,7 +243,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           onError={(error) => notify("error", errorMessage(error))}
           onInvalidate={invalidateAi}
         />
-        </div>}
+        </UnsavedDraftScope></div>}
           </div>
         </div>
       </div>

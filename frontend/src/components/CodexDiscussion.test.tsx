@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DshQuestionActions } from "./DshQuestionActions";
-import { CodexSettingsSection } from "./CodexDiscussion";
+import { DiscussionSettingsSection } from "./DiscussionSettings";
 import * as api from "../api/codexBridge";
 import * as pickers from "../api/client";
 import { setDiscussionProvider } from "../hooks/useDiscussionProvider";
@@ -56,8 +56,9 @@ async function mount(child: React.ReactNode) {
   </QueryClientProvider>));
 }
 
-it("saves the chosen root and switches all discussion entry points to Codex", async () => {
-  await mount(<CodexSettingsSection scope="library" />);
+it("saves the chosen Codex root and uses the selected tool at discussion entry points", async () => {
+  setDiscussionProvider("codex");
+  await mount(<DiscussionSettingsSection scope="library" />);
   await act(async () => button("选择默认工作区").click());
   expect(api.setCodexSettings).toHaveBeenCalledWith({ root: saved.root });
   expect(pickers.createPicker).toHaveBeenCalledWith("directory");
@@ -70,9 +71,10 @@ it("saves the chosen root and switches all discussion entry points to Codex", as
 });
 
 it("cancelling root selection preserves the settings and does not prepare discussions", async () => {
+  setDiscussionProvider("codex");
   vi.mocked(api.getCodexSettings).mockResolvedValue(saved);
   vi.mocked(pickers.pollPicker).mockResolvedValue(null);
-  await mount(<CodexSettingsSection />);
+  await mount(<DiscussionSettingsSection />);
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   await act(async () => button("更改默认工作区").click());
   expect(host.textContent).toContain(saved.root);

@@ -34,10 +34,10 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 afterEach(() => { act(() => { root.unmount(); client.clear(); }); host.remove(); vi.restoreAllMocks(); });
-async function mount(active = true) {
+async function mount(active = true, expected = "张老师") {
   await act(async () => root.render(<QueryClientProvider client={client}><UnsavedChangesProvider>
     <RecallSchemeSettings active={active} /></UnsavedChangesProvider></QueryClientProvider>));
-  if (active) await vi.waitFor(() => expect(host.textContent).toContain("张老师"));
+  if (active) await vi.waitFor(() => expect(host.textContent).toContain(expected));
 }
 function button(text: string) {
   const found = [...host.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === text);
@@ -58,6 +58,16 @@ it("does not load the catalogue in inactive settings or call AI when editing", a
   await mount(false);
   expect(api.getRecallSchemes).not.toHaveBeenCalled();
   expect(api.saveRecallScheme).not.toHaveBeenCalled();
+});
+
+it.each([true, false])("hides archived schemes after loading, including when active schemes remain (%s)", async hasActive => {
+  const removed: RecallScheme = { ...first, id: `custom_${"c".repeat(32)}`, name: "旧测试方案", archived: true };
+  vi.mocked(api.getRecallSchemes).mockResolvedValue(hasActive ? [first, removed] : [removed]);
+  await mount(true, hasActive ? first.name : "暂无自定义方案");
+  expect(host.textContent).not.toContain(removed.name);
+  expect(host.textContent).not.toContain("已停用方案");
+  expect(host.querySelector(".recall-archived")).toBeNull();
+  expect(client.getQueryData<RecallScheme[]>(recallSchemesKey)).toContainEqual(removed);
 });
 
 it("creates a named derived scheme with bounded teacher expressions and preferences", async () => {
@@ -276,18 +286,22 @@ it("preserves legacy ordinary expressions and shares the twenty-expression limit
   }), first.id);
 });
 
-it("copies to a new ID and archives only after explicit confirmation without deleting results", async () => {
+it("copies to a new ID and removes a scheme only after confirmation while retaining its history record", async () => {
   await mount();
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="复制方案“张老师”"]')!.click());
   expect(host.querySelector<HTMLInputElement>(".recall-scheme-form input")?.value).toBe("张老师（副本）");
   await click("保存方案");
   expect(api.saveRecallScheme).toHaveBeenCalledWith(expect.objectContaining({ name: "张老师（副本）" }), undefined);
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="停用方案“张老师”"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="删除方案“张老师”"]')!.click());
   expect(api.archiveRecallScheme).not.toHaveBeenCalled();
   await click("取消");
   expect(api.archiveRecallScheme).not.toHaveBeenCalled();
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="停用方案“张老师”"]')!.click());
-  await click("确认停用");
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="删除方案“张老师”"]')!.click());
+  await click("确认删除");
   expect(vi.mocked(api.archiveRecallScheme).mock.calls[0][0]).toBe(first.id);
   expect(host.textContent).toContain("历史结果保留");
+  expect(host.textContent).toContain("方案已删除");
+  expect(host.querySelector(`.recall-scheme-entry[title="${first.name}"]`)).toBeNull();
+  expect(host.querySelector(".recall-archived")).toBeNull();
+  expect(client.getQueryData<RecallScheme[]>(recallSchemesKey)?.find(item => item.id === first.id)?.archived).toBe(true);
 });

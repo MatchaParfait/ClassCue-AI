@@ -1,7 +1,7 @@
 import { useUnsavedDraft } from "./UnsavedChanges";
 import { CharacterEye } from "./CharacterAccent";
 import { AlertCircle, FolderOpen, HardDrive, LoaderCircle, RefreshCw, RotateCcw, Save } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createPicker, getJobStatus, getStorageDirectories, pollPicker, previewStorageMigration, saveStorageDirectories, startStorageMigration } from "../api/client";
 import type { StorageDirectories, StorageDirectoryValues, StorageMigrationPlan } from "../types";
@@ -28,6 +28,7 @@ interface Props {
 }
 
 export function StorageDirectoriesSection({ data, isLoading, isError, onRetry, onSuccess, onError, onStarted }: Props) {
+  const importModeName = useId();
   const [draft, setDraft] = useState<StorageDirectoryValues | null>(null);
   const [mediaRootDraft, setMediaRootDraft] = useState<string | null>(null);
   const [pickerKey, setPickerKey] = useState<DirectoryKey | null>(null);
@@ -100,7 +101,7 @@ export function StorageDirectoriesSection({ data, isLoading, isError, onRetry, o
     busy: save.isPending || preview.isPending || start.isPending || Boolean(pickerKey),
     save: async () => {
       if (busy) throw new Error("当前有任务或目录操作，请稍后保存。");
-      if (!valid) throw new Error("请填写有效的存储目录。");
+      if (!valid) throw new Error("请选择有效的存储目录。");
       if (pathsChanged) {
         await preview.mutateAsync(values());
         requestAnimationFrame(() => document.querySelector('.storage-migration-plan')?.scrollIntoView({ block: "center" }));
@@ -135,18 +136,25 @@ export function StorageDirectoriesSection({ data, isLoading, isError, onRetry, o
       {!isLoading && !isError && data && form && (
         <>
           <fieldset className="storage-directory-fields" disabled={busy}>
-            <label className="settings-field">
-              <span>本机视频导入方式</span>
-              <select aria-label="本机视频导入方式" value={(form.delete_source_after_import ?? true) ? "move" : "copy"}
-                onChange={(event) => update("delete_source_after_import", event.target.value === "move")}>
-                <option value="copy">复制到视频库（保留原文件）</option>
-                <option value="move">移动到视频库（校验成功后删除原文件）</option>
-              </select>
-            </label>
+            <fieldset className="storage-import-mode settings-choice-selector" aria-label="本机视频导入方式">
+              <legend>本机视频导入方式</legend>
+              <div className="storage-import-options settings-choice-options">
+                <label>
+                  <input type="radio" name={importModeName} value="copy" checked={!(form.delete_source_after_import ?? true)}
+                    onChange={() => update("delete_source_after_import", false)} />
+                  <span><strong>复制到视频库</strong><small>保留原文件</small></span>
+                </label>
+                <label>
+                  <input type="radio" name={importModeName} value="move" checked={form.delete_source_after_import ?? true}
+                    onChange={() => update("delete_source_after_import", true)} />
+                  <span><strong>移动到视频库</strong><small>校验成功后删除原文件</small></span>
+                </label>
+              </div>
+            </fieldset>
             <div className="storage-directory-row">
               <label className="settings-field grow"><span>{mediaLabel}<small>视频与转写缓存一起迁移</small></span>
-                <input value={mediaRoot} onChange={(event) => update("media_storage_root", event.target.value)}
-                  aria-label={mediaLabel} placeholder="选择统一存储目录" spellCheck={false} autoComplete="off" />
+                <output className="storage-directory-path" title={mediaRoot}
+                  aria-label={mediaLabel}>{mediaRoot || "尚未选择目录"}</output>
               </label>
               <button className="icon-button settings-picker-button" type="button" aria-label={`选择${mediaLabel}`} title={`选择${mediaLabel}`}
                 onClick={() => void choose("media_storage_root")}>
@@ -164,10 +172,10 @@ export function StorageDirectoriesSection({ data, isLoading, isError, onRetry, o
             </dl>
             {DIRECTORY_FIELDS.map(({ key, label, scope }) => (
               <div className="storage-directory-row" key={key}>
-                <label className="settings-field grow"><span>{label}<small>{scope}</small></span><input
-                  value={form[key]} onChange={(event) => update(key, event.target.value)}
-                  aria-label={label} spellCheck={false} autoComplete="off"
-                /></label>
+                <label className="settings-field grow"><span>{label}<small>{scope}</small></span>
+                  <output className="storage-directory-path" title={form[key]}
+                    aria-label={label}>{form[key] || "尚未选择目录"}</output>
+                </label>
                 <button className="icon-button settings-picker-button" type="button" aria-label={`选择${label}`} title={`选择${label}`} onClick={() => void choose(key)}>
                   {pickerKey === key ? <LoaderCircle className="spin" size={16} /> : <FolderOpen size={16} />}
                 </button>

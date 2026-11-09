@@ -1,0 +1,7 @@
+.player-progress-area { position: relative; }
+.player-clip-range { position: absolute; inset: 0 6px; pointer-events: none; }
+.player-clip-highlight { position: absolute; top: 3px; height: 12px; border: 1px solid var(--ui-primary); background: color-mix(in srgb, var(--ui-primary) 35%, transparent); }
+.player-clip-handle { position: absolute; top: -6px; display: grid; place-items: center; width: 18px; height: 30px; padding: 0; border: 1px solid var(--ui-player-bg); border-radius: 3px; color: var(--ui-on-primary); background: var(--ui-primary); pointer-events: auto; touch-action: none; cursor: ew-resize; }
+.player-clip-handle.is-start { transform: translateX(-100%); }
+.player-clip-handle:hover, .player-clip-handle:active { background: var(--ui-surface); }
+.player-clip-handle:focus-visible { outline: 2px solid var(--ui-player-text); outline-offset: 2px; z-index: 1; }

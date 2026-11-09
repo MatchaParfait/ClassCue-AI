@@ -61,7 +61,7 @@ export function RecallSchemeSettings({ active, onSaved }: { active: boolean; onS
       queryClient.setQueryData<RecallScheme[]>(recallSchemesKey, current => current?.map(item => item.id === id ? { ...item, archived: true } : item));
       setConfirmArchive(null);
       if (selected?.id === id) { setSelected(null); setForm(null); setOriginal(""); }
-      setNotice("方案已停用，历史结果保留"); setError("");
+      setNotice("方案已删除，历史结果保留"); setError("");
     },
     onError: reason => setError(reason.message),
   });
@@ -124,17 +124,15 @@ export function RecallSchemeSettings({ active, onSaved }: { active: boolean; onS
           </button>
           <button className="icon-button" type="button" title={`复制方案“${scheme.name}”`} aria-label={`复制方案“${scheme.name}”`}
             disabled={busy || dirty} onClick={() => choose(scheme, true)}><Copy size={15} /></button>
-          <button className="icon-button danger-icon" type="button" title={`停用方案“${scheme.name}”`} aria-label={`停用方案“${scheme.name}”`}
+          <button className="icon-button danger-icon" type="button" title={`删除方案“${scheme.name}”`} aria-label={`删除方案“${scheme.name}”`}
             disabled={busy || dirty} onClick={() => setConfirmArchive(scheme.id)}><Trash2 size={15} /></button>
-          {confirmArchive === scheme.id && <div className="recall-scheme-archive" role="group" aria-label={`确认停用“${scheme.name}”`}>
-            <span>停用后保留历史结果</span><button className="secondary-button compact" type="button" disabled={busy}
-              onClick={() => archive.mutate(scheme.id)}>确认停用</button>
+          {confirmArchive === scheme.id && <div className="recall-scheme-archive" role="group" aria-label={`确认删除“${scheme.name}”`}>
+            <span>删除方案后，历史提取结果仍保留</span><button className="secondary-button compact" type="button" disabled={busy}
+              onClick={() => archive.mutate(scheme.id)}>确认删除</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => setConfirmArchive(null)}>取消</button>
           </div>}
         </div>)}
         {!entries.some(item => !item.archived) && !schemes.isPending && <p className="settings-hint">暂无自定义方案</p>}
-        {entries.some(item => item.archived) && <details className="recall-archived"><summary>已停用方案</summary>
-          {entries.filter(item => item.archived).map(item => <p key={item.id}>{item.name}</p>)}</details>}
       </div>
       {form && <form className="recall-scheme-form" aria-label="编辑召回方案" onSubmit={event => { event.preventDefault(); void save().then(saved => { if (saved) onSaved?.(); }); }}>
         <label className="field-group"><span className="field-label">方案名称</span>

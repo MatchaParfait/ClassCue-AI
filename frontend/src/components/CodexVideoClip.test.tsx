@@ -1,9 +1,10 @@
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { CodexClipDialog, CodexVideoClip, parseClipTime } from "./CodexVideoClip";
+import { CodexClipDialog, CodexVideoClip } from "./CodexVideoClip";
+import type { ClipRange } from "./ClipRangeSelector";
 import * as api from "../api/codexBridge";
 
 const desktop = vi.hoisted(() => ({ enabled: true }));
@@ -41,7 +42,7 @@ afterEach(async () => {
   await act(async () => root.unmount()); host.remove(); cache.clear();
 });
 const props = { videoId: 9, libraryId: "synthetic", title: "合成课堂", durationMs: 300_000, getCurrentTimeMs: () => 150_000 };
-async function mount(child = <CodexClipDialog {...props} positionMs={120_000} onClose={close} />) {
+async function mount(child = <CodexClipDialog {...props} range={{ startMs: 60_000, endMs: 120_000 }} onClose={close} />) {
   await act(async () => root.render(<QueryClientProvider client={cache}>
     <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>{child}</MemoryRouter>
   </QueryClientProvider>));
@@ -51,17 +52,6 @@ const button = (label: string) => [...document.querySelectorAll<HTMLButtonElemen
 async function click(label: string) {
   await act(async () => button(label).click());
 }
-async function input(label: string, value: string) {
-  const field = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-it("parses original video times without accepting malformed or negative values", () => {
-  expect(parseClipTime("01:02:03.125")).toBe(3_723_125);
-  for (const value of ["", "-01:00:00", "00:60:00", "NaN", "3", "00:00:60"]) expect(parseClipTime(value)).toBeNull();
-});
 it("previews the chosen range, removes unneeded images and prepares an editable native draft", async () => {
   await mount();
   await click("预览片段");
@@ -80,17 +70,65 @@ it("previews the chosen range, removes unneeded images and prepares an editable 
   expect(api.openCodexDiscussion).toHaveBeenCalledWith("r");
   expect(api.prepareCodexClip).toHaveBeenCalledTimes(1);
 });
-it("time edits invalidate the preview and reject reversed or out of duration ranges", async () => {
-  await mount(); await click("预览片段");
-  await input("结束时间", "00:00:20");
-  expect(document.querySelector(".codex-clip-subtitles")).toBeNull();
+it.each([
+  { startMs: 60_000, endMs: 20_000 }, { startMs: 60_000, endMs: 360_000 },
+  { startMs: -1, endMs: 20_000 }, { startMs: NaN, endMs: 20_000 },
+  { startMs: 1000.5, endMs: 20_000 }, { startMs: 1000, endMs: 20_000.5 },
+])("rejects an invalid selected range before reading materials: %o", async range => {
+  await mount(<CodexClipDialog {...props} range={range} onClose={close} />);
   expect(button("预览片段").disabled).toBe(true);
   expect(button("在 Codex 中准备草稿").disabled).toBe(true);
-  await input("结束时间", "00:06:00");
-  expect(button("预览片段").disabled).toBe(true);
-  await click("将当前播放位置设为结束时间");
-  expect((document.querySelector('input[aria-label="结束时间"]') as HTMLInputElement).value).toBe("00:02:30");
-  expect(button("预览片段").disabled).toBe(false);
+  expect(api.previewCodexClip).not.toHaveBeenCalled();
+});
+function ClipTools({ now = 120_000, durationMs = props.durationMs }: { now?: number; durationMs?: number }) {
+  const [range, setRange] = useState<ClipRange | null>(null);
+  return <>
+    <CodexVideoClip {...props} durationMs={durationMs} getCurrentTimeMs={() => now} range={range} onRangeChange={setRange} />
+    {range && <button onClick={() => setRange({ startMs: 90_000, endMs: 150_000 })}>模拟拖动进度条</button>}
+  </>;
+}
+it("selects on the player first, previews automatically, and discards old materials after adjusting the range", async () => {
+  await mount(<ClipTools />);
+  await click("讲解片段");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(api.previewCodexClip).not.toHaveBeenCalled();
+  expect(document.querySelector("output")?.textContent).toBe("1:00 – 2:00");
+  await click("预览片段");
+  expect(api.previewCodexClip).toHaveBeenLastCalledWith({ video_id: 9, start_ms: 60_000, end_ms: 120_000 });
+  expect(document.querySelector('input[type="text"]')).toBeNull();
+  await click("调整片段");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await click("模拟拖动进度条");
+  await click("预览片段");
+  expect(api.previewCodexClip).toHaveBeenLastCalledWith({ video_id: 9, start_ms: 90_000, end_ms: 150_000 });
+  await click("关闭片段讲解");
+  await click("取消片段选择");
+  expect(document.querySelector("output")).toBeNull();
+  expect(button("讲解片段")).toBeDefined();
+});
+it.each([
+  [0, 300_000, "0:00 – 1:00"], [500, 300_000, "0:00 – 0:00.500"],
+  [900_000, 300_000, "4:00 – 5:00"], [0, 20_000, "0:00 – 0:20"],
+  [.2, 300_000, "0:00 – 0:00.001"], [0, 20_000.8, "0:00 – 0:20"],
+  [20_000.8, 20_000.8, "0:00 – 0:20"],
+])("bounds the initial selection to the video at %s ms", async (now, durationMs, label) => {
+  await mount(<ClipTools now={now} durationMs={durationMs} />);
+  await click("讲解片段");
+  expect(document.querySelector("output")?.textContent).toBe(label);
+});
+it.each([0, .5, NaN, Infinity])("disables selection when the duration has no valid millisecond range: %s", async durationMs => {
+  await mount(<ClipTools durationMs={durationMs} />);
+  expect(button("讲解片段").disabled).toBe(true);
+  expect(document.querySelector("output")).toBeNull();
+});
+it("clamps an existing selection and refreshes its preview when loaded media shortens the timeline", async () => {
+  await mount(<ClipTools now={299_000} />);
+  await click("讲解片段");
+  await click("预览片段");
+  expect(api.previewCodexClip).toHaveBeenLastCalledWith({ video_id: 9, start_ms: 239_000, end_ms: 299_000 });
+  await mount(<ClipTools now={299_000} durationMs={20_000.8} />);
+  expect(document.querySelector("output")?.textContent).toBe("0:19.999 – 0:20");
+  expect(api.previewCodexClip).toHaveBeenLastCalledWith({ video_id: 9, start_ms: 19_999, end_ms: 20_000 });
 });
 it("supports subtitle-only excerpts and shows actionable failures without a success claim", async () => {
   vi.mocked(api.previewCodexClip).mockResolvedValue({ ...preview, images: [] });
@@ -112,7 +150,7 @@ it("unknown paste outcomes require explicit retry on the original discussion", a
 });
 it("does not show the desktop entry or fetch history in a browser", async () => {
   desktop.enabled = false;
-  await mount(<CodexVideoClip {...props} />);
+  await mount(<ClipTools />);
   expect(host.textContent).toBe("");
   expect(api.getCodexClipDiscussions).not.toHaveBeenCalled();
 });
@@ -121,7 +159,7 @@ it("locks duplicate requests and keeps Escape from closing during preparation", 
   vi.mocked(api.prepareCodexClip).mockReturnValue(new Promise(done => { resolve = done; }));
   await mount(); await click("预览片段"); await click("在 Codex 中准备草稿");
   expect(button("正在准备草稿…").disabled).toBe(true);
-  await act(async () => (document.querySelector('a[href="/settings?section=codex"]') as HTMLAnchorElement).click());
+  await act(async () => (document.querySelector('a[href="/settings?section=discussion"]') as HTMLAnchorElement).click());
   expect(close).not.toHaveBeenCalled();
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(close).not.toHaveBeenCalled();
