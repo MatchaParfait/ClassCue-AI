@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import time
 from typing import Annotated, Literal
-from urllib.parse import urlencode
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -18,6 +17,7 @@ from classcue.asr_models import frozen_selection, selection_snapshot, get_model,
 from classcue.diagnostics import redact_text
 from classcue.library_search import LibrarySearch, search_library
 from classcue.processing_control import ProcessingCancelled, ResourcePaused
+from classcue.playback_links import playback_url
 from classcue.recall_schemes import ModeId
 from classcue.transcriber import require_prepared_asr_model
 
@@ -273,8 +273,7 @@ class CourseTools:
         return row
 
     def _url(self, video_id, seconds=0):
-        return f"{self.origin}/review/{video_id}?" + urlencode({
-            "start_ms": round(seconds * 1000), "library_id": self.provider.library_id()})
+        return playback_url(self.origin, video_id, round(seconds * 1000), self.provider.library_id())
 
     def _coverage(self, rows):
         available = sum(bool(row["has_transcript"]) if "has_transcript" in row.keys()

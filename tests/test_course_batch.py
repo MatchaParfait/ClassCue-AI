@@ -293,7 +293,7 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
         assert result.returncode == 0, result.stdout + result.stderr
         evidence = json.loads(result.stdout)
         assert evidence == {
-            "version": "0.11.0", "preview": True, "completed": True,
+            "version": "0.12.0", "preview": True, "completed": True,
             "reused": True, "validationError": True, "requestConflict": True,
             "sequenceCompleted": True, "sequenceReused": True,
             "retrieval": True, "nativeImages": True, "analysis": True,

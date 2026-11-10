@@ -94,7 +94,7 @@ def test_service_starts_once_without_showing_window(monkeypatch, tmp_path):
     assert starts == ["start"]
 
 
-def test_navigation_waits_until_initial_page_and_lifecycle_are_ready(monkeypatch):
+def test_navigation_waits_until_initial_page_and_lifecycle_are_ready(monkeypatch, tmp_path):
     states = iter([
         {"ready": True, "starting": True, "window_ready": False},
         {"ready": True, "starting": False, "window_ready": False},
@@ -109,10 +109,49 @@ def test_navigation_waits_until_initial_page_and_lifecycle_are_ready(monkeypatch
             return next(states) if command == "status" else {"ok": True}
     monkeypatch.setattr(connection, "SingleInstance", Instance)
     monkeypatch.setattr(connection.time, "sleep", lambda _: None)
-    result = connection.navigate_desktop("http://127.0.0.1:9999/review/1?start_ms=5000&library_id=a")
+    result = connection.navigate_desktop("http://127.0.0.1:9999/review/1?start_ms=5000&library_id=a",
+                                         project=tmp_path)
     assert result["navigation"] == "requested"
     assert calls[:3] == ["status", "status", "status"]
     assert calls[3]["action"] == "navigate"
+
+
+def test_desktop_navigation_never_queues_another_video_behind_a_pending_open(tmp_path, monkeypatch):
+    from filelock import FileLock
+    runtime = tmp_path / ".runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(connection, "SingleInstance", lambda *_: pytest.fail("must not launch or navigate"))
+    with FileLock(str(runtime / "desktop_navigation.lock")):
+        with pytest.raises(RuntimeError, match="另一段回放正在打开"):
+            connection.navigate_desktop("http://127.0.0.1:9999/review/1?start_ms=0&library_id=a",
+                                        project=tmp_path)
+
+
+def test_closed_desktop_starts_the_bound_installation_before_loading_the_review(tmp_path, monkeypatch):
+    commands, launched = [], []
+
+    class Instance:
+        def __init__(self, runtime, _dispatch):
+            assert runtime == tmp_path / ".runtime"
+
+        def send(self, command, **_kwargs):
+            commands.append(command)
+            if commands == ["status"]:
+                raise RuntimeError("synthetic closed desktop")
+            return {"ready": True, "window_ready": True} if command == "status" else {"ok": True}
+
+    monkeypatch.setattr(connection, "SingleInstance", Instance)
+    monkeypatch.setattr(connection.subprocess, "Popen", lambda args, **kwargs: launched.append((args, kwargs)))
+    monkeypatch.setattr(connection.time, "sleep", lambda _: None)
+    url = "http://127.0.0.1:9999/open/review/1?start_ms=12345&library_id=a"
+    result = connection.navigate_desktop(url, project=tmp_path)
+    assert len(launched) == 1
+    assert launched[0][0] == [connection.sys.executable, str(tmp_path / "scripts/desktop_app.py")]
+    assert launched[0][1]["cwd"] == tmp_path
+    assert commands[-1] == {
+        "action": "navigate", "url": "http://127.0.0.1:9999/review/1?start_ms=12345&library_id=a",
+    }
+    assert result["navigation"] == "requested" and result["play_url"] == url
 
 
 @pytest.mark.parametrize("state", ["unsaved_changes", "starting", "exiting", "dialog"])

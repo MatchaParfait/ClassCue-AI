@@ -147,17 +147,6 @@ const retrievalSchemas = {
     recall_selection: { type: "object" }, ai_connection: { type: "object" } },
   required: ["library_id", "service_status", "asr_selection", "asr_observation", "recall_selection", "ai_connection"] },
 };
-const imageSchema = { ...resultSchema, properties: { ...resultSchema.properties,
-  video_id: id, evidence_type: { enum: ["extracted_slide", "video_frame"] },
-  image: { type: "object", properties: { mime_type: { const: "image/jpeg" },
-    width: { type: "integer", minimum: 1 }, height: { type: "integer", minimum: 1 } },
-  required: ["mime_type", "width", "height"], additionalProperties: false } },
-required: ["library_id", "video_id", "evidence_type", "image"] };
-retrievalSchemas.read_slide = { ...imageSchema, properties: { ...imageSchema.properties, slide_id: id },
-  required: [...imageSchema.required, "slide_id"] };
-retrievalSchemas.read_video_frame = { ...imageSchema, properties: { ...imageSchema.properties,
-  time_seconds: seconds, play_url: { type: "string" } },
-required: [...imageSchema.required, "time_seconds", "play_url"] };
 const batchJobSchema = { ...resultSchema, properties: {
   ...resultSchema.properties, job_id: { type: "string" }, job_type: { type: "string" },
   status: { type: "string" }, summary: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
@@ -198,11 +187,13 @@ const batchTarget = {
 };
 const batchTargetRule = { oneOf: ["course_id", "video_ids", "folders"].map(name => ({ required: [name] })) };
 function tool(name, description, properties, required = [], readOnly = true, annotations = {}, rules = {}) {
-  const outputSchema = retrievalSchemas[name] ?? (name === "preview_batch" ? batchPreviewSchema
+  // Image tools use content only; outputSchema would require structuredContent.
+  const outputSchema = ["read_slide", "read_video_frame"].includes(name) ? undefined
+    : retrievalSchemas[name] ?? (name === "preview_batch" ? batchPreviewSchema
     : ["start_batch_processing", "retry_batch", "resume_batch", "start_processing_sequence", "get_job", "cancel_job"].includes(name)
       ? batchJobSchema : resultSchema);
   return { name, description, inputSchema: { type: "object", properties,
-    required, additionalProperties: false, ...rules }, outputSchema,
+    required, additionalProperties: false, ...rules }, ...(outputSchema ? { outputSchema } : {}),
   annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: false, ...annotations } };
 }
 const allCourseTools = [
@@ -250,7 +241,7 @@ const allCourseTools = [
       offset: pagination.offset, transcript_version: { type: "string",
         description: "继续读取时必须传入上一页返回的字幕版本。" } },
     ["video_id", "start_seconds", "end_seconds"]),
-  tool("open_video", "用户希望观看时，打开 ClassCue 视频并定位到指定秒数；返回导航请求，不保证播放已完成定位。",
+  tool("open_video", "用户希望立即观看时，直接唤起 ClassCue 桌面版并定位到指定秒数；未保存修改会阻止导航。返回导航请求，不保证播放器已完成定位。结果中的 play_url 可供用户点击，优先打开桌面版，失败后提供网页备用入口；请原样引用链接。",
     { video_id: id, start_seconds: { ...seconds, default: 0 } }, ["video_id"], false),
   tool("start_transcription", "使用当前默认的已准备本地 ASR 为课程或指定视频生成字幕；跳过已有字幕，返回后台任务 ID。不提取考点。",
     { course_id: course.course_id, video_ids: { type: "array", items: id, minItems: 1, maxItems: 500 } },

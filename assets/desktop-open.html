@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>打开回放 · ClassCue</title>
+  <link rel="icon" href="/api/desktop-links/icon.png">
+  <style nonce="__NONCE__">
+    :root { color-scheme: light; font: 15px/1.65 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      color: #171a14; background: #fffef7; }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    body { margin: 0; }
+    main { width: min(100%, 640px); margin: 0 auto; padding: 72px 24px; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }
+    header img { width: 40px; height: 40px; }
+    header strong { font-size: 18px; font-weight: 650; }
+    h1 { font-size: 24px; line-height: 1.45; margin: 0 0 16px; overflow-wrap: anywhere; }
+    p { margin: 0 0 12px; overflow-wrap: anywhere; }
+    .target { color: #596153; }
+    time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #message { min-height: 50px; }
+    #message[role="alert"] { color: #9c2938; }
+    nav { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
+    button, a { font: inherit; }
+    button { min-height: 40px; border: 1px solid #b5a222; background: #fde44c; color: #171a14;
+      border-radius: 6px; padding: 7px 16px; cursor: pointer; }
+    button:hover { background: #efd53a; }
+    button:active { background: #e0c52c; }
+    button:disabled { cursor: wait; opacity: .65; }
+    a { color: #285c35; text-underline-offset: 4px; }
+    a:hover { color: #173d20; }
+    :is(button, a):focus-visible { outline: 2px solid #285c35; outline-offset: 4px; }
+    ::selection { color: #171a14; background: #c8e8bf; }
+    [hidden] { display: none !important; }
+    @media (max-width: 420px) { main { padding: 40px 20px; } header { margin-bottom: 32px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><img src="/api/desktop-links/icon.png" alt=""><strong>ClassCue</strong></header>
+    <h1 id="heading">__HEADING__</h1>
+    <p class="target" __TARGET_HIDDEN__>__VIDEO_NAME__ · <time>__POSITION__</time></p>
+    <p id="message" role="__ROLE__" aria-live="polite">__MESSAGE__</p>
+    <nav aria-label="回放操作">
+      <button id="retry" type="button" hidden>重试打开桌面版</button>
+      <a id="web" hidden>在网页中继续</a>
+    </nav>
+    <noscript><p>请允许此页面运行 JavaScript，以打开 ClassCue 桌面版。</p></noscript>
+  </main>
+  <script id="target" type="application/json">__TARGET__</script>
+  <script nonce="__NONCE__" src="/api/desktop-links/client.js" defer></script>
+</body>
+</html>

@@ -91,7 +91,10 @@ try {
     assert.equal(result.content[1].type, "image");
     assert.equal(result.content[1].mimeType, "image/jpeg");
     assert.ok(Buffer.from(result.content[1].data, "base64").subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")));
-    assert.equal(result.structuredContent.image.data, undefined);
+    assert.equal(result.structuredContent, undefined);
+    const metadata = JSON.parse(result.content[0].text);
+    assert.deepEqual(metadata.image, { mime_type: "image/jpeg", width: 1600, height: 800 });
+    assert.equal(metadata.video_id, Number(videoId));
     assert.ok(!result.content[0].text.includes(result.content[1].data));
   }
   evidence.nativeImages = true;

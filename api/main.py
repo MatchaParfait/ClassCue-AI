@@ -4094,6 +4094,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     }
     api.state.course_batch_tools = batch_tools
     api.include_router(course_tools_router(provider, jobs, ensure_file_changes_allowed, batch=batch_tools))
+    from api.desktop_links import router as desktop_links_router
+    api.include_router(desktop_links_router(DIRECTORY_PROJECT_ROOT, provider, jobs))
     from classcue.frontend_host import mount_frontend
     mount_frontend(api, Path(__file__).resolve().parents[1])
     return api

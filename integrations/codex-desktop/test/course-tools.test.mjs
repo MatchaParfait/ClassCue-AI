@@ -14,7 +14,9 @@ test("course tools are independent from bound discussion metadata", () => {
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.annotations.openWorldHint,
       ["start_batch_processing", "retry_batch", "resume_batch"].includes(tool.name));
-    assert.equal(tool.outputSchema.type, "object");
+    if (["read_slide", "read_video_frame"].includes(tool.name))
+      assert.equal(tool.outputSchema, undefined);
+    else assert.equal(tool.outputSchema.type, "object");
   }
   assert.equal(courseTools.find(t => t.name === "start_transcription").annotations.readOnlyHint, false);
   const unified = courseTools.find(t => t.name === "search_library");

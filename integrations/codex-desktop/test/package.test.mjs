@@ -21,7 +21,7 @@ test("shipped MCP works without node_modules and rereads APP setup without resta
   const client = new Client({ name: "synthetic-package-test", version: "1" });
   t.after(async () => { await client.close(); await rm(root, { recursive: true, force: true }); });
   await client.connect(transport);
-  assert.equal(client.getServerVersion().version, "0.11.0");
+  assert.equal(client.getServerVersion().version, "0.12.0");
   const tools = (await client.listTools()).tools;
   assert.equal(tools.length, 23);
   assert.equal(tools.find(tool => tool.name === "search_library").annotations.readOnlyHint, true);
@@ -53,7 +53,7 @@ test("explicit connection override never falls back to a different home", async 
     format: "classcue-codex-connection", version: 1, roots: [home] }));
   assert.deepEqual((await readConnection({ CODEX_HOME: home })).roots, [home]);
   assert.deepEqual((await readConnection({
-    PLUGIN_ROOT: join(home, "plugins", "cache", "classcue", "classcue", "0.11.0"),
+    PLUGIN_ROOT: join(home, "plugins", "cache", "classcue", "classcue", "0.12.0"),
   })).roots, [home]);
   await assert.rejects(readConnection({ PLUGIN_ROOT: join(home, "unknown-layout") }), /无法确定/);
   await assert.rejects(readConnection({ CODEX_HOME: home,

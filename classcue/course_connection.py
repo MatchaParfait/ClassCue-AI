@@ -13,10 +13,11 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from classcue.paths import PROJECT_ROOT
 from classcue.desktop_runtime import atomic_json, http_json, read_json, SingleInstance
+from classcue.playback_links import desktop_review_url
 
 
 def connection_token(project=PROJECT_ROOT):
@@ -81,14 +82,27 @@ def ensure_service():
     return origin, expected
 
 
-def navigate_desktop(url):
-    instance = SingleInstance(PROJECT_ROOT / ".runtime", lambda _: None)
+def navigate_desktop(url, *, project=None):
+    project = Path(project or PROJECT_ROOT)
+    runtime = project / ".runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    try:
+        with FileLock(str(runtime / "desktop_navigation.lock"), timeout=0):
+            return _navigate_desktop(url, project)
+    except Timeout:
+        raise RuntimeError("另一段回放正在打开，请稍后重试。") from None
+
+
+def _navigate_desktop(url, project):
+    original_url = url
+    url = desktop_review_url(url)
+    instance = SingleInstance(project / ".runtime", lambda _: None)
     try:
         state = instance.send("status", attempts=1)
     except RuntimeError:
         subprocess.Popen(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "desktop_app.py")],
-            cwd=PROJECT_ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [sys.executable, str(project / "scripts" / "desktop_app.py")],
+            cwd=project, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         state = {}
@@ -103,12 +117,13 @@ def navigate_desktop(url):
         except RuntimeError:
             continue
     if state.get("unsaved_changes"):
+        instance.send("activate", attempts=1)
         raise RuntimeError("桌面有未保存的修改，请先保存后再打开视频")
     parsed = urlsplit(url)
     result = instance.send({"action": "navigate", "url": url})
     if not result.get("ok"):
         raise RuntimeError(result.get("error", "桌面未接受导航请求"))
-    return {"navigation": "requested", "play_url": url, "path": parsed.path}
+    return {"navigation": "requested", "play_url": original_url, "path": parsed.path}
 
 
 def call_tool(name, arguments):
