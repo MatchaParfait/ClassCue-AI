@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -291,6 +293,108 @@ def test_retry_reloads_the_actual_root_page_and_finishes_startup(project, monkey
         reload_window.assert_called_once_with(ui.window)
 
 
+def test_blocked_page_script_cannot_keep_retry_starting_or_accumulate_workers(project, monkeypatch):
+    from scripts import desktop_app
+    from classcue.desktop_runtime import Lifecycle
+    monkeypatch.setattr(desktop_app, "PROJECT", project)
+    monkeypatch.setattr(desktop_app, "PAGE_SCRIPT_TIMEOUT_SECONDS", .01)
+    monkeypatch.setattr(desktop_app, "install_startup_transition", Mock(return_value=None))
+    reload_window = Mock()
+    monkeypatch.setattr(desktop_app, "reload_window", reload_window)
+    entered, release, finished, loaded = Event(), Event(), Event(), Event()
+    loaded.set()
+    ui = desktop_app.WindowUI()
+    calls = []
+
+    def stalled_script(expression):
+        calls.append(expression)
+        entered.set()
+        try:
+            assert release.wait(5)
+            return {"scroll_y": 123}
+        finally:
+            finished.set()
+
+    ui.window = SimpleNamespace(events=SimpleNamespace(loaded=loaded), evaluate_js=stalled_script,
+                                get_current_url=lambda: "http://127.0.0.1:8765/", load_url=Mock())
+    lifecycle = Lifecycle(SimpleNamespace(start=lambda _action: "http://127.0.0.1:8765"), ui)
+    try:
+        lifecycle.start()
+        assert entered.is_set() and not finished.is_set()
+        assert lifecycle.ready and not lifecycle.starting
+        assert ui.startup_view is None
+        lifecycle.start()
+        assert len(calls) == 1
+        assert reload_window.call_count == 2
+    finally:
+        release.set()
+        assert finished.wait(3)
+    # A stale snapshot returning after navigation must not overwrite the fallback.
+    assert ui.startup_view is None
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_stalled_snapshot_replays_latest_dialog_and_media_pause_without_extra_workers(project, monkeypatch, cancel):
+    from scripts import desktop_app
+    from classcue.desktop_runtime import Lifecycle
+    monkeypatch.setattr(desktop_app, "PROJECT", project)
+    monkeypatch.setattr(desktop_app, "PAGE_SCRIPT_TIMEOUT_SECONDS", .01)
+    ui = desktop_app.WindowUI()
+    entered, release, drained, loaded = Event(), Event(), Event(), Event()
+    loaded.set()
+    calls, workers = [], []
+    original_background = desktop_app.background
+
+    def track_worker(function):
+        thread = original_background(function)
+        workers.append(thread)
+        return thread
+
+    def evaluate(expression):
+        calls.append(expression)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
+        elif "classroom-desktop-dialog" in expression:
+            drained.set()
+
+    monkeypatch.setattr(desktop_app, "background", track_worker)
+    ui.window = SimpleNamespace(
+        events=SimpleNamespace(loaded=loaded), evaluate_js=evaluate, hide=Mock(), show=Mock(), restore=Mock(),
+        get_current_url=lambda: "http://127.0.0.1:8765/",
+    )
+    lifecycle = Lifecycle(SimpleNamespace(origin="http://127.0.0.1:8765"), ui)
+    lifecycle.ready = lifecycle.unsaved_changes = True
+    try:
+        assert ui.script("optional snapshot") is None and entered.is_set()
+        ui.hide()
+        for index in range(20):
+            ui.progress(f"step {index}")
+        lifecycle.close_requested()
+        assert lifecycle.dialog["kind"] == "unsaved-close"
+        if cancel:
+            api = desktop_app.NativeAPI(lifecycle, ui)
+            assert api.respond("cancel") == {"ok": True}
+            assert lifecycle.dialog is None
+        assert len(workers) == 1 and len(calls) == 1 and len(ui.script_pending) == 3
+        release.set()
+        assert drained.wait(3)
+        workers[0].join(3)
+        assert not workers[0].is_alive()
+        assert len(calls) == 4
+        assert "media.pause()" in calls[1]
+        assert "step 19" in calls[2]
+        if cancel:
+            assert "detail:null" in calls[3]
+        else:
+            assert '"kind": "unsaved-close"' in calls[3]
+        assert not ui.script_running and not ui.script_pending
+    finally:
+        release.set()
+        for thread in workers:
+            thread.join(3)
+
+
 def test_same_url_reload_uses_the_native_ui_thread_without_page_scripts(monkeypatch):
     import sys
     from scripts.desktop_transition import reload_window
@@ -319,3 +423,22 @@ def test_same_url_reload_uses_the_native_ui_thread_without_page_scripts(monkeypa
         CoreWebView2=WebView())), Invoke=invoke))
     reload_window(window)
     assert calls == ["reload"]
+
+
+def test_startup_and_transition_dialogs_close_without_errors_in_a_real_browser(project):
+    source = Path(__file__).resolve().parents[1]
+    node = shutil.which("node")
+    playwright = os.getenv("CLASSROOM_PLAYWRIGHT_MODULE") or os.getenv("PLAYWRIGHT_MODULE") or str(
+        source / "frontend/node_modules/playwright")
+    if not node or not Path(playwright).exists():
+        pytest.skip("Node and installed Playwright are required")
+    html = startup_html(project, scene_id="first")
+    payload = project / "browser.json"
+    payload.write_text(json.dumps({
+        "html": html, "transition": startup_transition_script(project, html, "http://127.0.0.1:8765"),
+    }), encoding="utf-8")
+    result = subprocess.run([node, str(source / "tests/desktop_startup_browser.cjs"), str(payload)],
+                            env={**os.environ, "CLASSROOM_PLAYWRIGHT_MODULE": playwright},
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {"passed": True, "surfaces": 2}

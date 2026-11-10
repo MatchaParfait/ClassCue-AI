@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 import sys
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 import time
 from urllib.parse import urlsplit
 from urllib.error import HTTPError
@@ -21,6 +21,8 @@ if str(PROJECT) not in sys.path:
 from classcue.desktop_runtime import APP_NAME, Lifecycle, Services, SingleInstance
 from classcue.desktop_startup import startup_background, startup_html, startup_transition_script
 from scripts.desktop_transition import install_startup_transition, reload_window
+
+PAGE_SCRIPT_TIMEOUT_SECONDS = 1
 
 
 def background(function, *args, **kwargs):
@@ -75,17 +77,53 @@ class WindowUI:
         self.boot_origin = None
         self.current_url = None
         self.last_progress = None
+        self.script_guard = Lock()
+        self.script_running = False
+        self.script_pending = {}
 
-    def script(self, expression):
-        try:
-            return self.window.evaluate_js(expression)
-        except Exception:
-            logging.getLogger(__name__).exception("Desktop page notification failed")
+    def script(self, expression, *, notification=None):
+        # WebView2 can stop completing script evaluations while the API and
+        # native window remain alive. Keep one worker and the latest notifications.
+        with self.script_guard:
+            if self.script_running:
+                if notification:
+                    self.script_pending.pop(notification, None)
+                    self.script_pending[notification] = expression
+                return None
+            self.script_running = True
+        finished, result = Event(), []
+
+        def evaluate():
+            current = expression
+            while True:
+                try:
+                    value = self.window.evaluate_js(current)
+                    if not finished.is_set():
+                        result.append(value)
+                except Exception:
+                    logging.getLogger(__name__).exception("Desktop page notification failed")
+                with self.script_guard:
+                    if not self.script_pending:
+                        self.script_running = False
+                        following = None
+                    else:
+                        key = next(iter(self.script_pending))
+                        following = self.script_pending.pop(key)
+                finished.set()
+                if following is None:
+                    return
+                current = following
+
+        background(evaluate)
+        if finished.wait(PAGE_SCRIPT_TIMEOUT_SECONDS):
+            return result[0] if result else None
+        logging.getLogger(__name__).warning("Desktop page script timed out; native recovery remains available")
+        return None
 
     def progress(self, message):
         self.last_progress = message
         if self.window.events.loaded.is_set():
-            self.script(f"window.__classroomDesktopProgress?.({json.dumps(message)})")
+            self.script(f"window.__classroomDesktopProgress?.({json.dumps(message)})", notification="progress")
 
     def error(self, message):
         self.current_url = None
@@ -125,7 +163,7 @@ class WindowUI:
             self.window.restore()
 
     def hide(self):
-        self.script("document.querySelectorAll('video,audio').forEach(media=>media.pause())")
+        self.script("document.querySelectorAll('video,audio').forEach(media=>media.pause())", notification="pause")
         self.window.hide()
 
     def minimize(self):
@@ -133,7 +171,7 @@ class WindowUI:
 
     def dialog(self, value):
         self.script("window.dispatchEvent(new CustomEvent('classroom-desktop-dialog',"
-                    f"{{detail:{json.dumps(value)}}}))")
+                    f"{{detail:{json.dumps(value)}}}))", notification="dialog")
 
     def destroy(self):
         self.window.destroy()
@@ -181,6 +219,8 @@ class NativeAPI:
     def respond(self, action, remember=False):
         self._check_origin()
         self._lifecycle.respond(action, remember)
+        if not self._lifecycle.allow_destroy:
+            self._ui.dialog(self._lifecycle.dialog)
         return {"ok": True}
 
     def get_startup_view(self):
@@ -365,9 +405,11 @@ def main(action="activate"):
             if not lifecycle.ready:
                 ui.boot_origin = window.get_current_url()
             if getattr(ui, "last_error", None):
-                ui.script(f"window.__classroomDesktopProgress?.({json.dumps(ui.last_error)},true)")
+                ui.script(f"window.__classroomDesktopProgress?.({json.dumps(ui.last_error)},true)",
+                          notification="progress")
             elif not lifecycle.ready and ui.last_progress:
-                ui.script(f"window.__classroomDesktopProgress?.({json.dumps(ui.last_progress)})")
+                ui.script(f"window.__classroomDesktopProgress?.({json.dumps(ui.last_progress)})",
+                          notification="progress")
 
         def on_closing():
             if lifecycle.allow_destroy:

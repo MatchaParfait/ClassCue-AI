@@ -59,8 +59,9 @@ window.__classroomDesktopProgress=(message,error=false)=>{
   document.querySelector(".startup-screen").dataset.error=String(error);
 };
 window.addEventListener("classroom-desktop-dialog",event=>{
-  document.getElementById("dialog-message").textContent=event.detail.message;
   const dialog=document.getElementById("dialog");
+  if(!event.detail){dialog.close();return}
+  document.getElementById("dialog-message").textContent=event.detail.message;
   if(!dialog.open)dialog.showModal();
 });
 async function retry(){

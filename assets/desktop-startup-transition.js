@@ -91,6 +91,7 @@
       const message = page?.getElementById("dialog-message");
       const modal = page?.getElementById("dialog");
       if (!message || !modal) return;
+      if (!event.detail) { modal.close(); return; }
       message.textContent = event.detail.message;
       frame.style.pointerEvents = "auto";
       cover.removeAttribute("aria-hidden");
