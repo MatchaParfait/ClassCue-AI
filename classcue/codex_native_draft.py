@@ -163,15 +163,22 @@ class WindowsComposer:
         if not re.fullmatch(r"codex://threads/[a-zA-Z0-9_-]{1,100}", uri):
             raise TargetUnavailable("讨论地址无效，已停止附图。")
         self.title = title
-        self.input_tick = self.last_input()
+        observed_input = self.last_input()
         os.startfile(uri)
         started = time.monotonic()
         deadline = started + 9
+        idle_since = started
         stable = 0
         previous_window = None
         while time.monotonic() < deadline:
-            if self.last_input() != self.input_tick:
-                raise TargetUnavailable("检测到其他操作，已暂停附图；请重新点击讨论。")
+            current_input = self.last_input()
+            # The initiating click can still release or move during navigation.
+            # No input has been sent yet; establish the guard only after settling.
+            keys_held = any(self.user.GetAsyncKeyState(key) & 0x8000 for key in range(1, 255))
+            if current_input != observed_input or keys_held:
+                observed_input = current_input
+                idle_since = time.monotonic()
+                stable = 0
             window = self.official_window()
             if window:
                 root = self.automation.ElementFromHandle(window)
@@ -183,13 +190,21 @@ class WindowsComposer:
                     if len(edits) == 1:
                         stable = stable + 1 if previous_window == window else 1
                         previous_window = window
-                        if stable >= 3 and time.monotonic() - started >= .8:
+                        if (stable >= 3 and time.monotonic() - started >= .8
+                                and time.monotonic() - idle_since >= .45 and not keys_held):
+                            self.input_tick = current_input
                             self.window, self.document, self.composer = window, document, edits[0]
                             self.check()
                             return
+                    else:
+                        stable = 0
                 else:
                     stable = 0
+            else:
+                stable = 0
             time.sleep(.15)
+        if time.monotonic() - idle_since < .45 or keys_held:
+            raise TargetUnavailable("键鼠操作尚未结束，请松开按键并稍后重试。")
         raise TargetUnavailable("未能确认目标 Codex 输入框，原讨论已保留，请重试。")
 
     def check(self):

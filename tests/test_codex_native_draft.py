@@ -193,3 +193,63 @@ def test_cached_document_title_does_not_block_the_unchanged_composer():
     target.official_window = lambda: 43
     with pytest.raises(TargetUnavailable, match="当前窗口"):
         target.check()
+
+
+def navigation_target(monkeypatch, *, input_at, held_at=lambda _: False, ready_at=lambda _: True):
+    clock = [0.0]
+    monkeypatch.setattr("classcue.codex_native_draft.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("classcue.codex_native_draft.time.sleep",
+                        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    opened = []
+    monkeypatch.setattr("classcue.codex_native_draft.os.startfile", opened.append, raising=False)
+    target = WindowsComposer.__new__(WindowsComposer)
+    target.last_input = lambda: input_at(clock[0])
+    target.user = SimpleNamespace(GetAsyncKeyState=lambda _: 0x8000 if held_at(clock[0]) else 0)
+    target.official_window = lambda: 42 if ready_at(clock[0]) else None
+    target.automation = SimpleNamespace(ElementFromHandle=lambda window: window)
+    document = SimpleNamespace(CurrentName="合成讨论")
+    target.elements = lambda *_: [document]
+    target.visible = lambda _: True
+    target.composers = lambda _: [SimpleNamespace()]
+    return target, clock, opened
+
+
+def test_navigation_waits_for_click_release_and_mouse_movement_before_arming_guard(monkeypatch):
+    target, clock, opened = navigation_target(
+        monkeypatch, input_at=lambda now: 100 if now < .3 else 200,
+        held_at=lambda now: now < .45,
+    )
+    target.navigate("codex://threads/synthetic", "合成讨论")
+    assert opened == ["codex://threads/synthetic"]
+    assert .75 <= clock[0] < 2
+    assert target.input_tick == 200
+    target.last_input = lambda: 201
+    with pytest.raises(TargetUnavailable, match="其他键鼠"):
+        target.check()
+
+
+@pytest.mark.parametrize("moving,held", [(True, False), (False, True)])
+def test_navigation_never_arms_while_user_keeps_operating(monkeypatch, moving, held):
+    target, clock, _ = navigation_target(
+        monkeypatch, input_at=lambda now: int(now * 1000) if moving else 100,
+        held_at=lambda _: held,
+    )
+    with pytest.raises(TargetUnavailable, match="键鼠操作尚未结束"):
+        target.navigate("codex://threads/synthetic", "合成讨论")
+    assert 9 <= clock[0] < 9.3
+    assert not hasattr(target, "input_tick")
+
+
+@pytest.mark.parametrize("failure", ["window", "title", "composer"])
+def test_navigation_still_requires_the_bound_title_and_official_foreground_window(monkeypatch, failure):
+    target, clock, _ = navigation_target(
+        monkeypatch, input_at=lambda _: 100, ready_at=lambda _: failure != "window",
+    )
+    if failure == "title":
+        target.elements = lambda *_: [SimpleNamespace(CurrentName="其他讨论")]
+    elif failure == "composer":
+        target.composers = lambda _: []
+    with pytest.raises(TargetUnavailable, match="未能确认目标"):
+        target.navigate("codex://threads/synthetic", "合成讨论")
+    assert clock[0] >= 9
+    assert not hasattr(target, "input_tick")
