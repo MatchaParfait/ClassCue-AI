@@ -1510,6 +1510,39 @@ describe("library selection and processing", () => {
 });
 
 describe("folder window", () => {
+  it("opens from empty card space and restores focus to the native folder button", async () => {
+    const opener = card("folder-7").querySelector(".folder-card-link");
+    click(card("folder-7"));
+    await flushUpdates();
+    expect(container.querySelector("#folder-window-title")?.textContent).toBe("Algebra");
+    keyDown("Escape");
+    await waitForExit(container, ".folder-window");
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it.each([".folder-rename-button", ".folder-delete-button", ".device-folder-send", ".library-folder-select", ".drag-handle"])(
+    "does not open the folder when clicking its separate control %s", async (selector) => {
+      click(card("folder-7").querySelector(selector));
+      await flushUpdates();
+      expect(container.querySelector(".folder-window")).toBeNull();
+    },
+  );
+
+  it("suppresses blank-space clicks during and immediately after dragging", async () => {
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    dragEvent("dragstart", card("folder-7"));
+    click(card("folder-7"));
+    expect(container.querySelector(".folder-window")).toBeNull();
+    dragEvent("dragend", card("folder-7"));
+    click(card("folder-7"));
+    expect(container.querySelector(".folder-window")).toBeNull();
+    now += 251;
+    click(card("folder-7"));
+    await flushUpdates();
+    expect(container.querySelector("#folder-window-title")?.textContent).toBe("Algebra");
+  });
+
   it("opens above the unchanged library without navigating and restores focus and scrolling on close", async () => {
     setSelectValue('.library-toolbar select', "name");
     const background = container.querySelector<HTMLDivElement>(".library-inner")!;
@@ -1943,6 +1976,24 @@ describe("nested library folders", () => {
     click([...container.querySelectorAll(".folder-breadcrumbs button")].find((button) => button.textContent === "Algebra")!);
     await flushUpdates();
     expect(container.querySelectorAll(".folder-window .folder-card")).toHaveLength(2);
+    keyDown("Escape");
+    await waitForExit(container, ".folder-window");
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("opens nested folders from empty card space and returns focus to the root opener", async () => {
+    await mountTree();
+    const opener = card("folder-7").querySelector(".folder-card-link");
+    click(card("folder-7"));
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(container.querySelector('.folder-window [data-library-key="folder-8"]')).not.toBeNull();
+    });
+    click(container.querySelector('.folder-window [data-library-key="folder-8"]'));
+    await vi.waitFor(async () => {
+      await flushUpdates();
+      expect(container.querySelector("#folder-window-title")?.textContent).toBe("Chapter");
+    });
     keyDown("Escape");
     await waitForExit(container, ".folder-window");
     expect(document.activeElement).toBe(opener);

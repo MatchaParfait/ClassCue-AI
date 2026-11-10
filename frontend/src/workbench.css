@@ -68,7 +68,7 @@
 .video-section-heading { margin-top: 32px; }
 .library-list { border: 0; border-radius: 0; background: transparent; overflow: visible; }
 .library-folder-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.library-card.folder-card { min-height: 76px; padding: 14px 12px 14px 16px; gap: 6px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-surface); box-shadow: none; }
+.library-card.folder-card { min-height: 76px; padding: 14px 12px 14px 16px; gap: 6px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-surface); box-shadow: none; cursor: pointer; }
 .folder-card-link { position: relative; z-index: 1; display: flex; flex: 1; align-items: center; min-width: 0; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; gap: 12px; }
 .folder-icon { width: 38px; height: 38px; border-radius: 6px; color: var(--ui-amber); background: var(--ui-surface-soft); }
 .folder-card .library-card-body strong { color: var(--ui-text); font-size: 14px; font-weight: 500; }

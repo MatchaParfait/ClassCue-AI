@@ -1145,6 +1145,11 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
               event.stopPropagation();
             }
           }}
+          onClick={(event) => {
+            if (event.defaultPrevented || !(event.target instanceof Element)
+              || event.target.closest('button, a, input, select, textarea, label, [role="button"], [role="menu"], .drag-handle')) return;
+            event.currentTarget.querySelector<HTMLButtonElement>(".folder-card-link")?.click();
+          }}
         >
           <label className="library-folder-select" title={count === 0 ? "此文件夹没有视频" : `选择此文件夹的全部 ${count} 个视频（含子文件夹）`}
             onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
