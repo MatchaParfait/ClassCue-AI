@@ -1,10 +1,113 @@
 # Codex 课程检索与转写工具
 
-插件源码版本：`0.8.0`。19 个课程工具与课程 Skill 已实现；
+插件源码版本：`0.11.0`。19 个课程工具与课程 Skill 已实现；
 真实调用和单列的 ASR 环境验证限制见
 [验收记录](../validation/codex-course-tools-validation.md)。
 
 ## 本轮完善记录
+
+### 按需字幕发音容错
+
+2026-11-10，`0.11.0` 在同一个 `search_library` 增加 `phonetic_mode`：
+
+| 策略 | 行为 |
+| --- | --- |
+| `auto`（默认） | 先查四类资料的字面命中；完整搜索无结果时，在原范围补查字幕同音候选 |
+| `off` | 只查字面，不转换发音或准备发音索引 |
+| `always` | 主动补查字幕同音候选，字面结果优先；适合用户提示同音错字或现有结果不相关 |
+
+用户说“闭包可能被 ASR 写成同音字”时，可调用
+`search_library(query="闭包", phonetic_mode="always")`。
+用户明确指出错词“B包”时，先用 `queries=["闭包","B包"]` 做字面候选；
+多个概念时，把原词和错词放进同一个 `term_groups` 组。
+无需为每门课维护术语表，不额外调用 LLM、ASR 或音频服务。
+
+本地使用 pypinyin 的词组读音，忽略声调，但完整匹配音节序列；
+至少 2、最多 24 个音节，不启用任意编辑距离或模糊近音。
+孤立英文字母按通用读音映射，例如 `B包 → bi bao`；普通英文单词、
+数字和标点是边界，不逐字母拼读英文，不跨字幕句拼接单个词。
+不枚举全部多音字读法，也不承诺恢复漏字、口音、任意英文或语义。
+仅字幕使用发音候选；目录、书签、考点与排除词仍按字面匹配。
+
+`phonetic_search_used` 表示本轮实际启用了发音候选，`phonetic_terms`
+列出可转换的查询词。顶层 `match_type` 此时为 `phonetic_passage`，
+具体片段和证据另用 `literal`／`phonetic`／`mixed` 区分实际命中方式。
+证据保留原字幕、原记录和时间；`matched_terms` 包含发音命中的查询词，
+`literal_matched_terms` 只列原文包含的词。每项证据最多 8 个 `phonetic_matches`，
+其中保留查询词、原文词、音节、相对于摘录的字符位置及
+`requires_verification=true`；详情省略时标记 `phonetic_matches_truncated`。
+例如原文仍是“这里的 B包可以访问外部变量”，不能据此声称字幕已纠正为“闭包”。
+Agent 应接 `read_transcript`、按需查看 PPT 后确认含义。
+
+发音索引是库内可再生缓存。升级启动时只建空表，不转换整库；
+首次发音搜索只补当前课程／视频／时间范围内的缺失或旧版本条目，
+每次最多处理 4000 句或约 100 万原文字符（完成当前句后检查字符预算）。
+未变化的字幕持久复用索引，改字、替换或删除字幕时自动失效。
+转换在写事务外计算，入库前核对原文，防止并发修改留下旧读音。
+缓存准备后重新取得一致的读取快照，任务控制锁不包住索引准备或检索。
+
+`phonetic_index_pending>0` 表示范围内仍有待建索引的句子，返回
+`search_complete=false`、`total_is_exact=false`，空结果为 `incomplete_search`。
+可同参数从第一页重试，较大的库优先限定课程，不沿用未完成索引的旧快照翻页。
+候选达到上限仍另报 `candidate_truncated_sources`。任何不完整搜索都不能断言没有讲解。
+APP 原有搜索界面与旧搜索接口继续使用原字面规则。
+
+### 统一视频库检索
+
+2026-11-10，`0.10.0` 将主搜索入口统一为 `search_library`，默认查询四类视频库资料：
+`catalog`（视频名称、课程及文件夹路径）、`bookmarks`（人工书签和整段提醒）、
+`subtitles`（原始字幕）、`analysis`（已保存考点、视频题目和手动定位）。
+不涉及上传资料全文、PDF 或 PPT OCR，不自动调用模型、转写或建立向量索引。
+原 `search_subtitles`、`search_bookmarks` 保留后端与旧调用兼容，不再出现在 MCP 工具列表中。
+课程和视频列表继续用于浏览、确认身份及批处理选取。
+
+- `query` 为一个字面词或短语；`queries` 最多 8 个词，默认 `any`，可用 `all`。
+- `term_groups` 表达组内任一、组间全部，例如
+  `[["范式","规范化"],["冗余","分解"]]`。最多 6 组、每组 8 词、总计 32 词，
+  与 `query`、`queries` 三选一；使用它时不再设置 `match_mode=all`。
+- 字幕允许在 `window_seconds` 内跨句满足组合，默认 45 秒、最多 120 秒。
+  单个短语仍须在原句内出现；书签和分析在单条记录内满足组合。
+  不将目录或其他来源拼成教师原话。相邻命中合并受窗口上限约束；
+  单句字幕本身超过窗口时保留原句时间，不伪造字级边界。
+- `exclude_terms` 最多 8 词，排除含词的匹配记录或字幕片段。
+  片段内没有正向命中词的句子同样参与排除检查；外延上下文不作为匹配正文。
+  相邻字幕或跨来源片段合并前也校验完整范围，遇到排除词时保留分开的合法命中。
+- `course_id`、`video_id` 同时提供时取交集；`start_seconds/end_seconds` 须成对提供，
+  仅保留相交的时间证据，不返回目录及无时间提醒，不自动扩大搜索范围。
+- 排序考虑词覆盖、片段紧凑程度与多来源汇合，`diverse=true` 对同一视频后续结果
+  适度降权。分数是检索启发式，不是语义相关性或回答置信度。
+
+返回统一的视频片段，包含 `result_id`、目录、可空 `position_seconds`、
+`context_range`、播放链接、命中词及最多 6 项 `evidence`。
+每项证据保留来源、原记录 ID、原时间、最多 500 字摘录及截断标记；
+`asr_transcript`、`user_bookmark`、`manual_marker`、`saved_analysis`、`video_metadata`
+分别代表 ASR 字幕、用户备注、手动定位、模型分析和目录信息。
+名称与无时间提醒保留空时间，不把视频开头当作讲解位置；
+时长未知时不返回无法确认的字幕读取范围。
+先选择候选，再用 `read_transcript(video_id, **context_range)` 核对上下文，
+按需用 `list_slides`、`read_slide` 或 `read_video_frame` 看图。
+
+各来源在同一 SQLite 读取快照内查询。每页默认 20、最多 50 条；
+翻页须原样提供 `snapshot_id`，资料或查询条件变化时从第一页重新检索。
+每个来源最多收集 4000 个候选，超出时返回 `search_complete=false`、
+`total_is_exact=false` 和 `candidate_truncated_sources`；
+`total` 与 `source_counts` 仅描述已收集结果。应收紧课程、视频、时间或关键词，
+不能把不完整查询的空结果解释为没有内容。覆盖情况单独返回。
+检索在全局任务锁之外执行，返回前核对视频库身份，不阻塞任务取消。
+
+例如用户说“找老师讲过怎样通过规范化减少重复存储的那一段”，Agent 可在确认课程后调用：
+
+```json
+{
+  "course_id": "<list_courses 返回的 ID>",
+  "term_groups": [["规范化", "范式"], ["冗余", "重复存储", "分解"]],
+  "limit": 10
+}
+```
+
+候选词由 Codex 提出，没有命中时可在同范围换词；
+`0.11.0` 起可按上节规则补查同音候选，不承诺 ASR 纠错或语义召回。
+APP 原有搜索界面与其字面查询规则保持原有行为。
 
 2026-11-09，`0.7.0` 在原有课程检索、转写和完整批处理上补齐以下能力。
 本文件作为课程 MCP 的持续维护说明，后续变更同步更新工具表、使用场景和边界；
@@ -26,6 +129,36 @@
 图像解码和编码不占用全局任务锁，慢读取期间仍可取消任务；
 读取前后核对库、文件和提取记录，素材变化时要求重新读取。
 
+### 从自己的书签找回讲解
+
+`0.9.0` 曾新增只读工具 `search_bookmarks`，直接读取 APP 中用户手动添加的复习书签。
+`0.10.0` 起面向 Agent 改用 `search_library(sources=["bookmarks"], ...)`；
+以下保留旧接口兼容行为。
+例如用户说“我记得有个视频讲解了自注意力”，Agent 可先调用
+`search_bookmarks(query="自注意力")`，从“自注意力：Q/K/V 计算示例”这样的合成提醒
+找回视频、原时间点和播放链接，再用返回的 `context_range` 读取附近字幕核对。
+书签即使没有字幕也能找到；备注是用户提醒，不是教师原话或操作指令。
+
+只对备注做大小写不敏感的字面匹配，不把视频名或字幕命中混作书签命中。
+支持 `query` 或最多 8 个 `queries`，不可同时提供；`any` 命中任一词，
+`all` 要求同一条备注含全部词。不提供两者时分页浏览全部书签，包含空备注。
+可限定 `course_id`、`video_id`，二者同时提供取交集；不因无结果自动扩大范围。
+候选词由 Agent 选择，不运行语义检索或第二套问答模型。
+
+返回 `bookmark_id`、完整 `note`、视频名称、文件夹路径、可空的 `position_seconds`、
+字幕状态、播放链接及创建／更新时间。无时间点表示整段视频提醒，
+此时 `context_range` 同样为空，不能将链接默认打开视频开头解释为讲解从零秒开始。
+有时间点且视频时长已知时，默认附前后各 30 秒的读取范围，
+`context_seconds` 可设为 1–120，范围限制在视频时长内；
+时长未知时不提供字幕读取范围，附近字幕仍需用 `read_transcript` 实际读取。
+
+结果按书签 ID 倒序分页，每页默认 20、最多 50；`total` 和 `total_videos`
+统计全部命中，`searched_bookmarks` 表示本范围检查的书签数。
+`empty_reason=no_bookmarks` 表示范围内没有书签，`no_literal_match` 表示有书签但备注未命中；
+翻页超过末尾不冒充无命中。无结果可在同范围换词或搜索字幕，不能据此断言视频没有讲过。
+复用现有书签存储，不建立独立索引；APP 编辑、删除、视频改名或移动后下次读取立即反映，
+附属副视角与已删除视频不参与。不开放书签写入，不启动转写、PPT 提取或 AI 请求。
+
 ### 一个使用场景：找讲解，再核对 PPT
 
 用户说：
@@ -36,9 +169,9 @@
 Agent 可以这样完成：
 
 1. `list_courses(query="算法")` 确定课程 ID，沿用该课程范围。
-2. `search_subtitles(course_id=返回的ID, queries=["分治","递归"], match_mode="any")`。
-   工具在同一范围内检索两个字面词，合并连续命中并轮流展示不同视频，
-   返回每组的命中数量、时间、字幕摘要和 `context_range`。
+2. `search_library(course_id=返回的ID, queries=["分治","递归"], match_mode="any")`。
+   工具在同一范围内检索多个来源，合并相近命中并适度分散视频，
+   返回片段命中词、来源证据、可空时间和 `context_range`。
    若用户只想查某节课，再传 `video_id`；与课程同时提供时取交集。
 3. 从候选取 `video_id` 和 `context_range` 调 `read_transcript`，
    核对完整字幕，而不是仅靠搜索摘要判断老师讲了什么。
@@ -54,19 +187,34 @@ Agent 负责选择候选和解释。没有 PPT 时工具返回空列表，不自
 用户同意提取时才提交 `start_processing_sequence(steps=["extract_slides"], ...)`。
 不知道此前任务的 ID 时，可用 `list_jobs` 找回后再 `get_job`。
 
+### 按学习任务主动核实
+
+课程 Skill 将搜索结果作为候选入口。用户要求确认某个课堂说法或寻找更合适的讲解时，
+Agent 先读相关片段的完整字幕，比较是否切题、条件是否一致、解释是否完整，
+不把检索最高分直接当作最佳知识点。
+若遇到 ASR 术语歧义、“看这个图”等画面指代、公式代码缺失或候选间冲突，
+主动查询该时段 PPT 并读取相关图片，无需用户逐项指挥。
+没有已提取 PPT 而仍需画面核实时，可以直接读取对应秒数的视频帧，
+不自动开始 PPT 提取。选择图片时按实际可见区间核对，不把晚出现的答案算作早已展示。
+
+证据足够时停止补查，普通定位或清晰完整的文字解释不强制取图。
+存在多个候选时推荐更能回答当前问题、证据更完整的片段；
+仍不能确认时说明疑点，不宣称遍历了全库或找到了绝对最佳。
+这是供 Agent 决策的 Skill 指引，不是检索后端固定执行的取图流水线；
+实际运行是否正确遵循，仍需结合具体学习任务观察，不能由静态校验推定。
+
 ### 检索和证据的边界
 
-- 仍是字面检索，不是语义检索；候选词由 Agent 提供，不自动扩写同义词。
-  `any` 是任一词命中；`all` 要求同一句字幕包含所有词，不跨字幕句匹配短语。
+- 以字面检索为基础，可按需补充字幕同音候选；候选词由 Agent 提供，不自动扩写同义词。
+  `any` 是任一词命中；`all` 及关键词组合允许在有限字幕片段内跨句满足，
+  单个短语仍不跨字幕句拼接。
   ASR 错字和跨句切分仍可能漏搜；无结果不等于老师没有讲。
-- `total` 是合并后结果数量，`total_matches` 是原始命中字幕句数量，
-  `total_videos` 是命中视频数量；默认按视频轮流展示，不承诺语义相关性排名。
-  `merge_gap_seconds` 可在 0–60 秒调整；0 仍合并时间重叠或相接的命中。
-- 搜索上下文最多 5 句、每句最多 300 字，`context_truncated` 标记省略；
-  默认扩展前后 20 秒，可设 0–120 秒。完整证据继续用 `read_transcript` 分页读取。
-  查询期间每页使用一致快照，但搜索分页不锁定整个视频库；
-  转写或资料变化后重新检索，不将不同轮结果当作固定快照。
-- `empty_reason` 区分 `no_videos`、`no_subtitles` 和 `no_literal_match`；
+- `total` 是合并后片段数，`source_counts` 是各来源合并前的匹配记录／片段数，
+  `total_videos` 是命中视频数；候选截断时均不代表完整全库统计。
+- 搜索证据最多 6 项、每项 500 字，分别提供文本和证据截断标记；
+  上下文范围默认扩展前后 15 秒，可设 0–120 秒。完整字幕用 `read_transcript` 分页读取。
+  每次查询使用一致快照，翻页核对结果指纹；转写或资料变化后重新检索。
+- `empty_reason` 区分 `no_videos`、`no_matching_content` 和 `incomplete_search`；
   同时结合 `coverage` 说明未转写范围。翻到结果末尾的空页不等于无匹配。
 - `list_slides` 返回提取状态的时间范围及真实可见区间。某页的精选状态
   不一定就是某秒画面；核对精确时刻使用 `read_video_frame`。
@@ -139,7 +287,7 @@ Agent 先预览范围与影响，再调用应用已有完整批处理；也可�
 | --- | --- | --- |
 | `list_courses` | 可选 `query`、分页 | 课程／文件夹 ID、路径、视频数与字幕覆盖 |
 | `list_videos` | 可选 `course_id`、名称、字幕状态、分页 | 视频 ID、时长、字幕状态、关联转写任务和播放链接 |
-| `search_subtitles` | `query` 或 `queries`，可选课程、视频、匹配规则与分页 | 合并命中、上下文、播放链接、覆盖和无结果原因 |
+| `search_library` | `query`／`queries`／`term_groups` 三选一，可选 `phonetic_mode`、来源、课程、视频、时间、排除词、片段窗口及快照分页 | 统一片段、来源证据、发音假设、相关性分数、可空秒数、播放链接、覆盖与截断及索引待建状态 |
 | `read_transcript` | 视频 ID、起止秒数，可选继续读取游标 | 完整字幕句、时间、字幕版本、下一页位置 |
 | `open_video` | 视频 ID、可选起始秒数 | 桌面导航请求结果，不冒充播放器已经完成定位 |
 | `start_transcription` | `course_id` 或 `video_ids`，二选一 | 后台任务 ID、实际模型／设备、统计；无缺失则无需新建任务 |
@@ -201,7 +349,7 @@ ASR、设备及 AI 连接继续沿用应用已有设置。关键词、过滤表�
 时间统一使用秒，带小数。列表和搜索每页默认 20、最多 50；
 字幕每页最多 100 句、12,000 个原文字符，边界句保留原句与原时间。
 继续读取需同时传入 `offset` 和 `transcript_version`，字幕变化时要求重新读取。
-搜索不提供语义或纠错保证，单段内字面匹配可能漏掉跨句词组。
+搜索不提供语义或纠错保证；多词组合允许跨句，单个短语跨句切分仍可能漏搜。
 完整批次逐项结果每页默认及最多 50 项，使用 `has_more`／`next_offset` 继续读取；
 总体统计始终覆盖完整批次。预览只附前 50 个视频的名称及 ID，并返回是否截断。
 
@@ -241,7 +389,7 @@ MCP 可查询、取消和重试界面创建的完整批次。
 ## 维护与验证
 
 ```powershell
-python -m pytest tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py tests/test_course_sequence.py tests/test_course_retrieval.py tests/test_subtitle_search.py -q
+python -m pytest tests/test_library_search.py tests/test_subtitle_phonetics.py tests/test_course_bookmarks.py tests/test_study_bookmarks.py tests/test_course_tools.py tests/test_course_connection.py tests/test_course_batch.py tests/test_course_sequence.py tests/test_course_retrieval.py tests/test_subtitle_search.py -q
 npm test --prefix integrations/codex-desktop
 npm run check --prefix integrations/codex-desktop
 ```

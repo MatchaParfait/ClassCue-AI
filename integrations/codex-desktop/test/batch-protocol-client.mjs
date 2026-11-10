@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const [connection, videoId] = process.argv.slice(2);
 const client = new Client({ name: "batch-protocol-test", version: "1.0.0" });
 const transport = new StdioClientTransport({
-  command: process.execPath, args: [fileURLToPath(new URL("../server.mjs", import.meta.url))],
+  command: process.execPath, args: [fileURLToPath(new URL("../server.bundle.mjs", import.meta.url))],
   env: { ...process.env, CLASSCUE_CODEX_CONNECTION_FILE: connection }, stderr: "ignore",
 });
 const evidence = {};
@@ -15,6 +15,8 @@ try {
   await client.connect(transport);
   evidence.version = client.getServerVersion().version;
   const listing = await client.listTools();
+  assert.ok(listing.tools.some(item => item.name === "search_library"));
+  assert.ok(!listing.tools.some(item => ["search_subtitles", "search_bookmarks"].includes(item.name)));
   const tool = listing.tools.find(item => item.name === "start_batch_processing");
   assert.equal(tool.annotations.openWorldHint, true);
   assert.equal(tool.annotations.idempotentHint, true);
@@ -58,12 +60,28 @@ try {
   const sequenceReplay = await call("start_processing_sequence", sequenceRequest);
   evidence.sequenceReused = sequenceReplay.structuredContent.reused
     && sequenceReplay.structuredContent.job_id === sequenceState.job_id;
-  const search = await call("search_subtitles", { video_id: Number(videoId), queries: ["会考", "掌握"] });
+  const search = await call("search_library", { video_id: Number(videoId),
+    sources: ["subtitles"], term_groups: [["会考"], ["掌握"]] });
   assert.equal(search.isError, undefined);
   const hit = search.structuredContent.items[0];
   const transcript = await call("read_transcript", { video_id: Number(videoId), ...hit.context_range });
-  evidence.retrieval = search.structuredContent.total_matches === 1
+  evidence.retrieval = search.structuredContent.source_counts.subtitles === 1
+    && search.structuredContent.search_complete === true
     && transcript.structuredContent.items.length === 1;
+  const phonetic = await call("search_library", { video_id: Number(videoId),
+    sources: ["subtitles"], query: "会烤" });
+  assert.equal(phonetic.isError, undefined);
+  const phoneticEvidence = phonetic.structuredContent.items[0].evidence[0];
+  assert.equal(phoneticEvidence.text, "会考，必须掌握");
+  assert.equal(phoneticEvidence.match_type, "phonetic");
+  assert.deepEqual(phoneticEvidence.literal_matched_terms, []);
+  assert.equal(phoneticEvidence.phonetic_matches[0].source_text, "会考");
+  assert.equal(phoneticEvidence.phonetic_matches[0].requires_verification, true);
+  evidence.phoneticRetrieval = phonetic.structuredContent.phonetic_search_used === true
+    && phonetic.structuredContent.search_complete === true;
+  const legacy = await call("search_subtitles", { video_id: Number(videoId), query: "会考" });
+  assert.equal(legacy.isError, undefined);
+  assert.equal(legacy.structuredContent.total_matches, 1);
   const slideList = await call("list_slides", { video_id: Number(videoId), start_seconds: 0, end_seconds: 1 });
   const slide = await call("read_slide", { video_id: Number(videoId),
     slide_id: slideList.structuredContent.items[0].slide_id });
@@ -84,6 +102,16 @@ try {
   const status = await call("get_processing_status", {});
   evidence.processingStatus = status.structuredContent.service_status === "running"
     && status.structuredContent.ai_connection.credential_checked === false;
+  const bookmarks = await call("search_library", { query: "自注意力",
+    sources: ["bookmarks"], video_id: Number(videoId) });
+  assert.equal(bookmarks.isError, undefined);
+  const bookmark = bookmarks.structuredContent.items[0];
+  assert.equal(bookmark.evidence[0].evidence_type, "user_bookmark");
+  assert.equal(bookmark.evidence[0].text, "自注意力：Q/K/V 计算示例");
+  assert.equal(bookmark.position_seconds, 0.2);
+  const around = await call("read_transcript", { video_id: bookmark.video_id, ...bookmark.context_range });
+  evidence.bookmarks = around.isError === undefined && around.structuredContent.items.length === 1
+    && bookmark.play_url.includes("start_ms=200");
   assert.ok(Object.entries(evidence).every(([key, value]) => key === "version" || value === true));
   console.log(JSON.stringify(evidence));
 } finally {

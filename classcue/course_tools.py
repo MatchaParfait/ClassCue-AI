@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from classcue.asr_models import frozen_selection, selection_snapshot, get_model, require_firered_gpu
 from classcue.diagnostics import redact_text
+from classcue.library_search import LibrarySearch, search_library
 from classcue.processing_control import ProcessingCancelled, ResourcePaused
 from classcue.recall_schemes import ModeId
 from classcue.transcriber import require_prepared_asr_model
@@ -57,6 +58,22 @@ class Search(Page):
     def terms(self):
         if (self.query is None) == (self.queries is None):
             raise ValueError("请只提供 query 或 queries 中的一项")
+        return self
+
+
+class BookmarkSearch(Page):
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    queries: list[Annotated[str, Field(min_length=1, max_length=120)]] | None = Field(
+        default=None, min_length=1, max_length=8)
+    course_id: str | None = Field(default=None, max_length=100)
+    video_id: int | None = Field(default=None, gt=0, le=MAX_INTEGER, strict=True)
+    match_mode: Literal["any", "all"] = "any"
+    context_seconds: int = Field(default=30, ge=1, le=120, strict=True)
+
+    @model_validator(mode="after")
+    def terms(self):
+        if self.query is not None and self.queries is not None:
+            raise ValueError("请只提供 query 或 queries 中的一项；省略两者可浏览书签")
         return self
 
 
@@ -192,7 +209,8 @@ class JobQuery(Job):
     offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
 
 
-SCHEMAS = {"list_courses": Page, "list_videos": ScopedPage, "search_subtitles": Search,
+SCHEMAS = {"list_courses": Page, "list_videos": ScopedPage, "search_library": LibrarySearch, "search_subtitles": Search,
+           "search_bookmarks": BookmarkSearch,
            "read_transcript": Read, "open_video": Open, "start_transcription": Start,
            "get_job": JobQuery, "cancel_job": Job, "preview_batch": BatchTarget,
            "start_batch_processing": BatchStart, "retry_batch": BatchCommand,
@@ -218,6 +236,8 @@ class CourseTools:
         if name in {"read_slide", "read_video_frame"}:
             return self._read_image(args, frame=name == "read_video_frame",
                                     expected_library_id=expected_library_id)
+        if name == "search_library":
+            return self.search_library(args, expected_library_id=expected_library_id)
         return {"library_id": self.provider.library_id(), **getattr(self, name)(args)}
 
     def _folder(self, course_id):
@@ -321,6 +341,21 @@ class CourseTools:
                           "play_url": self._url(row["id"])})
         return {**self._page(items, args), "coverage": coverage}
 
+    def search_library(self, args, *, expected_library_id=None):
+        with self.jobs._lock:
+            library_id, store = self.provider.library_id(), self.store
+            if expected_library_id is not None and library_id != expected_library_id:
+                raise ValueError("视频库身份已变化，请重新搜索")
+            folder = self._folder(args.course_id)
+        with store.connect() as db:
+            db.execute("BEGIN")
+            result = search_library(db, args, folder_id=None if folder == "root" else folder,
+                                    root_only=folder == "root", url=self._url)
+        with self.jobs._lock:
+            if library_id != self.provider.library_id() or store.path != self.store.path:
+                raise ValueError("视频库身份已变化，请重新搜索")
+        return {"library_id": library_id, **result}
+
     def search_subtitles(self, args):
         from classcue.subtitle_search import validate_query
         terms = list(dict.fromkeys(validate_query(term) for term in (args.queries or [args.query])))
@@ -365,6 +400,47 @@ class CourseTools:
                 "diverse": args.diverse,
                 "empty_reason": ("no_videos" if not rows else "no_subtitles" if not coverage["with_subtitles"]
                                  else "no_literal_match") if not result["total"] else None}
+
+    def search_bookmarks(self, args):
+        from classcue.study_bookmarks import StudyBookmarkStore
+        from classcue.subtitle_search import validate_query
+
+        candidates = args.queries or ([args.query] if args.query is not None else [])
+        terms = list(dict.fromkeys(validate_query(term) for term in candidates))
+        folder = self._folder(args.course_id)
+        if args.video_id is not None:
+            self._video(args.video_id)
+        rows = StudyBookmarkStore(self.store).bookmarks(
+            folder_id=None if folder == "root" else folder, video_id=args.video_id)
+        if folder == "root":
+            rows = [row for row in rows if row["folder_id"] is None]
+        items = []
+        for row in rows:
+            note = row["note"].casefold()
+            matches = [term.casefold() in note for term in terms]
+            if terms and not (all(matches) if args.match_mode == "all" else any(matches)):
+                continue
+            position = row["position_ms"]
+            context = None
+            if position is not None and row["duration_ms"] > 0:
+                start = max(0, position - args.context_seconds * 1000)
+                end = min(position + args.context_seconds * 1000, row["duration_ms"])
+                if start < end:
+                    context = {"start_seconds": start / 1000, "end_seconds": end / 1000}
+            items.append({
+                "bookmark_id": row["id"], "video_id": row["video_id"],
+                "video_name": row["display_name"] or row["filename"],
+                "note": row["note"], "position_seconds": position / 1000 if position is not None else None,
+                "folder_id": row["folder_id"],
+                "folder_path": " / ".join(folder["name"] for folder in row["path"]),
+                "has_subtitles": bool(row["has_transcript"]), "context_range": context,
+                "play_url": self._url(row["video_id"], position / 1000 if position is not None else 0),
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            })
+        return {**self._page(items, args), "total_videos": len({item["video_id"] for item in items}),
+                "searched_bookmarks": len(rows), "queries": terms, "match_type": "literal",
+                "match_mode": args.match_mode, "evidence_type": "user_bookmark",
+                "empty_reason": ("no_bookmarks" if not rows else "no_literal_match") if not items else None}
 
     def _capability(self, name):
         if self.batch is None or name not in self.batch:

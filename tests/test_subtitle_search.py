@@ -301,7 +301,11 @@ def test_failed_backfill_rolls_back_and_restart_recovers(library, monkeypatch):
         with pytest.raises(sqlite3.OperationalError, match="injected"):
             VideoStore(store.path)
     with store.connect() as connection:
-        assert connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'video_subtitle_%'").fetchall() == []
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'video_subtitle_fts%' "
+            "OR name LIKE 'video_subtitle_search_%'").fetchall() == []
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='video_subtitle_phonetics'").fetchone()
     assert store.get_segments(first) == original
     assert VideoStore(store.path).search_subtitles("分治法")["total"] == 3
 

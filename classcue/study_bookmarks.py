@@ -135,7 +135,7 @@ class StudyBookmarkStore:
             if video_id is not None:
                 self._video(db, video_id)
             parameters = () if video_id is None else (video_id,)
-            rows = db.execute("""SELECT b.*,v.display_name,v.filename,v.library_folder_id folder_id,v.status,
+            rows = db.execute("""SELECT b.*,v.display_name,v.filename,v.library_folder_id folder_id,v.status,v.duration_ms,
                 EXISTS(SELECT 1 FROM video_transcript_segments t WHERE t.video_id=v.id) has_transcript
                 FROM video_bookmarks b JOIN videos v ON v.id=b.video_id WHERE v.is_secondary=0"""
                               + ("" if video_id is None else " AND b.video_id=?") + " ORDER BY b.id DESC",

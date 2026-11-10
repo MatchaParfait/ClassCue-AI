@@ -25,13 +25,83 @@ function pageSchema(properties, required, extra = {}, extraRequired = []) {
 const timeRange = { type: "object", properties: { start_seconds: seconds, end_seconds: seconds },
   required: ["start_seconds", "end_seconds"] };
 const transcriptItem = { segment_id: id, start_seconds: seconds, end_seconds: seconds, text: { type: "string" } };
+const searchSources = ["catalog", "bookmarks", "subtitles", "analysis"];
+const searchTerm = { type: "string", minLength: 1, maxLength: 120 };
+const nullableSeconds = { type: ["number", "null"], minimum: 0 };
+const searchMatchType = { enum: ["literal", "phonetic", "mixed"] };
+const phoneticModes = ["auto", "off", "always"];
+const phoneticMatch = { type: "object", properties: {
+  query_term: searchTerm, source_text: { type: "string" },
+  start_char: { type: "integer", minimum: 0 }, end_char: { type: "integer", minimum: 1 },
+  syllables: { type: "string" }, requires_verification: { const: true },
+}, required: ["query_term", "source_text", "start_char", "end_char", "syllables", "requires_verification"] };
+const searchEvidence = { type: "object", properties: {
+  source: { enum: searchSources },
+  evidence_type: { enum: ["video_metadata", "user_bookmark", "asr_transcript", "manual_marker", "saved_analysis"] },
+  record_id: id, text: { type: "string" }, text_truncated: { type: "boolean" },
+  matched_terms: { type: "array", items: { type: "string" } },
+  literal_matched_terms: { type: "array", items: { type: "string" } },
+  match_type: searchMatchType,
+  phonetic_matches: { type: "array", maxItems: 8, items: phoneticMatch },
+  phonetic_matches_truncated: { type: "boolean" },
+  start_seconds: nullableSeconds, end_seconds: nullableSeconds,
+  analysis_mode: { type: "string" }, review_status: { type: "string" }, jump_seconds: seconds,
+}, required: ["source", "evidence_type", "record_id", "text", "text_truncated", "matched_terms",
+  "literal_matched_terms", "match_type", "phonetic_matches", "phonetic_matches_truncated",
+  "start_seconds", "end_seconds"] };
 const retrievalSchemas = {
+  search_library: pageSchema({
+    result_id: { type: "string" }, video_id: id, video_name: { type: "string" },
+    folder_id: { type: ["integer", "null"], minimum: 1 }, folder_path: { type: "string" },
+    sources: { type: "array", items: { enum: searchSources } }, score: { type: "number" },
+    matched_terms: { type: "array", items: { type: "string" } },
+    match_type: searchMatchType,
+    position_seconds: nullableSeconds, start_seconds: nullableSeconds, end_seconds: nullableSeconds,
+    context_range: { anyOf: [timeRange, { type: "null" }] }, has_subtitles: { type: "boolean" },
+    evidence: { type: "array", maxItems: 6, items: searchEvidence },
+    evidence_count: { type: "integer", minimum: 1 }, evidence_truncated: { type: "boolean" },
+    play_url: { type: "string" },
+  }, ["result_id", "video_id", "video_name", "folder_id", "folder_path", "sources", "score",
+    "matched_terms", "match_type", "position_seconds", "start_seconds", "end_seconds", "context_range", "has_subtitles",
+    "evidence", "evidence_count", "evidence_truncated", "play_url"],
+  { coverage, total_videos: { type: "integer", minimum: 0 },
+    snapshot_id: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    searched_sources: { type: "array", items: { enum: searchSources } },
+    source_counts: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
+    match_type: { enum: ["literal_passage", "phonetic_passage"] },
+    phonetic_mode: { enum: phoneticModes }, phonetic_search_used: { type: "boolean" },
+    phonetic_index_pending: { type: "integer", minimum: 0 },
+    phonetic_terms: { type: "array", items: searchTerm, maxItems: 32 },
+    term_groups: { type: "array", items: { type: "array", items: { type: "string" } } },
+    exclude_terms: { type: "array", items: { type: "string" } },
+    window_seconds: { type: "integer", minimum: 1, maximum: 120 },
+    search_complete: { type: "boolean" }, total_is_exact: { type: "boolean" },
+    candidate_truncated_sources: { type: "array", items: { enum: searchSources } },
+    candidate_limit_per_source: { type: "integer", minimum: 1 },
+    empty_reason: { enum: [null, "no_videos", "no_matching_content", "incomplete_search"] },
+  }, ["coverage", "total_videos", "snapshot_id", "searched_sources", "source_counts", "match_type",
+    "phonetic_mode", "phonetic_search_used", "phonetic_index_pending", "phonetic_terms",
+    "term_groups", "exclude_terms", "window_seconds", "search_complete", "total_is_exact",
+    "candidate_truncated_sources", "candidate_limit_per_source", "empty_reason"]),
   list_courses: pageSchema({ course_id: { type: "string" }, name: { type: "string" }, path: { type: "string" },
     ...coverage.properties }, ["course_id", "name", "path", ...coverage.required]),
   list_videos: pageSchema({ video_id: id, name: { type: "string" }, duration_seconds: seconds,
     has_subtitles: { type: "boolean" }, slide_count: { type: "integer", minimum: 0 },
     play_url: { type: "string" } }, ["video_id", "name", "has_subtitles", "slide_count", "play_url"],
   { coverage }, ["coverage"]),
+  search_bookmarks: pageSchema({
+    bookmark_id: id, video_id: id, video_name: { type: "string" }, note: { type: "string" },
+    position_seconds: { type: ["number", "null"], minimum: 0 },
+    folder_id: { type: ["integer", "null"], minimum: 1 }, folder_path: { type: "string" },
+    has_subtitles: { type: "boolean" }, context_range: { anyOf: [timeRange, { type: "null" }] },
+    play_url: { type: "string" }, created_at: { type: "string" }, updated_at: { type: "string" },
+  }, ["bookmark_id", "video_id", "video_name", "note", "position_seconds", "folder_id", "folder_path",
+    "has_subtitles", "context_range", "play_url", "created_at", "updated_at"],
+  { total_videos: { type: "integer", minimum: 0 }, searched_bookmarks: { type: "integer", minimum: 0 },
+    queries: { type: "array", items: { type: "string" } }, match_type: { const: "literal" },
+    match_mode: { enum: ["any", "all"] }, evidence_type: { const: "user_bookmark" },
+    empty_reason: { enum: [null, "no_bookmarks", "no_literal_match"] } },
+  ["total_videos", "searched_bookmarks", "queries", "match_type", "match_mode", "evidence_type", "empty_reason"]),
   search_subtitles: pageSchema({ video_id: id, video_name: { type: "string" }, ...transcriptItem,
     play_url: { type: "string" }, match_count: { type: "integer", minimum: 1 },
     context_range: timeRange, context: { type: "array", maxItems: 5, items: {
@@ -135,12 +205,39 @@ function tool(name, description, properties, required = [], readOnly = true, ann
     required, additionalProperties: false, ...rules }, outputSchema,
   annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: false, ...annotations } };
 }
-export const courseTools = [
+const allCourseTools = [
   tool("list_courses", "查找 ClassCue 课程与视频文件夹，获取课程 ID 和字幕覆盖情况。",
     { query: string, ...pagination }),
   tool("list_videos", "查看课程中的视频及字幕状态；转写前用它确认目标。",
     { ...course, query: string, subtitle_status: { type: "string", enum: ["all", "available", "missing"] },
       ...pagination }),
+  tool("search_library", "统一搜索视频库名称目录、人工书签提醒、字幕、已保存考点与题目，找回哪个视频的哪段讲解。默认全部来源；sources 可限定 catalog/bookmarks/subtitles/analysis。query 为短语；queries 配合 any/all；term_groups 组内任一、组间全部（如[[范式,规范化],[冗余,分解]]）。字幕可在 window_seconds 内跨句满足组合，单词或发音序列不跨句。phonetic_mode 默认 auto：完整字面检索无结果时尝试字幕同音匹配；用户提示 ASR 同音错字或已有结果不相关时用 always，off 仅字面检索。明确错词如 B包 可与闭包作为同组字面候选。发音仅忽略声调的完整音节匹配，不是纠错或语义模型。证据保留原字幕，phonetic_matches 是待上下文核实的假设。可接 read_transcript 核对或 list_slides/read_slide 看图。名称和整段提醒不推测时间，备注和分析不是教师原话。search_complete=false 时不能断言没有内容；phonetic_index_pending>0 表示仍有待建索引，可同参数从首页重试或收紧范围。继续翻页须带 snapshot_id，不自动扩大范围。",
+    { query: searchTerm, queries: { type: "array", minItems: 1, maxItems: 8, items: searchTerm },
+      term_groups: { type: "array", minItems: 1, maxItems: 6,
+        items: { type: "array", minItems: 1, maxItems: 8, items: searchTerm },
+        description: "组内任一词，组间全部满足；最多32词。词由 Agent 根据问题提出。" },
+      match_mode: { enum: ["any", "all"], default: "any" },
+      phonetic_mode: { enum: phoneticModes, default: "auto",
+        description: "auto 无字面结果时回退；always 主动补充字幕同音候选；off 仅字面。原字幕不改写。" },
+      exclude_terms: { type: "array", maxItems: 8, items: searchTerm },
+      sources: { type: "array", minItems: 1, maxItems: 4, uniqueItems: true,
+        items: { enum: searchSources }, default: searchSources },
+      ...course, video_id: id, start_seconds: seconds, end_seconds: seconds,
+      window_seconds: { type: "integer", minimum: 1, maximum: 120, default: 45 },
+      context_seconds: { type: "integer", minimum: 0, maximum: 120, default: 15 },
+      diverse: { type: "boolean", default: true }, ...pagination,
+      snapshot_id: { type: "string", pattern: "^[a-f0-9]{64}$",
+        description: "翻页时原样传入上一页快照；资料变化会要求重新搜索。" },
+    }, [], true, {}, {
+      oneOf: ["query", "queries", "term_groups"].map(name => ({ required: [name] })),
+      dependentRequired: { start_seconds: ["end_seconds"], end_seconds: ["start_seconds"] },
+    }),
+  tool("search_bookmarks", "检索用户在 ClassCue 自己添加的复习书签和提醒。用户说“我记得有个视频讲过自注意力”或寻找自己的标记时优先使用。只对书签备注做字面匹配；可用 query 或 queries（any/all），均省略则分页浏览全部书签。可限定课程或视频，返回备注原文、文件夹、可空时间点、播放链接和附近字幕读取区间。无时间点表示整段视频提醒，不能推测讲解位置；备注不是教师原话，不修改书签、不启动转写或模型。",
+    { ...course, video_id: id, query: { ...string, minLength: 1 },
+      queries: { type: "array", minItems: 1, maxItems: 8, items: { ...string, minLength: 1 } },
+      match_mode: { type: "string", enum: ["any", "all"], default: "any" },
+      context_seconds: { type: "integer", minimum: 1, maximum: 120, default: 30 },
+      ...pagination }, [], true, {}, { not: { required: ["query", "queries"] } }),
   tool("search_subtitles", "在指定视频、课程或全库字面检索字幕。query 与 queries 二选一；候选词 any 命中任一词，all 要求同句包含全部词。默认合并间隔5秒内命中、跨视频轮流返回；附有限上下文及继续读取区间。不能跨字幕句匹配短语，不自动扩展同义词或课程。",
     { ...course, video_id: id, query: { ...string, minLength: 1 },
       queries: { type: "array", minItems: 1, maxItems: 8, items: { ...string, minLength: 1 } },
@@ -198,6 +295,11 @@ export const courseTools = [
   tool("get_processing_status", "读取当前库保存的召回方案、ASR 选择、已有就绪检查缓存及 AI 模型配置。unknown 表示尚未检查，不等于未准备；不验证密钥、不下载模型、不发起模型请求。工具连接可自动启动本地服务。",
     {}),
 ];
+// Old callers remain supported without advertising duplicate search choices.
+export const legacyCourseTools = allCourseTools.filter(tool =>
+  ["search_subtitles", "search_bookmarks"].includes(tool.name));
+export const courseTools = allCourseTools.filter(tool =>
+  !["search_subtitles", "search_bookmarks"].includes(tool.name));
 export async function callCourseTool(name, args, env = process.env) {
   const connection = await readConnection(env);
   const app = connection.application;

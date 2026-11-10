@@ -57,6 +57,8 @@ def _exercise_host(executable, home, workspace, marketplace, tmp_path, log):
             line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
             if "MCP server stderr" in line)[-10000:]
         assert len(server["tools"]) == 23
+        assert "search_library" in server["tools"]
+        assert "search_bookmarks" not in server["tools"]
 
         def call_tool(name, arguments=None):
             return client.call("mcpServer/tool/call", {

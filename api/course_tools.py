@@ -27,7 +27,7 @@ def router(provider, jobs, ensure_changes, *, batch=None):
         try:
             service = CourseTools(provider, jobs, ensure_changes=ensure_changes,
                                   origin=str(request.base_url), batch=batch)
-            if tool in {"read_slide", "read_video_frame"}:
+            if tool in {"read_slide", "read_video_frame", "search_library"}:
                 return service.call(tool, payload.arguments, expected_library_id=payload.library_id)
             with jobs._lock:
                 return service.call(tool, payload.arguments)

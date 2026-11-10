@@ -18,6 +18,7 @@ dependencies = [
     "opencv-python-headless>=4.10,<5",
     "onnxruntime>=1.20,<2",
     "pydantic>=2.8.0",
+    "pypinyin>=0.55,<0.56",
     "playwright>=1.55,<2",
     "pillow>=11,<13",
     "pdfplumber>=0.11,<0.12",

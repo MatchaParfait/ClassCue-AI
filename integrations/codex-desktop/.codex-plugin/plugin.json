@@ -1,7 +1,7 @@
 {
   "name": "classcue",
-  "version": "0.8.0",
-  "description": "检索课程字幕、查看 PPT 与视频画面、读取考点题目、管理本地任务，并继续原题讨论。",
+  "version": "0.11.0",
+  "description": "检索用户书签和课程字幕、查看 PPT 与视频画面、读取考点题目、管理本地任务，并继续原题讨论。",
   "skills": "./skills",
   "mcpServers": "./.mcp.json",
   "interface": {

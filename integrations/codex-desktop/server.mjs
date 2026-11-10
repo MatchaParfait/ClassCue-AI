@@ -8,9 +8,9 @@ import { configuredRoots, discussionStore } from "./connection.mjs";
 import { relative, isAbsolute } from "node:path";
 import { realpath } from "node:fs/promises";
 import { discussionResource, resourceUri } from "./resource.mjs";
-import { courseTools, callCourseTool } from "./course-tools.mjs";
+import { courseTools, legacyCourseTools, callCourseTool } from "./course-tools.mjs";
 
-const server = new Server({ name: "classcue", version: "0.8.0" },
+const server = new Server({ name: "classcue", version: "0.11.0" },
   { capabilities: { tools: {}, resources: {} } });
 const properties = {
   request_id: { type: "string", pattern: "^[a-f0-9]{32}$" },
@@ -60,7 +60,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   let store;
   try {
     const { name, arguments: args = {}, _meta: meta } = request.params;
-    if (courseTools.some(tool => tool.name === name)) {
+    if ([...courseTools, ...legacyCourseTools].some(tool => tool.name === name)) {
       const result = await callCourseTool(name, args);
       if (["read_slide", "read_video_frame"].includes(name)) {
         const { data, ...image } = result.image;

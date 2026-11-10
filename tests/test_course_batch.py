@@ -255,6 +255,8 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
     if not node or not (client_script.parent.parent / "node_modules").is_dir():
         pytest.skip("Node and installed MCP SDK are required")
     ids = register_library_videos(batch, count=1)
+    from classcue.study_bookmarks import StudyBookmarkStore
+    StudyBookmarkStore(batch.store).create(ids[0], 200, "自注意力：Q/K/V 计算示例")
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
@@ -291,11 +293,12 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
         assert result.returncode == 0, result.stdout + result.stderr
         evidence = json.loads(result.stdout)
         assert evidence == {
-            "version": "0.8.0", "preview": True, "completed": True,
+            "version": "0.11.0", "preview": True, "completed": True,
             "reused": True, "validationError": True, "requestConflict": True,
             "sequenceCompleted": True, "sequenceReused": True,
             "retrieval": True, "nativeImages": True, "analysis": True,
-            "jobDiscovery": True, "processingStatus": True,
+            "phoneticRetrieval": True,
+            "jobDiscovery": True, "processingStatus": True, "bookmarks": True,
         }
         assert len(batch.asr) == len(batch.ai) == 1
     finally:
