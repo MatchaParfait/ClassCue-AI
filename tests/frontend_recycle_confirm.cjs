@@ -64,6 +64,9 @@ async function main() {
     await trigger.click();
     const dialog = page.getByRole("dialog", { name: "移入回收站？", exact: true });
     await dialog.waitFor();
+    assert.ok((await dialog.innerText()).includes("Windows 回收站"));
+    assert.ok((await dialog.innerText()).includes("清空 Windows 回收站后将无法恢复"));
+    assert.ok((await dialog.innerText()).includes("仍需回到软件撤销以恢复课程记录"));
     await page.waitForFunction(() => document.activeElement?.textContent === "取消");
     await page.waitForFunction(() => getComputedStyle(document.querySelector(".recycle-confirm-dialog")).opacity === "1");
     await page.evaluate(() => document.fonts.ready);

@@ -10,10 +10,15 @@ import shutil
 import uuid
 from pathlib import Path
 
+from filelock import FileLock
+
 from classcue.core import TranscriptSegment, TriggerMatch, format_time
 from classcue.sqlite_connection import ClosingConnection
 from classcue.subtitle_search import initialize_subtitle_search, search_subtitles
 from classcue.bilibili_store import initialize_bilibili
+from classcue.windows_recycle import (
+    recycle_directory, recycle_receipt_path, restore_directory, write_recycle_record,
+)
 
 
 def source_directory_key(path: str | Path) -> str:
@@ -1050,6 +1055,22 @@ class VideoStore:
         ).fetchall()]
 
     @staticmethod
+    def _remove_empty_recycle_directories(directory: Path) -> None:
+        if not directory.exists() or getattr(directory.lstat(), "st_file_attributes", 0) & 0x400:
+            return
+        empty_candidates = []
+        for root, directories, _files in os.walk(directory, topdown=True, followlinks=False):
+            directories[:] = [name for name in directories
+                              if not getattr((Path(root) / name).lstat(), "st_file_attributes", 0) & 0x400
+                              and not (Path(root) / name).is_symlink()]
+            empty_candidates.append(Path(root))
+        for path in reversed(empty_candidates):
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+
+    @staticmethod
     def _rollback_moved_files(moved: list[dict[str, object]], trash_directory: Path) -> list[str]:
         """Move trashed files back after a failed delete.
 
@@ -1065,6 +1086,11 @@ class VideoStore:
             source = Path(str(record["trash"]))
             destination = Path(str(record["original"]))
             if not source.exists():
+                if not VideoStore._matches_trash_record(record, destination):
+                    retained.append(str(source))
+                continue
+            if not VideoStore._matches_trash_record(record, source):
+                retained.append(str(source))
                 continue
             if destination.exists():
                 retained.append(str(source))
@@ -1075,7 +1101,7 @@ class VideoStore:
             except OSError:
                 retained.append(str(source))
         if not retained:
-            shutil.rmtree(trash_directory, ignore_errors=True)
+            VideoStore._remove_empty_recycle_directories(trash_directory)
         return retained
 
     @staticmethod
@@ -1110,13 +1136,79 @@ class VideoStore:
             tuple(folder_ids),
         )
 
+    def _recycle_journal(self) -> Path:
+        return self.path.parent / "video-library-recycle.json"
+
+    def _clear_recycle_journal(self, record: dict) -> None:
+        journal = self._recycle_journal()
+        try:
+            journal.unlink(missing_ok=True)
+        except OSError:
+            write_recycle_record(journal, {"completed": True})
+        try:
+            recycle_receipt_path(Path(record["directory"])).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _recover_pending_recycle(self) -> None:
+        journal = self._recycle_journal()
+        if not journal.is_file():
+            return
+        record = json.loads(journal.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            raise ValueError("删除恢复记录格式无效，原件与记录已保留")
+        if record.get("completed"):
+            journal.unlink(missing_ok=True)
+            return
+        directory, files = Path(record["directory"]), record["files"]
+        if not isinstance(files, list) or any(not isinstance(item, dict) for item in files):
+            raise ValueError("删除恢复文件清单无效，原件与记录已保留")
+        if not directory.is_absolute() or directory.resolve() != directory:
+            raise ValueError("删除恢复目录位置已变化，原件与恢复记录已保留")
+        for item in files:
+            if item.get("moved") and not Path(item["trash"]).is_relative_to(directory):
+                raise ValueError("删除恢复记录位置无效，未移动任何文件")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM recycle_bin WHERE operation_id = ?",
+                (record["operation_id"],),
+            ).fetchone()
+        if row is not None and json.loads(row["payload_json"]).get("files") == files:
+            self._clear_recycle_journal(record)
+            return
+        moved = [item for item in files if item.get("moved")]
+        if (moved and not directory.exists()
+                and not all(self._matches_trash_record(item, Path(item["original"])) for item in moved)):
+            restore_directory(record.get("windows_recycle") or {"original": str(directory)})
+        retained = self._rollback_moved_files(files, directory)
+        if retained:
+            raise OSError("上次删除尚未恢复，原件和恢复记录已保留；请排除文件冲突后重试")
+        self._clear_recycle_journal(record)
+
+    def recover_pending_recycle(self) -> None:
+        with FileLock(str(self.path.parent / "video-library-recycle.lock"), timeout=30):
+            self._recover_pending_recycle()
+
     def _move_to_recycle_bin(
+        self, kind: str, video_ids: list[int], folder_ids: list[int], trash_root: str | Path,
+        slide_root: str | Path | None = None, *, redo_operation_id: str | None = None,
+    ) -> dict[str, object]:
+        with FileLock(str(self.path.parent / "video-library-recycle.lock"), timeout=30):
+            self._recover_pending_recycle()
+            return self._move_to_recycle_bin_locked(
+                kind, video_ids, folder_ids, trash_root, slide_root,
+                redo_operation_id=redo_operation_id,
+            )
+
+    def _move_to_recycle_bin_locked(
         self, kind: str, video_ids: list[int], folder_ids: list[int], trash_root: str | Path,
         slide_root: str | Path | None = None,
         *, redo_operation_id: str | None = None,
     ) -> dict[str, object]:
         operation_id = redo_operation_id or uuid.uuid4().hex
         trash_directory = Path(trash_root).expanduser().resolve() / (uuid.uuid4().hex if redo_operation_id else operation_id)
+        windows_recycle = None
+        pending = None
         moved: list[dict[str, object]] = []
         try:
             with self.connect() as connection:
@@ -1127,6 +1219,12 @@ class VideoStore:
                     snapshot = self._recycle_snapshot(connection, video_ids, [])
                 if not snapshot["videos"] and not snapshot["folders"]:
                     raise ValueError("要删除的内容不存在")
+                label = (snapshot["folders"][-1]["name"] if snapshot["folders"]
+                         else snapshot["videos"][0]["filename"])
+                label = "".join("_" if char in '<>:"/\\|?*' or ord(char) < 32 else char
+                                for char in label).strip(" .")[:60]
+                trash_directory = trash_directory.with_name(
+                    f"ClassCue - {label or 'video'} - {trash_directory.name}")
                 if redo_operation_id:
                     latest = connection.execute(
                         "SELECT * FROM library_redo_history ORDER BY sequence DESC LIMIT 1"
@@ -1252,13 +1350,43 @@ class VideoStore:
                     )
                 for folder in snapshot["folders"]:
                     connection.execute("DELETE FROM video_folders WHERE id = ?", (int(folder["id"]),))
+                # The local folder is transactional staging, not a second bin.
+                # Recycle before committing so a Shell failure rolls back the
+                # library deletion and returns every staged file to its owner.
+                pending = {"operation_id": operation_id, "directory": str(trash_directory), "files": moved}
+                write_recycle_record(self._recycle_journal(), pending)
+                windows_recycle = recycle_directory(trash_directory)
+                if (windows_recycle is None and any(item.get("moved") for item in moved)
+                        and not trash_directory.exists()):
+                    raise OSError("Windows 未返回回收凭据，正在恢复原件")
+                if windows_recycle is not None:
+                    pending["windows_recycle"] = windows_recycle
+                    write_recycle_record(self._recycle_journal(), pending)
+                    payload["windows_recycle"] = windows_recycle
+                    connection.execute(
+                        "UPDATE recycle_bin SET payload_json = ? WHERE operation_id = ?",
+                        (json.dumps(payload, ensure_ascii=False), operation_id),
+                    )
         except Exception as error:
+            if (pending is not None and any(item.get("moved") for item in moved)
+                    and not trash_directory.exists()):
+                try:
+                    restore_directory(windows_recycle or {"original": str(trash_directory)})
+                except (OSError, ValueError) as restore_error:
+                    raise OSError(
+                        "删除未完成，原件和恢复记录已保留；"
+                        "可先在 Windows 回收站还原对应的 ClassCue 文件夹，再重试删除"
+                    ) from restore_error
             retained = self._rollback_moved_files(moved, trash_directory)
             if retained:
                 raise OSError(
                     f"删除失败，{len(retained)} 个未能还原的原件已保留在 {trash_directory}"
                 ) from error
+            if pending is not None:
+                self._clear_recycle_journal(pending)
             raise
+        if pending is not None:
+            self._clear_recycle_journal(pending)
         from classcue.question_captures import QuestionCaptures
         QuestionCaptures(self).collect()
         from classcue.bilibili_frames import FrameStore
@@ -1299,7 +1427,9 @@ class VideoStore:
         if type(expected_size) is not int or not expected_hash:
             return False
         try:
-            if not destination.is_file() or destination.stat().st_size != expected_size:
+            if (not destination.is_file() or destination.is_symlink()
+                    or getattr(destination.lstat(), "st_file_attributes", 0) & 0x400
+                    or destination.stat().st_size != expected_size):
                 return False
             return VideoStore.file_hash(destination) == expected_hash
         except OSError:
@@ -1347,6 +1477,7 @@ class VideoStore:
         self, trash_root: str | Path, slide_root: str | Path | None = None,
         *, expected_operation_id: str | None = None,
     ) -> dict[str, object]:
+        self.recover_pending_recycle()
         moved_back: list[dict[str, object]] = []
         with self.connect() as connection:
             row = connection.execute(
@@ -1358,6 +1489,27 @@ class VideoStore:
                 raise ValueError("撤销记录已更新，请刷新后重试")
             payload = json.loads(row["payload_json"])
             files = payload.get("files", [])
+            windows_recycle = payload.get("windows_recycle")
+            if windows_recycle is not None:
+                staging = Path(windows_recycle["original"])
+                # Also accept a bundle the user restored in Windows already.
+                if not staging.exists():
+                    for record in files:
+                        if not record.get("moved"):
+                            continue
+                        destination = Path(record["original"])
+                        if slide_root is not None and record.get("role") == "slide":
+                            destination = self._slide_restore_destination(
+                                record, Path(slide_root), payload) or destination
+                        if destination.exists():
+                            raise ValueError(f"原位置已有同名文件：{destination.name}")
+                    restore_directory(windows_recycle)
+                for record in files:
+                    if not record.get("moved"):
+                        continue
+                    source = Path(record["trash"])
+                    if source.is_file() and not self._matches_trash_record(record, source):
+                        raise ValueError("回收文件内容已变化，未恢复学习记录；原件已保留")
             # Legacy payloads predate per-file byte identities; their trash
             # copies are the only identity basis left.  All fallible stat/hash
             # work and its commit happen before any move so a restore that
@@ -1512,6 +1664,9 @@ class VideoStore:
                         f"{'、'.join(retained)}；排除故障后可重试撤销"
                     ) from error
                 raise
+        if windows_recycle is not None:
+            # Remove only empty staging directories. Unexpected files must stay.
+            self._remove_empty_recycle_directories(Path(windows_recycle["original"]))
         return {
             "operation_id": row["operation_id"],
             "kind": row["kind"],
@@ -1618,6 +1773,7 @@ class VideoStore:
         self, trash_root: str | Path, slide_root: str | Path | None = None,
         *, redo: bool = False,
     ) -> dict[str, object]:
+        self.recover_pending_recycle()
         verb = "重做" if redo else "撤销"
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

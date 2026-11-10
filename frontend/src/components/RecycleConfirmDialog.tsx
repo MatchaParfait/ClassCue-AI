@@ -54,9 +54,11 @@ export function RecycleConfirmDialog({ kind, name, backgroundRef, onConfirm, onC
           <div><span>{kind === "folder" ? "文件夹" : "视频"}</span><strong>{name}</strong></div>
         </div>
         <p id="recycle-confirm-description">
-          {kind === "folder" ? "此文件夹及其中的子文件夹、视频将移入回收站，不会永久删除。" : "此视频将移入回收站，不会永久删除。"}
+          {kind === "folder"
+            ? "此文件夹及其中的子文件夹、视频和相关资料将保存为一个 ClassCue 文件夹，移入 Windows 回收站，本次不会永久删除。清空 Windows 回收站后将无法恢复。"
+            : "此视频和相关资料将保存为一个 ClassCue 文件夹，移入 Windows 回收站，本次不会永久删除。清空 Windows 回收站后将无法恢复。"}
         </p>
-        <p className="recycle-confirm-undo"><RotateCcw size={14} aria-hidden="true" /><span>移入后可按 <kbd>Ctrl</kbd> + <kbd>Z</kbd> 撤销，也可点击提示中的“撤销”。</span></p>
+        <p className="recycle-confirm-undo"><RotateCcw size={14} aria-hidden="true" /><span>清空前可按 <kbd>Ctrl</kbd> + <kbd>Z</kbd> 或点击提示中的“撤销”。在 Windows 中还原后，仍需回到软件撤销以恢复课程记录。</span></p>
         {error && <p className="field-error recycle-confirm-error" role="alert">{error}</p>}
         <div className="recycle-confirm-actions">
           <button ref={cancel} className="secondary-button" type="button" disabled={busy} onClick={close}>取消</button>

@@ -61,6 +61,7 @@ files = [
     "classcue/codex_drafts.py",
     "classcue/codex_native_draft.py",
     "classcue/windows_clipboard.py",
+    "classcue/windows_recycle.py",
     "api/codex_bridge.py",
     "integrations/codex-desktop/package.json",
     "integrations/codex-desktop/package-lock.json",

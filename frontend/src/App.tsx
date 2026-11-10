@@ -1054,8 +1054,8 @@ function LibraryPage({ active, suspended, scope, libraryId, workspaceSettled, st
       setCanUndoLibrary(true);
       setCanRedoLibrary(false);
       setNotice(target.kind === "folder"
-        ? result.videos ? `文件夹已移入回收站（${result.videos} 个视频），按 Ctrl+Z 撤销` : "文件夹已移入回收站，按 Ctrl+Z 撤销"
-        : result.message || "视频已移入回收站，按 Ctrl+Z 撤销");
+        ? result.videos ? `文件夹已移入 Windows 回收站（${result.videos} 个视频），清空前可按 Ctrl+Z 撤销` : "文件夹已移入 Windows 回收站，清空前可按 Ctrl+Z 撤销"
+        : result.message || "视频已移入 Windows 回收站，清空前可按 Ctrl+Z 撤销");
       if (target.kind === "folder" && folderId === target.folder.id) setFolderId(null);
       void queryClient.invalidateQueries({ queryKey: ["videos"] });
       void queryClient.invalidateQueries({ queryKey: ["library"] });

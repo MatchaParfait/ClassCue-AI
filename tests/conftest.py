@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import starlette.testclient
+import pytest
 
 # The production request boundary only trusts real loopback host names, so
 # implicit TestClient bases must not use the fictional http://testserver.
@@ -19,3 +20,11 @@ def _loopback_default_init(self, app, *args, **kwargs):
 
 
 starlette.testclient.TestClient.__init__ = _loopback_default_init
+
+
+@pytest.fixture(autouse=True)
+def isolated_recycle_transport(monkeypatch):
+    # Existing transaction/compensation tests inspect local staging directly.
+    # Shell transport is exercised explicitly with disposable bundles in
+    # test_windows_recycle.py, keeping ordinary unit tests out of the real bin.
+    monkeypatch.setattr("classcue.video_store.recycle_directory", lambda _directory: None)

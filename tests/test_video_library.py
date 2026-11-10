@@ -62,7 +62,7 @@ def test_delete_moves_video_to_recycle_bin_and_undo_restores_it(library):
 
     deleted = client.delete(f'/api/videos/{video["id"]}')
     assert deleted.status_code == 200
-    assert deleted.json()["message"].startswith("已移入回收站")
+    assert deleted.json()["message"].startswith("已移入 Windows 回收站")
     assert not managed.exists()
     assert store.list_videos() == []
     assert source.exists() is False

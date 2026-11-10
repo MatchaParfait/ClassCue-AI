@@ -1195,6 +1195,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 await asyncio.to_thread(recover_managed_rename, provider.get())
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 log_exception(LOGGER, "Video rename recovery requires attention; files preserved", exc=exc)
+            try:
+                await asyncio.to_thread(provider.get().recover_pending_recycle)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log_exception(LOGGER, "Video delete recovery requires attention; files preserved", exc=exc)
             if before_recovery != asr_storage.storage_root(DIRECTORY_PROJECT_ROOT):
                 # Modules may already have captured the uncommitted model path.
                 recovery_needs_restart.set()
@@ -2409,7 +2413,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 )
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"id": folder_id, "deleted": True, **result, "message": "已移入回收站，可使用 Ctrl+Z 撤销"}
+        return {"id": folder_id, "deleted": True, **result, "message": "已移入 Windows 回收站，清空前可使用 Ctrl+Z 撤销"}
 
     @api.delete("/api/videos/{video_id}")
     def delete_video(video_id: int) -> dict[str, object]:
@@ -2423,7 +2427,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 )
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"id": video_id, "deleted": True, **result, "message": "已移入回收站，可使用 Ctrl+Z 撤销"}
+        return {"id": video_id, "deleted": True, **result, "message": "已移入 Windows 回收站，清空前可使用 Ctrl+Z 撤销"}
 
     @api.post("/api/recycle-bin/undo")
     def undo_recycle_bin() -> dict[str, object]:

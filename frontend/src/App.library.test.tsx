@@ -478,6 +478,9 @@ describe("in-app recycle confirmation", () => {
     expect(dialog().getAttribute("role")).toBe("dialog");
     expect(dialog().textContent).toContain("Lesson 1");
     expect(dialog().textContent).toContain("不会永久删除");
+    expect(dialog().textContent).toContain("Windows 回收站");
+    expect(dialog().textContent).toContain("清空 Windows 回收站后将无法恢复");
+    expect(dialog().textContent).toContain("仍需回到软件撤销以恢复课程记录");
     expect(document.activeElement).toBe(button("取消"));
     expect(container.querySelector<HTMLElement>(".library-page")!.inert).toBe(true);
     expect(deleteVideo).not.toHaveBeenCalled();
