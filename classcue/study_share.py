@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -161,7 +162,7 @@ BUILTIN_NAMES = {
 }
 
 
-def export_package(store: VideoStore, video_id: int) -> bytes:
+def export_package(store: VideoStore, video_id: int, *, transfer: bool = False) -> bytes:
     with store.connect() as connection:
         connection.execute("BEGIN")
         video = connection.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
@@ -179,6 +180,13 @@ def export_package(store: VideoStore, video_id: int) -> bytes:
             LEFT JOIN recall_schemes s ON s.id = r.analysis_mode
             WHERE r.video_id = ? AND r.status = 'completed' ORDER BY r.analysis_mode""", (video_id,),
         ).fetchall()
+        if transfer:
+            runs = [row for row in runs if re.fullmatch(
+                r"(high_recall|medium_recall|low_recall|strict_exam_intent|custom_[a-zA-Z0-9_-]{1,80})",
+                row["analysis_mode"])]
+            if not runs:
+                # A question-only video can still deliver subtitles through the v1 channel.
+                runs = [{"analysis_mode": "medium_recall", "scheme_name": "中召回", "scheme_revision": 0}]
         modes = {row["analysis_mode"] for row in runs}
         markers = connection.execute(
             "SELECT * FROM video_markers WHERE video_id = ? AND review_status != 'excluded' ORDER BY start_ms, id",

@@ -52,6 +52,15 @@
 .device-snapshot { justify-content: space-between; margin-top: 10px; font-size: 12px; }
 .device-snapshot > span { min-width: 0; overflow-wrap: anywhere; }
 .device-folder-send { flex: 0 0 auto; }
+.device-sync-conflict { min-width: 0; margin: 12px 0; padding: 12px 0; border: 0; border-top: 1px solid var(--ui-border); }
+.device-sync-conflict legend { max-width: 100%; padding: 0 8px 0 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.device-sync-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.device-sync-versions label { min-width: 0; font-size: 13px; cursor: pointer; }
+.device-sync-versions label > span { display: flex; align-items: center; gap: 8px; }
+.device-sync-versions input { accent-color: var(--ui-accent); }
+.device-sync-versions dl { margin: 12px 0 0; font-size: 12px; line-height: 1.7; }
+.device-sync-versions dt { color: var(--ui-muted); }
+.device-sync-versions dd { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; }
 @media (max-width: 600px) {
   .device-transfer-dialog { max-height: calc(100dvh - 24px); }
   .device-transfer-heading { padding: 16px; }
@@ -60,5 +69,7 @@
   .device-connection-row select { max-width: calc(100% - 100px); }
   .device-task-heading { flex-wrap: wrap; }
   .device-preview-row { align-items: flex-start; }
+  .device-sync-versions { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .device-task-actions { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .device-task progress::-webkit-progress-value { transition: none; } }

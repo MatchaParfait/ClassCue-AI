@@ -11,7 +11,7 @@ import pytest
 
 from classcue import device_protocol as wire, study_share
 from classcue.core import TranscriptSegment
-from classcue.device_study import current_digest, import_study, restore_study
+from classcue.device_study import current_digest, current_state_digest, import_study, restore_study
 from classcue.device_transfer_store import TransferStore
 from classcue.device_transfers import TransferManager
 import classcue.device_transfers as transfer_module
@@ -76,15 +76,16 @@ def test_transfer_replacement_is_explicit_recoverable_and_rechecks_confirmation(
     original = study_share.export_package(source, sid)
     assert import_study(target, journal, tid, original) is None
     initial = current_digest(target, tid)
+    initial_state = current_state_digest(target, tid)
     changed = json.loads(original)
     changed["markers"][0]["importance"] = "critical"
     changed["markers"][0]["user_start_ms"] = 300
     content = json.dumps(changed).encode()
     with pytest.raises(ValueError, match="覆盖"):
-        import_study(target, journal, tid, content, expected_digest=initial)
+        import_study(target, journal, tid, content, expected_digest=initial_state)
     with pytest.raises(ValueError, match="改变"):
         import_study(target, journal, tid, content, overwrite=True, expected_digest="stale")
-    snapshot = import_study(target, journal, tid, content, overwrite=True, expected_digest=initial)
+    snapshot = import_study(target, journal, tid, content, overwrite=True, expected_digest=initial_state)
     assert snapshot
     assert target.list_markers(tid)[0]["importance"] == "critical"
     restore_study(target, journal, snapshot)

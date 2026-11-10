@@ -19,7 +19,7 @@ from classcue import study_share
 from classcue.local_credentials import _crypt_protect, _crypt_unprotect
 
 BLOCK_BYTES = 32 * 1024 * 1024
-MAX_CONTROL_BYTES = 4 * 1024 * 1024
+MAX_CONTROL_BYTES = 8 * 1024 * 1024
 ROOT_NAME = "ClassCue-Link"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")

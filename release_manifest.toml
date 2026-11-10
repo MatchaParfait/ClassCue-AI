@@ -113,6 +113,8 @@ files = [
     "classcue/diagnostics.py",
     "classcue/device_protocol.py",
     "classcue/device_study.py",
+    "classcue/study_sync.py",
+    "classcue/device_study_sync.py",
     "classcue/device_transfer_store.py",
     "classcue/device_transfers.py",
     "classcue/device_wpd.py",

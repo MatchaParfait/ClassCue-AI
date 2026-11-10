@@ -24,7 +24,8 @@ def relative_path(value: str) -> str:
 
 
 class WpdTransport:
-    def __init__(self):
+    def __init__(self, *, qa=False):
+        self.qa = qa
         self._process = None
         self._responses: Queue = Queue()
         self._lock = Lock()
@@ -36,7 +37,7 @@ class WpdTransport:
             raise RuntimeError("有线设备传输仅支持 Windows")
         self._responses = Queue()
         self._process = subprocess.Popen(
-            [sys.executable, "-m", "classcue.device_wpd_worker"], stdin=subprocess.PIPE,
+            [sys.executable, "-m", "classcue.device_wpd_worker", *(["--qa"] if self.qa else [])], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
             cwd=Path(__file__).resolve().parents[1], creationflags=subprocess.CREATE_NO_WINDOW,
         )

@@ -13,7 +13,8 @@ from classcue.device_wpd import relative_path
 
 
 class PortableDevices:
-    def __init__(self):
+    def __init__(self, *, qa=False):
+        self.root_name = "ClassCue-Link-QA" if qa else ROOT_NAME
         import comtypes
         import comtypes.client
         self.com = comtypes
@@ -121,7 +122,7 @@ class PortableDevices:
         for storage in self.children("DEVICE"):
             documents = self.find(storage["object"], "Documents")
             if documents:
-                root = self.find(documents["object"], ROOT_NAME)
+                root = self.find(documents["object"], self.root_name)
                 if root:
                     self.root = root["object"]
                     return self.root
@@ -234,7 +235,7 @@ class PortableDevices:
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdin.reconfigure(encoding="utf-8")
-    devices = PortableDevices()
+    devices = PortableDevices(qa=sys.argv[1:] == ["--qa"])
     for line in sys.stdin:
         try:
             if len(line) > 48 * 1024 * 1024:

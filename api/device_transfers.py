@@ -35,6 +35,16 @@ class LibraryPayload(Payload):
     library_id: str
 
 
+class SyncPayload(DevicePayload):
+    library_id: str
+    video_ids: list[int] = Field(default_factory=list, max_length=10000)
+    folder_id: int | None = Field(default=None, gt=0)
+
+
+class SyncAcceptPayload(LibraryPayload):
+    choices: dict[str, str] = Field(default_factory=dict, max_length=20000)
+
+
 def device_transfer_router(manager, library_id):
     router = APIRouter(prefix="/api/device-transfers", tags=["device-transfers"])
 
@@ -91,5 +101,31 @@ def device_transfer_router(manager, library_id):
     def restore(identity: str, payload: LibraryPayload):
         require_library(payload.library_id)
         return {"video_id": call(lambda: manager().restore(identity))}
+
+    @router.post("/sync")
+    def sync(payload: SyncPayload):
+        require_library(payload.library_id)
+        def start():
+            video_ids = payload.video_ids
+            if payload.folder_id is not None:
+                if manager().get_store().get_folder(payload.folder_id) is None:
+                    raise ValueError("课程文件夹不存在")
+                video_ids = [row["id"] for row in manager().get_store().list_folder_videos(payload.folder_id, recursive=True)]
+                if not video_ids:
+                    raise ValueError("课程文件夹没有视频")
+            return manager().sync.start(payload.device_id, video_ids)
+        return call(start)
+
+    @router.post("/sync/{identity}/accept")
+    def accept_sync(identity: str, payload: SyncAcceptPayload):
+        require_library(payload.library_id)
+        return call(lambda: manager().sync.accept(identity, payload.choices))
+
+    @router.post("/sync/{identity}/{action}")
+    def sync_action(identity: str, action: str, payload: LibraryPayload):
+        require_library(payload.library_id)
+        if action not in {"refresh", "reject"}:
+            raise HTTPException(status_code=400, detail="未知的同步操作")
+        return call(lambda: getattr(manager().sync, action)(identity))
 
     return router

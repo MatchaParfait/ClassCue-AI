@@ -2,6 +2,13 @@ import { request } from "./client";
 
 export interface TransferDevice {
   id: string; name: string; paired: boolean; root_available: boolean; foreground: boolean; message?: string;
+  capabilities?: string[];
+}
+export interface StudySyncTask {
+  id: string; name: string; peer_name: string; video_id: number | null;
+  direction: "incoming" | "outgoing"; state: string; error?: string;
+  preview?: { added: number; removed: number; edited: number; bootstrap: boolean;
+    conflicts: Array<{ id: string; title: string; fields: string[]; local: Record<string, unknown>; remote: Record<string, unknown> }> };
 }
 export interface TransferPreview {
   id: string; name: string; need_video: boolean; conflict: boolean; same: boolean; blocked: string;
@@ -14,6 +21,7 @@ export interface TransferTask {
 }
 export interface TransferStatus {
   devices: TransferDevice[]; tasks: TransferTask[];
+  sync_tasks?: StudySyncTask[];
   pairings: Array<{ id: string; name: string; code: string; accepted: boolean; confirmed: boolean }>;
   snapshots: Array<{ id: string; video_id: number; created: number; restored: number }>; error: string;
 }

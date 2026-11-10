@@ -354,6 +354,8 @@ class VideoStore:
             initialize_materials(connection)
             from classcue.study_materials import initialize_study_materials
             initialize_study_materials(connection)
+            from classcue.study_sync import initialize as initialize_study_sync
+            initialize_study_sync(connection)
             self._restore_completed_analysis_status(connection)
 
     @staticmethod
@@ -668,6 +670,9 @@ class VideoStore:
         """Replace derived data when a known source path now contains new content."""
         resolved = str(Path(video_path).expanduser().resolve())
         with self.connect() as connection:
+            from classcue.study_sync import require_unlinked
+            connection.execute("BEGIN IMMEDIATE")
+            require_unlinked(connection, video_id)
             for table in (
                 "video_transcript_segments",
                 "video_keyword_hits",
@@ -944,6 +949,9 @@ class VideoStore:
 
     # ---- Recycle bin --------------------------------------------------------------
     _RECYCLE_CHILD_TABLES = (
+        "study_sync_bases",
+        "study_sync_receipts",
+        "study_sync_schemes",
         "video_transcript_segments",
         "video_keyword_hits",
         "video_markers",
@@ -1581,6 +1589,7 @@ class VideoStore:
                 related = payload.get("related", {})
                 for table in (
                     "video_transcript_segments", "video_keyword_hits", "video_markers",
+                    "study_sync_bases", "study_sync_receipts", "study_sync_schemes",
                     "video_slides",
                     "video_analysis_runs", "video_ai_chunks", "video_processing_metrics",
                     "video_experiments", "llm_experiment_calls", "llm_experiment_steps",
@@ -2028,6 +2037,9 @@ class VideoStore:
         self, video_id: int, segments: list[TranscriptSegment], model_id: str = ""
     ) -> None:
         with self.connect() as connection:
+            from classcue.study_sync import require_unlinked
+            connection.execute("BEGIN IMMEDIATE")
+            require_unlinked(connection, video_id)
             connection.execute("DELETE FROM video_transcript_segments WHERE video_id = ?", (video_id,))
             connection.executemany(
                 "INSERT INTO video_transcript_segments(video_id, segment_id, start_ms, end_ms, text, words_json) VALUES (?, ?, ?, ?, ?, ?)",
@@ -2040,6 +2052,9 @@ class VideoStore:
 
     def claim_retranscription(self, video_id: int) -> bool:
         with self.connect() as connection:
+            from classcue.study_sync import require_unlinked
+            connection.execute("BEGIN IMMEDIATE")
+            require_unlinked(connection, video_id)
             updated = connection.execute(
                 "UPDATE videos SET status = 'processing' WHERE id = ? AND status != 'processing'",
                 (video_id,),
@@ -2050,6 +2065,9 @@ class VideoStore:
         self, video_id: int, segments: list[TranscriptSegment], model_id: str
     ) -> None:
         with self.connect() as connection:
+            from classcue.study_sync import require_unlinked
+            connection.execute("BEGIN IMMEDIATE")
+            require_unlinked(connection, video_id)
             for table in (
                 "video_transcript_segments", "video_keyword_hits", "video_markers",
                 "video_analysis_runs", "video_ai_chunks", "video_processing_metrics",
@@ -2299,7 +2317,7 @@ class VideoStore:
                 connection.execute(
                     "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
                     "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
-                    "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%' "
+                    "AND sync_id = '' AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-%' "
                     "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
                     "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
                     "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
@@ -2439,7 +2457,7 @@ class VideoStore:
             connection.execute(
                 "DELETE FROM video_markers WHERE video_id = ? AND analysis_mode = ? "
                 "AND review_status != 'excluded' AND user_start_ms IS NULL AND importance = 'standard' "
-                "AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-question:%' "
+                "AND sync_id = '' AND question_emphasis_override IS NULL AND trigger_phrase NOT LIKE 'MANUAL-%' "
                 "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
                 "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
                 "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
@@ -2738,6 +2756,8 @@ class VideoStore:
             ).fetchall()
             by_key = {(row["start_ms"], row["end_ms"], row["title"]): row for row in old
                       if not row["trigger_phrase"].startswith("MANUAL-question:")}
+            synced_by_anchor = {(row["start_ms"], row["end_ms"], row["trigger_phrase"]): row
+                                for row in old if row["sync_id"]}
             retained = set()
             for item in results:
                 start, end, title = item["start_ms"], item["end_ms"], item["title"].strip()
@@ -2745,16 +2765,17 @@ class VideoStore:
                     raise ValueError("Invalid production marker")
                 # Different knowledge objects can share the same timestamp and signal.
                 trigger = f"AI-{item['signal_type']}:{hashlib.sha256(title.encode('utf-8')).hexdigest()[:16]}"
-                existing = by_key.get((start, end, title))
+                existing = synced_by_anchor.get((start, end, trigger)) or by_key.get((start, end, title))
                 values = (
                     title, item["reason"], item["source_quote"], trigger,
                 )
                 if existing:
                     retained.add(existing["id"])
-                    connection.execute(
-                        "UPDATE video_markers SET title = ?, note = ?, source_quote = ?, trigger_phrase = ? WHERE id = ?",
-                        (*values, existing["id"]),
-                    )
+                    if not existing["sync_id"]:
+                        connection.execute(
+                            "UPDATE video_markers SET title = ?, note = ?, source_quote = ?, trigger_phrase = ? WHERE id = ?",
+                            (*values, existing["id"]),
+                        )
                 else:
                     cursor = connection.execute(
                         """INSERT INTO video_markers(
@@ -2775,7 +2796,7 @@ class VideoStore:
                     # Recheck user edits made after the analysis snapshot.
                     connection.execute(
                         "DELETE FROM video_markers WHERE id = ? AND user_start_ms IS NULL AND importance = 'standard' "
-                        "AND question_emphasis_override IS NULL "
+                        "AND sync_id = '' AND question_emphasis_override IS NULL "
                         "AND NOT EXISTS (SELECT 1 FROM question_visuals q WHERE q.marker_id=video_markers.id "
                         "AND (json_extract(q.payload_json, '$.binding') IS NOT NULL "
                         "OR json_extract(q.payload_json, '$.binding_mode') = 'manual'))",
@@ -2849,7 +2870,8 @@ class VideoStore:
 
     def delete_marker(self, marker_id: int) -> None:
         with self.connect() as connection:
-            connection.execute("DELETE FROM video_markers WHERE id = ?", (marker_id,))
+            connection.execute("UPDATE video_markers SET review_status='excluded' WHERE id=? AND sync_id!=''", (marker_id,))
+            connection.execute("DELETE FROM video_markers WHERE id=? AND sync_id=''", (marker_id,))
 
     def create_job(self, job_id: str, job_type: str, video_id: int | None = None) -> None:
         with self.connect() as connection:

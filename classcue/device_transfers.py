@@ -13,8 +13,9 @@ import time
 from uuid import UUID, uuid4
 
 from classcue import device_protocol as protocol, study_share
-from classcue.device_study import current_digest, import_study, restore_study, save_transfer_commit, transfer_commit
+from classcue.device_study import current_digest, current_state_digest, import_study, restore_study, save_transfer_commit, transfer_commit
 from classcue.device_transfer_store import TransferStore
+from classcue.device_study_sync import StudySyncLink
 from classcue.device_wpd import WpdTransport
 from classcue.video_library import hash_video_source, register_managed_video
 
@@ -37,6 +38,7 @@ class TransferManager:
         self.devices_cache = []
         self.discovery_error = ""
         self.thread = None
+        self.sync = StudySyncLink(self)
 
     def start(self):
         if self.thread is None:
@@ -91,6 +93,7 @@ class TransferManager:
                     raise ValueError("设备身份无效")
                 info.update(root_available=True, peer_id=identity["peer_id"], public_key=public,
                             name=str(identity.get("name", device["name"]))[:200],
+                            capabilities=identity.get("capabilities", []),
                             foreground=identity.get("foreground") is True)
                 peer = self.journal.peer(info["peer_id"])
                 info["paired"] = peer is not None and peer["public_key"] == public
@@ -174,6 +177,7 @@ class TransferManager:
                 "pairings": [self._public_pair(pair) for pair in self.journal.pairs()
                              if not pair.get("trusted") and not pair.get("rejected")],
                 "snapshots": self.journal.snapshots(library_path), "error": self.discovery_error,
+                "sync_tasks": [self.sync.public(task) for task in self.sync.store().tasks()],
             }
 
     @staticmethod
@@ -248,7 +252,7 @@ class TransferManager:
                     raise ValueError("源视频内容已变化，未发送")
                 study = None
                 if row["status"] == "review_ready":
-                    content = study_share.export_package(store, row["id"])
+                    content = study_share.export_package(store, row["id"], transfer=True)
                     package = study_share.decode_package(content)
                     (task_dir / f"{row['content_hash']}.studyshare").write_bytes(content)
                     study = {"size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
@@ -308,6 +312,7 @@ class TransferManager:
         for item in offer["items"]:
             existing = store.get_video_by_hash(item["id"])
             digest = None
+            state_digest = None
             blocked = ""
             if existing:
                 if not Path(existing["video_path"]).is_file():
@@ -317,6 +322,7 @@ class TransferManager:
                 else:
                     try:
                         digest = current_digest(store, existing["id"])
+                        state_digest = current_state_digest(store, existing["id"])
                     except Exception:
                         blocked = "已有学习资料无法校验，请先检查视频"
             incoming = item.get("study")
@@ -325,7 +331,8 @@ class TransferManager:
             result.append({"id": item["id"], "name": item["name"], "existing_video_id": existing["id"] if existing else None,
                            "need_video": existing is None, "conflict": conflict, "same": same, "blocked": blocked,
                            "subtitle_count": incoming["subtitle_count"] if incoming else 0,
-                           "marker_count": incoming["marker_count"] if incoming else 0, "local_digest": digest})
+                           "marker_count": incoming["marker_count"] if incoming else 0,
+                           "local_digest": state_digest})
         return result
 
     def accept(self, identity, actions, target_folder=None):
@@ -339,6 +346,13 @@ class TransferManager:
             lookup = {entry["id"]: entry.get("action") for entry in actions}
             decisions = []
             preview = self._preview(task["offer"])
+            previous = {item["id"]: item for item in task["preview"]}
+            if any(lookup.get(item["id"], "skip" if item["conflict"] or item["blocked"] else "receive") != "skip"
+                   and any(item[key] != previous[item["id"]][key]
+                           for key in ("local_digest", "existing_video_id", "need_video")) for item in preview):
+                task.update(preview=preview, error="预览后本机资料已改变，请核对更新后的预览再确认")
+                self.journal.save(task)
+                raise ValueError(task["error"])
             required = 0
             for item in preview:
                 action = lookup.get(item["id"], "skip" if item["conflict"] or item["blocked"] else "receive")
@@ -415,6 +429,7 @@ class TransferManager:
         with self.lock:
             self.scan()
             self._pair_responses()
+            self.sync.tick(self.devices_cache)
             for device in self.devices_cache:
                 if device.get("paired") and device.get("foreground"):
                     self._scan_incoming(device)

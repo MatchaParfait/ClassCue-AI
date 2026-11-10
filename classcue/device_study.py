@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
 
 from classcue import study_share
-from classcue.device_protocol import semantic_digest
+from classcue.device_protocol import canonical, semantic_digest
 from classcue.device_transfer_store import TransferStore
 from classcue.video_store import VideoStore
+from classcue.study_sync import require_unlinked
 
 TABLES = ("video_transcript_segments", "video_markers", "video_analysis_runs",
           "video_keyword_hits", "video_ai_chunks", "video_share_imports")
@@ -24,7 +26,7 @@ def current_digest(store: VideoStore, video_id: int) -> str | None:
             occupied = any(connection.execute(f"SELECT 1 FROM {table} WHERE video_id=? LIMIT 1", (video_id,)).fetchone()
                            for table in TABLES)
         return "occupied" if occupied else None
-    return semantic_digest(study_share.export_package(store, video_id))
+    return semantic_digest(study_share.export_package(store, video_id, transfer=True))
 
 
 def _snapshot(connection, video_id):
@@ -34,6 +36,19 @@ def _snapshot(connection, video_id):
         "tables": {table: [dict(row) for row in connection.execute(f"SELECT * FROM {table} WHERE video_id=?", (video_id,))]
                    for table in TABLES},
     }
+
+
+def current_state_digest(store: VideoStore, video_id: int, connection=None) -> str | None:
+    if connection is None:
+        with store.connect() as connection:
+            connection.execute("BEGIN")
+            return current_state_digest(store, video_id, connection)
+    snapshot = _snapshot(connection, video_id)
+    if not any(snapshot["tables"].values()):
+        return None
+    for rows in snapshot["tables"].values():
+        rows.sort(key=canonical)
+    return hashlib.sha256(canonical(snapshot)).hexdigest()
 
 
 def _insert(connection, table, rows):
@@ -85,12 +100,14 @@ def import_study(store: VideoStore, journal: TransferStore, video_id: int, conte
         return None
     if digest is not None and not overwrite:
         raise ValueError("此视频已有学习资料，请选择覆盖或跳过")
-    if digest != expected_digest:
+    state_digest = current_state_digest(store, video_id)
+    if state_digest != expected_digest:
         raise ValueError("接收确认后资料已改变，请重新预览")
     snapshot_id = None
     with store.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        if current_digest(store, video_id) != digest:
+        require_unlinked(connection, video_id)
+        if current_state_digest(store, video_id, connection) != state_digest:
             raise ValueError("接收确认后资料已改变，请重新预览")
         if digest is not None:
             snapshot = _snapshot(connection, video_id)
@@ -141,6 +158,7 @@ def restore_study(store: VideoStore, journal: TransferStore, snapshot_id: str):
         video = connection.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
         if video is None or video["content_hash"] != value["video"]["content_hash"]:
             raise ValueError("原视频已不存在，无法恢复此备份")
+        require_unlinked(connection, video_id)
         for table in TABLES:
             connection.execute(f"DELETE FROM {table} WHERE video_id=?", (video_id,))
             _insert(connection, table, value["tables"][table])

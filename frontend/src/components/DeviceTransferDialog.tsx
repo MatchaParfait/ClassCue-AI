@@ -6,6 +6,7 @@ import { getLibrary, getVideos } from "../api/client";
 import { transferPost, transferStatus, type TransferAction, type TransferSelection, type TransferTask } from "../api/deviceTransfers";
 import { useModalFocus } from "../hooks/useModalFocus";
 import { AnimatedOverlay, AnimatedPopup } from "./Motion";
+import { DeviceStudySyncTask } from "./DeviceStudySync";
 import "../device-transfers.css";
 
 const stateLabels: Record<string, string> = {
@@ -82,7 +83,7 @@ export default function DeviceTransferDialog({ libraryId, selection, returnFocus
   const selectedDevice = data?.devices.find(device => device.id === deviceId) ?? data?.devices[0];
   const close = () => { if (!submitting.current) onClose(); };
   useModalFocus(true, dialog, closeButton, close, undefined, returnFocus);
-  const completed = data?.tasks.filter(task => task.state === "completed").map(task => task.id).join(",") ?? "";
+  const completed = [...(data?.tasks ?? []), ...(data?.sync_tasks ?? [])].filter(task => task.state === "completed").map(task => task.id).join(",");
   useEffect(() => {
     if (!completed) return;
     for (const key of ["videos", "library", "library-status", "study", "settings", "device-transfer-folders", "device-transfer-videos"]) {
@@ -106,12 +107,20 @@ export default function DeviceTransferDialog({ libraryId, selection, returnFocus
       device_id: selectedDevice.id, library_id: libraryId, folder_id: chosen.folderId ?? null, video_ids: chosen.videoIds ?? [],
     }));
   };
+  const sync = (selected: boolean) => {
+    if (!selectedDevice) return;
+    const [kind, value] = source.split(":");
+    const chosen = selected ? selection ?? (kind === "folder" ? { folderId: Number(value) } : { videoIds: [Number(value)] }) : undefined;
+    void act(() => transferPost("/sync", {
+      device_id: selectedDevice.id, library_id: libraryId, video_ids: chosen?.videoIds ?? [], folder_id: chosen?.folderId ?? null,
+    }));
+  };
   return createPortal(<AnimatedOverlay className="modal-backdrop device-transfer-backdrop"
     onClick={event => { event.stopPropagation(); if (event.target === event.currentTarget) close(); }}>
     <AnimatedPopup ref={dialog} className="device-transfer-dialog" role="dialog" aria-modal="true"
       aria-labelledby="device-transfer-title" tabIndex={-1}>
       <header className="device-transfer-heading"><Cable size={21} /><div><h2 id="device-transfer-title">连接平板</h2>
-        <p>通过 USB 双向传送课程</p></div>
+        <p>课程传送与学习修改同步</p></div>
         <button ref={closeButton} className="icon-button" type="button" title="关闭" aria-label="关闭设备连接" disabled={busy} onClick={close}><X size={19} /></button>
       </header>
       <div className="device-transfer-content">
@@ -154,6 +163,18 @@ export default function DeviceTransferDialog({ libraryId, selection, returnFocus
             <button className="primary-button compact" disabled={busy || !selectedDevice?.paired || !selectedDevice.foreground || (!selection && !source)}
               onClick={send}>{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}发送到平板</button>
           </div>
+        </section>
+        <section aria-label="学习修改同步">
+          <div className="device-section-title"><h3>学习修改同步</h3>
+            <button className="text-button" disabled={busy || !selectedDevice?.paired || !selectedDevice.foreground}
+              onClick={() => sync(false)}><RefreshCw size={15} />同步已关联视频</button></div>
+          <div className="device-send-row"><span className="device-note">考点与考题</span>
+            <button className="secondary-button compact"
+              disabled={busy || !selectedDevice?.paired || !selectedDevice.foreground || (!selection && !source)}
+              onClick={() => sync(true)}><RefreshCw size={15} />关联并同步所选</button></div>
+          {!data?.sync_tasks?.length && <p className="device-note">尚无同步记录</p>}
+          {data?.sync_tasks?.map(task => <DeviceStudySyncTask key={`${task.id}:${JSON.stringify(task.preview)}`} task={task} busy={busy}
+            execute={(id, action, choices) => void act(() => transferPost(`/sync/${id}/${action}`, { library_id: libraryId, ...(choices ? { choices } : {}) }))} />)}
         </section>
         {(error || status.error || folders.error || videos.error || data?.error) && <p className="field-error device-note" role="alert"><AlertCircle size={16} />
           {error || (status.error ?? folders.error ?? videos.error)?.message || data?.error}</p>}
