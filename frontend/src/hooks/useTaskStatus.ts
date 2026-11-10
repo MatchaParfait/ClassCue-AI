@@ -49,7 +49,7 @@ export function taskTypeLabel(job: Job) {
     secondary_view_align: "副视角自动对齐",
     question_analysis: "题目分析", question_visual: "题图复核",
     material_preprocess: "资料整理",
-    asr_prepare: "模型准备", asr_download_cleanup: "下载清理",
+    asr_prepare: "模型准备", asr_download_cleanup: "下载清理", cache_cleanup: "缓存清理",
     asr_delete: "模型清理", asr_runtime_delete: "运行环境清理", storage_migration: "目录迁移",
   } as Record<string, string>)[job.job_type ?? ""] ?? (job.video_id ? "视频处理" : "模型任务");
 }

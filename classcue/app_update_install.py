@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import tomllib
 from uuid import uuid4
 import zipfile
@@ -167,6 +168,7 @@ def apply(root, plan, staged, old, new):
         raise ValueError("程序备份校验未通过，原程序未修改")
     # The API is stopped and its database lease must be free before backup.
     lease = DatabaseLease()
+    database_backed_up = False
     try:
         if plan.get("database_path"):
             database = Path(plan["database_path"])
@@ -176,6 +178,11 @@ def apply(root, plan, staged, old, new):
                     source.backup(output)
                     if output.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         raise ValueError("数据库备份校验未通过")
+                database_backed_up = True
+        write_json(backup / "backup-state.json", {
+            "id": plan["id"], "status": "complete", "completed_at": time.time(),
+            "database_backed_up": database_backed_up,
+        })
         record = {"id": plan["id"], "status": "replacing", "version": new["version"],
                   "previous_version": old["version"], "touched": [], "message": "正在替换程序文件"}
         write_json(directory / "transaction.json", record)

@@ -196,6 +196,9 @@ def test_update_transaction_preserves_data_and_removes_only_managed_files(distri
     assert inventory(d.root, d.public)["version"] == "99.0.0"
     assert read_json(d.directory / "transaction.json")["status"] == "installed"
     assert (d.directory / "backups" / plan["id"] / "main.py").read_text() == "old code"
+    completion = read_json(d.directory / "backups" / plan["id"] / "backup-state.json")
+    assert completion["status"] == "complete" and completion["id"] == plan["id"]
+    assert completion["database_backed_up"] is False
 
 
 def test_sqlite_snapshot_is_consistent_and_never_restored_over_user_data(distribution):
@@ -210,6 +213,7 @@ def test_sqlite_snapshot_is_consistent_and_never_restored_over_user_data(distrib
     staged, old, new = stage(d.root, plan)
     apply(d.root, plan, staged, old, new)
     snapshot = d.directory / "backups" / plan["id"] / "library-backup.sqlite3"
+    assert read_json(snapshot.parent / "backup-state.json")["database_backed_up"] is True
     with sqlite3.connect(snapshot) as connection:
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("SELECT title FROM lessons").fetchone()[0] == "user lesson"
@@ -230,6 +234,7 @@ def test_busy_database_is_not_touched_by_installer(distribution):
         with pytest.raises(DatabaseBusyError):
             apply(d.root, plan, staged, old, new)
         assert digest(d.root / "main.py") == old["files"]["main.py"]
+        assert not (d.directory / "backups" / plan["id"] / "backup-state.json").exists()
     finally:
         owner.release()
 

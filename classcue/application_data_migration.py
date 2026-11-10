@@ -23,7 +23,7 @@ from classcue.storage_migration import _hash, _identity, _overlaps, _safe, _writ
 CONFIG_FILES = (
     "ai_providers.json", "asr_settings.json", "video_trigger_library.json",
     "deepseek_api_key.dpapi", "openai_compatible_api_key.dpapi", "bilibili_cookie.dpapi",
-    "desktop_settings.json",
+    "desktop_settings.json", "cache_cleanup.json",
 )
 
 

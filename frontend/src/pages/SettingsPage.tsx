@@ -73,6 +73,7 @@ import { GpuDeviceStatus } from "../components/GpuDeviceStatus";
 import { ParaformerDeviceControls } from "../components/ParaformerDeviceControls";
 import { StorageDirectoriesSection } from "../components/StorageDirectoriesSection";
 import { ApplicationDataSection } from "../components/ApplicationDataSection";
+import { CacheCleanupSection } from "../components/CacheCleanupSection";
 import { asrStatusOptions } from "../hooks/useAsrStatus";
 import { useModalFocus } from "../hooks/useModalFocus";
 
@@ -205,6 +206,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           }}
           onError={(error) => notify("error", errorMessage(error))}
         />
+        {!guidedSection && <CacheCleanupSection active={active && section === "storage"} onJob={onJob} />}
         {!guidedSection && <SecondaryViewSettings />}
         {!guidedSection && <ApplicationDataSection active={active && section === "storage"} directories={directories.data} onError={(error) => notify("error", errorMessage(error))} />}
         </UnsavedDraftScope></div>}

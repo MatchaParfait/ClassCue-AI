@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from fractions import Fraction
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -20,6 +22,14 @@ PREVIEW_VERSION = "seek-jpeg444-960-v1"
 
 class ThumbnailUnavailable(ValueError):
     pass
+
+
+def _touch_cached(output: Path) -> None:
+    try:
+        if time.time() - output.stat().st_mtime > 60:
+            os.utime(output, None)
+    except OSError:
+        pass
 
 
 def _source_identity(source: Path) -> tuple:
@@ -59,7 +69,10 @@ def _thumbnail_path(source: Path, cache_directory: Path) -> tuple[Path, tuple]:
 def cached_video_thumbnail(source: Path, cache_directory: Path) -> Path | None:
     """Look up an existing cover without importing a decoder or generating it."""
     output, _identity = _thumbnail_path(source, cache_directory)
-    return output if output.is_file() else None
+    if output.is_file():
+        _touch_cached(output)
+        return output
+    return None
 
 
 def video_thumbnail(source: Path, cache_directory: Path) -> Path:
@@ -70,12 +83,14 @@ def video_thumbnail(source: Path, cache_directory: Path) -> Path:
     output, identity = _thumbnail_path(source, cache_directory)
     cache_directory.mkdir(parents=True, exist_ok=True)
     if output.is_file():
+        _touch_cached(output)
         return output
     temporary = None
     # A per-file lock prevents duplicate work; the semaphore bounds decoding
     # across different cards without serializing cache hits.
     with FileLock(str(output.with_suffix(".lock")), timeout=60):
         if output.is_file():
+            _touch_cached(output)
             return output
         try:
             with _DECODERS:
@@ -139,10 +154,12 @@ def video_preview_frame(source: Path, cache_directory: Path, time_ms: int) -> Pa
     cache_directory.mkdir(parents=True, exist_ok=True)
     output = cache_directory / f"{key}.jpg"
     if output.is_file():
+        _touch_cached(output)
         return output
     temporary = None
     with FileLock(str(output.with_suffix(".lock")), timeout=60):
         if output.is_file():
+            _touch_cached(output)
             return output
         try:
             with _DECODERS:

@@ -75,3 +75,13 @@ it("supports historical tasks without telemetry and stops animating at completio
   expect(element.querySelector(".indeterminate")).toBeNull();
   expect(element.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("100");
 });
+
+it("keeps partial cache deletion counts after cancellation without claiming completion", () => {
+  const value = { ...job(), job_type: "cache_cleanup", status: "interrupted" as const };
+  const { element } = mount(value);
+  expect(element.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("40");
+  expect(element.textContent).toContain("40 / 100 个文件");
+  expect(element.textContent).toContain("100.0 MB / 250.0 MB");
+  expect(element.textContent).toContain("清理已停止，已完成的删除不会回滚");
+  expect(element.textContent).not.toContain("清理完成");
+});

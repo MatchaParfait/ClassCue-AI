@@ -2049,6 +2049,8 @@ class VideoStore:
                 "UPDATE videos SET status = 'transcribed', transcription_model = ? WHERE id = ?",
                 (model_id, video_id),
             )
+        from classcue.cache_cleanup import cleanup_saved_transcript
+        cleanup_saved_transcript(self, video_id)
 
     def claim_retranscription(self, video_id: int) -> bool:
         with self.connect() as connection:
@@ -2084,6 +2086,8 @@ class VideoStore:
                 "UPDATE videos SET status = 'transcribed', transcription_model = ? WHERE id = ?",
                 (model_id, video_id),
             )
+        from classcue.cache_cleanup import cleanup_saved_transcript
+        cleanup_saved_transcript(self, video_id)
 
     def get_segments(self, video_id: int) -> list[TranscriptSegment]:
         with self.connect() as connection:

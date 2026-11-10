@@ -3,7 +3,7 @@ import type { Job, JobStatus } from "../types";
 import { remainingTime } from "./ModelPreparationProgress";
 
 export function isCleanupJob(job?: Job) {
-  return Boolean(job && ["asr_delete", "asr_runtime_delete", "asr_download_cleanup"].includes(job.job_type ?? ""));
+  return Boolean(job && ["asr_delete", "asr_runtime_delete", "asr_download_cleanup", "cache_cleanup"].includes(job.job_type ?? ""));
 }
 
 export function cleanupSummary(job: JobStatus) {
@@ -20,7 +20,9 @@ function bytes(value: number) {
   return `${(value / 1024 ** 3).toFixed(2)} GB`;
 }
 
-export function ModelCleanupProgress({ job, connectionError = false }: { job?: JobStatus; connectionError?: boolean }) {
+export function ModelCleanupProgress({ job, connectionError = false, label = "模型清理进度" }: {
+  job?: JobStatus; connectionError?: boolean; label?: string;
+}) {
   const [now, setNow] = useState(Date.now);
   const running = !job || ["queued", "running"].includes(job.status);
   useEffect(() => {
@@ -35,7 +37,7 @@ export function ModelCleanupProgress({ job, connectionError = false }: { job?: J
   const known = ended || (typeof fraction === "number" && Number.isFinite(fraction));
   const percent = ended ? 100 : typeof fraction === "number" && Number.isFinite(fraction)
     ? Math.max(0, Math.min(100, fraction * 100)) : undefined;
-  const label = ended ? "清理完成" : !running ? "清理未完成" : {
+  const phaseLabel = ended ? "清理完成" : !running ? "清理未完成" : {
     checking: "释放占用并检查清理范围", scanning: "检查目录并统计文件", deleting: "删除文件", completed: "完成清理",
   }[detail?.phase ?? "checking"];
   const start = job?.started_at ? Date.parse(job.started_at) : NaN;
@@ -43,12 +45,12 @@ export function ModelCleanupProgress({ job, connectionError = false }: { job?: J
   const reference = running ? now : Number.isFinite(finish) ? finish : (detail?.updated_at ?? now / 1000) * 1000;
   const elapsed = Number.isFinite(start) ? Math.max(0, (reference - start) / 1000)
     : (detail?.elapsed_seconds ?? 0) + (running && detail ? Math.max(0, now / 1000 - detail.updated_at) : 0);
-  return <section className="model-preparation model-cleanup" aria-label="模型清理进度">
+  return <section className="model-preparation model-cleanup" aria-label={label}>
     <div className="model-preparation-heading" role="status">
-      <strong>{label}</strong><span>{percent == null ? running ? "进行中" : "已停止" : `${Math.floor(percent)}%`}</span>
+      <strong>{phaseLabel}</strong><span>{percent == null ? running ? "进行中" : "已停止" : `${Math.floor(percent)}%`}</span>
     </div>
     <div className={`model-preparation-track${!known && running ? " indeterminate" : ""}`}
-      role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100}
+      role="progressbar" aria-label={phaseLabel} aria-valuemin={0} aria-valuemax={100}
       aria-valuenow={percent == null ? undefined : Math.floor(percent)}>
       <span style={{ width: percent == null ? running ? undefined : "0%" : `${percent}%` }} />
     </div>

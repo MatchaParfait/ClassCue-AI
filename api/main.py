@@ -786,7 +786,7 @@ class JobManager:
 
             def report_cleanup(detail):
                 nonlocal current_stage
-                checkpoint()
+                cleanup_checkpoint()
                 current_stage = "cleaning"
                 fraction = detail.get("phase_progress")
                 store.update_job(job_id, cleanup_json=json.dumps(detail, ensure_ascii=False),
@@ -804,7 +804,9 @@ class JobManager:
                 if current_video == video_id and job_type in {"video_process", "video_analysis"}:
                     self.live_analysis.publish(job_id, video_id, mode, **state)
 
-            with analysis_observer(analysis_preview), transcript_observer(preview), resource_events(report_resource), preparation_events(report_preparation, checkpoint=checkpoint), cleanup_events(report_cleanup), asr_session():
+            # Cache maintenance must save partial deletion totals before stopping.
+            cleanup_checkpoint = (lambda: None) if job_type == "cache_cleanup" else checkpoint
+            with analysis_observer(analysis_preview), transcript_observer(preview), resource_events(report_resource), preparation_events(report_preparation, checkpoint=cleanup_checkpoint), cleanup_events(report_cleanup), asr_session():
                 result = operation(update, should_cancel)
             if should_cancel() and not (isinstance(result, dict) and result.get("committed")):
                 raise ProcessingCancelled("用户已请求停止处理")
@@ -1157,6 +1159,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     from api.updates import router as update_router
     update_center = UpdateCenter(DIRECTORY_PROJECT_ROOT)
     recovery_needs_restart = Event()
+    from api.cache_cleanup import router as cache_cleanup_router
+    cache_routes, schedule_cache_cleanup = cache_cleanup_router(DIRECTORY_PROJECT_ROOT, provider, jobs, update_center)
 
     def check_storage_before_job(kind):
         if updating.is_set():
@@ -1177,9 +1181,21 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             except Exception as exc:
                 log_exception(LOGGER, "Path picker reaper failed", exc=exc)
 
+    async def maintain_caches():
+        while True:
+            await asyncio.sleep(300)
+            try:
+                await asyncio.to_thread(schedule_cache_cleanup)
+            except RuntimeError:
+                # Maintenance waits for a later idle window, never queues ahead of study.
+                pass
+            except Exception as exc:
+                log_exception(LOGGER, "Scheduled cache cleanup deferred", exc=exc)
+
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         reaper = None
+        cache_maintenance = None
         try:
             # Acquire ownership before recovery can alter another server's jobs.
             lease.acquire(provider.database_path())
@@ -1204,6 +1220,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 recovery_needs_restart.set()
             reaper = asyncio.create_task(reap_pickers())
             if store is None:
+                cache_maintenance = asyncio.create_task(maintain_caches())
                 transaction_path = update_center.directory / "transaction.json"
                 transaction = read_update_json(transaction_path, {})
                 if (transaction.get("status") == "installed" and transaction.get("version") == VERSION
@@ -1213,6 +1230,12 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 update_center.start_background()
             yield
         finally:
+            if cache_maintenance is not None:
+                cache_maintenance.cancel()
+                try:
+                    await cache_maintenance
+                except asyncio.CancelledError:
+                    pass
             if getattr(_api.state, "device_transfers", None) is not None:
                 await asyncio.to_thread(_api.state.device_transfers.close)
             update_center.close()
@@ -1231,6 +1254,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                     lease.release()
 
     api = FastAPI(title="课堂视频重点复习 API", version=VERSION, lifespan=lifespan)
+    api.include_router(cache_routes)
     api.include_router(denoise_router)
     from classcue.app_storage import DATA_DIR
     api.include_router(bilibili_router(
