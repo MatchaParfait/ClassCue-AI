@@ -20,6 +20,9 @@ from classcue.desktop_runtime import atomic_json, http_json, read_json, SingleIn
 from classcue.playback_links import desktop_review_url
 
 
+SEMANTIC_SEARCH_TIMEOUT_SECONDS = 150
+
+
 def connection_token(project=PROJECT_ROOT):
     directory = Path(project) / ".runtime"
     directory.mkdir(parents=True, exist_ok=True)
@@ -130,7 +133,9 @@ def call_tool(name, arguments):
     origin, library = ensure_service()
     result = http_json(origin + "/api/course-tools/" + name, method="POST",
                        payload={"library_id": library, "arguments": arguments},
-                       token=connection_token(), timeout=45)
+                       token=connection_token(),
+                       timeout=SEMANTIC_SEARCH_TIMEOUT_SECONDS
+                       if name == "search_library" and arguments.get("semantic_query") else 45)
     if name == "open_video":
         result.update(navigate_desktop(result["play_url"]))
     return result

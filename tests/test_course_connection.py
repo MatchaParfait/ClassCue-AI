@@ -10,6 +10,34 @@ from classcue import course_connection as connection
 from classcue.desktop_runtime import SingleInstance, http_json
 
 
+@pytest.mark.parametrize("tool,arguments,timeout", [
+    ("search_library", {"semantic_query": "事务调度"}, 150),
+    ("search_library", {"query": "事务", "semantic_query": "操作能否依次执行"}, 150),
+    ("search_library", {"query": "事务"}, 45),
+    ("search_library", {"query": "事务", "semantic_query": ""}, 45),
+    ("list_courses", {}, 45),
+    ("get_semantic_status", {}, 45),
+])
+def test_bridge_timeout_preserves_semantic_inference_budget(monkeypatch, tool, arguments, timeout):
+    from classcue.semantic_embeddings import INFERENCE_TIMEOUT_SECONDS
+    calls = []
+    monkeypatch.setattr(connection, "ensure_service", lambda: ("http://127.0.0.1:9988", "synthetic"))
+    monkeypatch.setattr(connection, "connection_token", lambda: "synthetic-token")
+
+    def request(url, **kwargs):
+        calls.append((url, kwargs))
+        return {"items": ["synthetic"]}
+
+    monkeypatch.setattr(connection, "http_json", request)
+    assert connection.call_tool(tool, arguments) == {"items": ["synthetic"]}
+    assert calls == [(f"http://127.0.0.1:9988/api/course-tools/{tool}", {
+        "method": "POST", "payload": {"library_id": "synthetic", "arguments": arguments},
+        "token": "synthetic-token", "timeout": timeout,
+    })]
+    if arguments.get("semantic_query"):
+        assert timeout > INFERENCE_TIMEOUT_SECONDS
+
+
 def test_registration_preserves_workspaces_and_other_fields(tmp_path):
     path = tmp_path / "connection.json"
     path.write_text(json.dumps({"format": "classcue-codex-connection", "version": 1,

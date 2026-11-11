@@ -73,6 +73,9 @@ def _nearest_existing(path: Path) -> Path:
 def _tree(root: Path):
     if not root.exists():
         return
+    if root.is_file():
+        yield _safe(root)
+        return
     pending = [_safe(root)]
     while pending:
         directory = pending.pop()
@@ -110,9 +113,22 @@ def plan_migration(project: Path, store, values: dict) -> dict:
         settings["media_storage_root"] = str(media)
     if values.get("delete_source_after_import") is not None:
         settings["delete_source_after_import"] = values["delete_source_after_import"]
+    selection = assets / ".runtime" / "semantic-search-selection.json"
+    selection_source = selection
+    legacy_selection = assets / ".runtime" / "semantic-search" / "ready.json"
+    for candidate in ((selection, legacy_selection) if assets != new_assets else (selection,)):
+        try:
+            saved = json.loads(_safe(candidate).read_text(encoding="utf-8"))
+            if isinstance(saved, dict) and saved.get("device") in {"cpu", "cuda"}:
+                selection_source = candidate
+                break
+        except (OSError, ValueError):
+            continue
     pairs = [
         ("临时音频与转写缓存", audio, new_audio),
         ("模型权重", assets / "models" / "asr", new_assets / "models" / "asr"),
+        ("检索模型权重", assets / "models" / "embeddings", new_assets / "models" / "embeddings"),
+        ("检索设备选择", selection_source, new_assets / ".runtime" / selection.name),
         ("环境下载缓存", assets / ".runtime" / "cache", new_assets / ".runtime" / "cache"),
         ("视频库", videos, new_videos),
         ("PPT 截图", slides, media / "slides" if media is not None else slides),
@@ -124,16 +140,19 @@ def plan_migration(project: Path, store, values: dict) -> dict:
         protected.extend(base / ".runtime" / name for name in (
             "qwen-asr", "firered-asr2", "paraformer-cpu", "paraformer-gpu",
             "dolphin-cpu", "dolphin-gpu", "fun-asr-nano-cpu", "fun-asr-nano-gpu",
+            "semantic-search", "semantic-search-cpu", "semantic-search-cuda",
             "sources", "python", "bin",
         ))
-    all_roots = [path for _, source, target in pairs for path in (source, target)]
     # A log destination must never be a cache/model/video tree, including an old tree.
-    for path in all_roots:
-        _safe(path)
-        if any(_overlaps(path, item) for item in protected):
-            raise ValueError("迁移目录不能包含数据库、配置或应用程序文件")
-        if _overlaps(path, new_logs):
-            raise ValueError("日志目录必须与视频、缓存及模型目录分开")
+    for label, source, target in pairs:
+        for path in (source, target):
+            _safe(path)
+            legacy_source = label == "检索设备选择" and path == source == legacy_selection
+            if any(_overlaps(path, item) for item in protected
+                   if not (legacy_source and item == legacy_selection.parent)):
+                raise ValueError("迁移目录不能包含数据库、配置或应用程序文件")
+            if _overlaps(path, new_logs):
+                raise ValueError("日志目录必须与视频、缓存及模型目录分开")
     for index, (_, source, target) in enumerate(pairs):
         if source != target and _overlaps(source, target):
             raise ValueError("新旧目录不能互相包含，请选择独立目录")
@@ -160,6 +179,9 @@ def plan_migration(project: Path, store, values: dict) -> dict:
                 raise ValueError(f"目标位置已有同名目录：{destination}")
             entries.append(dict(source=str(path), target=str(destination), size=info[0],
                                 identity=info, source_root=str(source), target_root=str(target)))
+            if label == "检索设备选择" and source == legacy_selection:
+                # Only its device is used at the new selection path; the old venv stays intact.
+                entries[-1]["retain_source"] = True
         sections.append(dict(label=label, source=str(source), target=str(target),
                              files=len(entries) - start, bytes=sum(e["size"] for e in entries[start:])))
     mapping = {entry["source"]: entry["target"] for entry in entries}
@@ -220,6 +242,8 @@ def _cleanup_sources(entries, checkpoint=lambda: None):
     warnings, parents = [], set()
     for entry in entries:
         checkpoint()
+        if entry.get("retain_source"):
+            continue
         source, target = Path(entry["source"]), Path(entry["target"])
         if not source.exists():
             continue

@@ -321,7 +321,9 @@ export async function callCourseTool(name, args, env = process.env) {
     let output = "", settled = false;
     child.stdout.setEncoding("utf8");
     const fail = error => { if (!settled) { settled = true; clearTimeout(timer); child.kill(); reject(error); } };
-    const timer = setTimeout(() => fail(new Error("本地工具调用超时，请查询状态后再决定是否重试。")), 110000);
+    // Semantic HTTP gets 150s after service discovery; keep the process alive beyond it.
+    const timeout = name === "search_library" && args?.semantic_query ? 210000 : 110000;
+    const timer = setTimeout(() => fail(new Error("本地工具调用超时，请查询状态后再决定是否重试。")), timeout);
     child.on("error", () => fail(new Error("无法启动 ClassCue 连接进程，请检查应用安装。")));
     child.stdin.on("error", () => fail(new Error("ClassCue 连接进程已退出。")));
     child.stdout.on("data", bytes => {

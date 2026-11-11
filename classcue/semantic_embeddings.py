@@ -28,6 +28,7 @@ from classcue.processing_control import ProcessingCancelled, ResourcePaused
 
 MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
 DIMENSIONS = 1024
+INFERENCE_TIMEOUT_SECONDS = 120
 RUNTIME_VERSION = "qwen-embedding-torch271-transformers4576-v1"
 _GPU_STATUS = None
 WEIGHTS_DOWNLOAD_BYTES = 1_207_469_240
@@ -670,7 +671,7 @@ class EmbeddingWorker:
                 self._start(status)
                 self.process.stdin.write(json.dumps({"texts": texts, "query": query}, ensure_ascii=True) + "\n")
                 self.process.stdin.flush()
-                deadline = time.monotonic() + 120
+                deadline = time.monotonic() + INFERENCE_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
                     if should_stop and should_stop():
                         raise ProcessingCancelled("已停止语义索引")

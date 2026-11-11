@@ -61,7 +61,7 @@ def test_preview_is_observational_and_shows_excluded_environments(library):
     public = migration.public_plan(plan)
     assert public["files_total"] == 4
     assert public["bytes_total"] == 20
-    assert len(public["sections"]) == 4
+    assert len(public["sections"]) == 6
     assert any("旧运行环境保留" in warning for warning in public["warnings"])
     assert f.settings.read_bytes() == before
     assert all(not Path(value).exists() for value in f.values.values())
@@ -90,6 +90,103 @@ def test_verified_move_keeps_video_identity_content_and_metadata(library):
     assert Path(f.store.path).exists()
     assert json.loads(f.settings.read_text())["unrelated"] == "preserve"
     assert set(phases) >= {"copying", "verifying", "committing", "cleaning", "completed"}
+
+
+@pytest.mark.parametrize("device,legacy", [("cpu", False), ("cuda", False), ("cuda", True)])
+def test_semantic_weights_and_device_move_but_environments_stay_for_rebuild(library, monkeypatch, device, legacy):
+    from classcue import semantic_embeddings as embeddings
+
+    f = library
+    assets = f.model.parents[3]
+    weights = assets / "models" / "embeddings" / "qwen3-embedding-0.6b"
+    weights.mkdir(parents=True)
+    (weights / "model.safetensors").write_bytes(b"synthetic-weights")
+    (weights / "ready.json").write_text(json.dumps({
+        "files": {"model.safetensors": len(b"synthetic-weights")}, "fingerprint": "synthetic-v1"}))
+    runtime = assets / ".runtime" / ("semantic-search" if legacy else f"semantic-search-{device}")
+    (runtime / "Scripts").mkdir(parents=True)
+    (runtime / "Scripts" / "python.exe").write_bytes(b"synthetic-runtime")
+    marker = runtime / "ready.json"
+    marker.write_text(json.dumps({"version": embeddings.RUNTIME_VERSION, "device": device,
+                                 **({} if legacy else {"torch_variant": device})}))
+    selection = assets / ".runtime" / "semantic-search-selection.json"
+    if not legacy:
+        selection.write_text(json.dumps({"device": device}))
+    monkeypatch.setattr(embeddings, "PROJECT_ROOT", f.project)
+    monkeypatch.setattr(embeddings, "active_storage_root", asr_storage.storage_root)
+    monkeypatch.setattr(embeddings, "_gpu_detection", lambda: True)
+    assert embeddings.model_status()["ready"]
+    marker_before = marker.read_bytes()
+    plan = migration.plan_migration(f.project, f.store, f.values)
+    target = Path(f.values["asr_storage_root"])
+    assert any(entry["target"] == str(target / ".runtime" / selection.name) for entry in plan["entries"])
+    assert not any("python.exe" in entry["source"] for entry in plan["entries"])
+    assert migration.migrate(f.project, f.store, f.values, expected_plan=plan["plan_id"])["committed"]
+    status = embeddings.model_status()
+    assert status["device"] == device and status["weights_ready"]
+    assert not status["ready"] and not status["runtimes"][device]["ready"]
+    assert (target / "models" / "embeddings" / weights.name / "model.safetensors").read_bytes() == b"synthetic-weights"
+    assert marker.read_bytes() == marker_before
+    assert (runtime / "Scripts" / "python.exe").read_bytes() == b"synthetic-runtime"
+    assert not (target / ".runtime" / runtime.name).exists()
+
+
+def test_failed_semantic_migration_keeps_legacy_marker_and_removes_new_selection(library, monkeypatch):
+    f = library
+    assets = f.model.parents[3]
+    legacy = assets / ".runtime" / "semantic-search" / "ready.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"device":"cuda","version":"synthetic"}')
+    before = f.settings.read_bytes()
+
+    def denied(*_args, **_kwargs):
+        raise PermissionError("synthetic configuration failure")
+    monkeypatch.setattr(asr_storage, "save_directories", denied)
+    with pytest.raises(PermissionError, match="synthetic"):
+        migration.migrate(f.project, f.store, f.values)
+    assert f.settings.read_bytes() == before
+    assert json.loads(legacy.read_text())["device"] == "cuda"
+    assert not (Path(f.values["asr_storage_root"]) / ".runtime" / "semantic-search-selection.json").exists()
+
+
+@pytest.mark.parametrize("runtime", ["semantic-search", "semantic-search-cpu", "semantic-search-cuda"])
+@pytest.mark.parametrize("nested", ["", "ready.json", "nested"])
+def test_semantic_environments_are_protected_migration_destinations(library, runtime, nested):
+    f = library
+    with pytest.raises(ValueError, match="应用程序文件"):
+        migration.plan_migration(f.project, f.store, {
+            **f.values, "audio_cache_dir": str(f.model.parents[3] / ".runtime" / runtime / nested)})
+
+
+def test_conflicting_semantic_selection_preserves_both_choices_and_original_settings(library):
+    f = library
+    source = f.model.parents[3] / ".runtime" / "semantic-search-selection.json"
+    source.write_text('{"device":"cuda"}')
+    target = Path(f.values["asr_storage_root"]) / ".runtime" / source.name
+    target.parent.mkdir(parents=True)
+    target.write_text('{"device":"cpu"}')
+    before = f.settings.read_bytes()
+    with pytest.raises(ValueError, match="同名"):
+        migration.migrate(f.project, f.store, f.values)
+    assert source.read_text() == '{"device":"cuda"}'
+    assert target.read_text() == '{"device":"cpu"}'
+    assert f.settings.read_bytes() == before
+
+
+def test_committed_semantic_migration_recovery_preserves_legacy_environment_marker(library, monkeypatch):
+    f = library
+    marker = f.model.parents[3] / ".runtime" / "semantic-search" / "ready.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"device":"cuda","version":"synthetic"}')
+    before = marker.read_bytes()
+    cleanup = migration._cleanup_sources
+    monkeypatch.setattr(migration, "_cleanup_sources",
+                        lambda _: (_ for _ in ()).throw(OSError("synthetic interruption")))
+    assert migration.migrate(f.project, f.store, f.values)["committed"]
+    monkeypatch.setattr(migration, "_cleanup_sources", cleanup)
+    migration.recover_migration(f.project, f.store)
+    assert marker.read_bytes() == before
+    assert (Path(f.values["asr_storage_root"]) / ".runtime" / "semantic-search-selection.json").read_bytes() == before
 
 
 def test_hidden_secondary_video_is_migrated_and_remains_playable(library):
