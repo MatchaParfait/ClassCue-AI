@@ -611,6 +611,10 @@ class JobManager:
             "resource": json.loads(row["resource_json"]) if row["resource_json"] else None,
             "preparation": json.loads(row["preparation_json"]) if row["preparation_json"] else None,
             "cleanup": json.loads(row["cleanup_json"]) if row["cleanup_json"] else None,
+            **({"cleanup_target": json.loads(row["request_json"] or "{}").get("target", "all")}
+               if row["job_type"] == "semantic_cleanup" else {}),
+            **({"semantic_device": json.loads(row["request_json"] or "{}").get("device")}
+               if row["job_type"] in {"semantic_prepare", "semantic_setup", "semantic_cleanup"} else {}),
             "migration": json.loads(row["request_json"] or "{}").get("migration"),
             "model_id": (json.loads(row["request_json"] or "{}").get("model_id")
                          or (json.loads(row["request_json"] or "{}").get("selection") or {}).get("model_id")),
@@ -792,6 +796,8 @@ class JobManager:
             from classcue.preparation_progress import preparation_events
             from classcue.slide_runtime import release_idle_worker
             release_idle_worker(job_type)
+            from classcue.semantic_embeddings import release_idle_worker as release_semantic_worker
+            release_semantic_worker(job_type)
 
             def report_preparation(detail):
                 checkpoint()
@@ -1273,7 +1279,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                     try:
                         await asyncio.to_thread(close_workers)
                     finally:
-                        lease.release()
+                        from classcue.semantic_embeddings import close_worker
+                        try:
+                            await asyncio.to_thread(close_worker)
+                        finally:
+                            lease.release()
 
     api = FastAPI(title="课堂视频重点复习 API", version=VERSION, lifespan=lifespan)
     api.include_router(cache_routes)
@@ -1591,7 +1601,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 snapshot = json.loads(row["request_json"] or "{}").get("alignment", {}).get("snapshot", {})
                 if snapshot.get("secondary_id"):
                     locked[int(snapshot["secondary_id"])] = reason
-            if row["job_type"] not in {"batch_video_process", "course_transcribe", "course_sequence"}:
+            if row["job_type"] not in {"batch_video_process", "course_transcribe", "course_sequence", "semantic_index", "semantic_setup"}:
                 continue
             try:
                 state = json.loads(row["request_json"] or "{}")
@@ -4223,6 +4233,8 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     }
     api.state.course_batch_tools = batch_tools
     api.include_router(course_tools_router(provider, jobs, ensure_file_changes_allowed, batch=batch_tools))
+    from api.semantic_search import router as semantic_router
+    api.include_router(semantic_router(provider, jobs, ensure_file_changes_allowed))
     from api.desktop_links import router as desktop_links_router
     api.include_router(desktop_links_router(DIRECTORY_PROJECT_ROOT, provider, jobs))
     from classcue.frontend_host import mount_frontend

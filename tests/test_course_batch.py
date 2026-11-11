@@ -238,6 +238,8 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
     """Only service discovery is redirected; production MCP, bridge and batch run."""
     import uvicorn
     import api.main as api_main
+    import numpy as np
+    from classcue import semantic_embeddings as embeddings
     from tests.test_course_retrieval import seed_slides
 
     def synthetic_slides(store, video_id, root, **kwargs):
@@ -248,6 +250,17 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
     monkeypatch.setattr(api_main, "video_preview_frame", lambda *_a, **_k:
                         api_main.asr_storage.slide_directory(
                             api_main.DIRECTORY_PROJECT_ROOT, batch.application.state.jobs.provider.data_root()) / "synthetic.jpg")
+    semantic_state = {"ready": False}
+    monkeypatch.setattr(embeddings, "model_status", lambda: {
+        "ready": semantic_state["ready"], "device": "cpu", "model_version": "synthetic-v1",
+        "model_id": embeddings.MODEL_ID, "dimensions": embeddings.DIMENSIONS, "bytes": 0})
+    monkeypatch.setattr(embeddings, "prepare_model", lambda *_: semantic_state.update(ready=True))
+
+    def semantic_encode(texts, **_kwargs):
+        result = np.zeros((len(texts), embeddings.DIMENSIONS), dtype="<f4")
+        result[:, 0] = 1
+        return result
+    monkeypatch.setattr(embeddings.encoder, "encode", semantic_encode)
 
     node = shutil.which("node")
     project = Path(__file__).resolve().parents[1]
@@ -293,12 +306,13 @@ def test_real_stdio_mcp_batch_reaches_authenticated_http_and_returns_tool_errors
         assert result.returncode == 0, result.stdout + result.stderr
         evidence = json.loads(result.stdout)
         assert evidence == {
-            "version": "0.12.0", "preview": True, "completed": True,
+            "version": "0.13.0", "preview": True, "completed": True,
             "reused": True, "validationError": True, "requestConflict": True,
             "sequenceCompleted": True, "sequenceReused": True,
             "retrieval": True, "nativeImages": True, "analysis": True,
             "phoneticRetrieval": True,
             "jobDiscovery": True, "processingStatus": True, "bookmarks": True,
+            "semanticSetup": True, "semanticReused": True, "semanticRetrieval": True,
         }
         assert len(batch.asr) == len(batch.ai) == 1
     finally:

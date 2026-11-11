@@ -11,6 +11,7 @@ import { SecondaryViewSettings } from "../components/SecondaryViewSettings";
 import { RecallSchemeSettings } from "../components/RecallSchemeSettings";
 import { ExperimentalSettings } from "../components/ExperimentalSettings";
 import { UpdateSettings } from "../components/UpdateSettings";
+import { SemanticSettings } from "../components/SemanticSettings";
 import { SlideSettings } from "../components/SlideSettings";
 import { SelectionIndicator, useEntryMotion, useSelectionScope, AnimatePresence, AnimatedPopup } from "../components/Motion";
 import {
@@ -34,6 +35,7 @@ import {
   RefreshCw,
   Info,
   Save,
+  Search,
   Server,
   Sparkles,
   SlidersHorizontal,
@@ -114,7 +116,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
   const navigate = useNavigate();
   const requestedSection = searchParams.get("section") ?? "";
   const section = guidedSection ?? (["dsh", "codex"].includes(requestedSection) ? "discussion"
-    : ["storage", "asr", "slides", "ai", "recall", "discussion", "experimental", "desktop", "shortcuts", "updates"].includes(requestedSection) ? requestedSection : "storage");
+    : ["storage", "asr", "slides", "ai", "recall", "semantic", "discussion", "experimental", "desktop", "shortcuts", "updates"].includes(requestedSection) ? requestedSection : "storage");
   const showSection = (value: string) => setSearchParams({ section: value }, { replace: true, state: location.state });
   const asr = useQuery({ queryKey: ["settings", "asr"], queryFn: getAsrModels, enabled: active && section === "asr", staleTime: 60_000 });
   const ai = useQuery({ queryKey: ["settings", "ai"], queryFn: getAiSettings, enabled: active && section === "ai" });
@@ -170,7 +172,7 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
 
         <div className="settings-layout">
           {!guidedSection && <nav className="settings-navigation" aria-label="设置分类">
-            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["slides", "PPT 提取", Presentation], ["ai", "AI 服务", Server], ["discussion", "讨论工具", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => key !== "discussion" || desktop).map(([key, label, Icon]) =>
+            {([ ["storage", "存储与导入", FolderOpen], ["asr", "ASR 模型", WandSparkles], ["slides", "PPT 提取", Presentation], ["ai", "AI 服务", Server], ["semantic", "课程检索", Search], ["discussion", "讨论工具", MessageSquare], ["recall", "考点提取", Target], ["desktop", "桌面设置", Monitor], ["shortcuts", "快捷键", Keyboard], ["experimental", "实验功能", FlaskConical], ["updates", "关于与更新", Info] ] as const).filter(([key]) => key !== "discussion" || desktop).map(([key, label, Icon]) =>
               <button key={key} data-onboarding-section={key} type="button" aria-current={section === key ? "page" : undefined} onClick={() => showSection(key)}>
                 {section === key && <SelectionIndicator id={`${selectionScope}-settings`} />}<Icon size={18} /><span>{label}</span>
               </button>)}
@@ -182,6 +184,9 @@ export function SettingsPage({ embedded = false, active = true, scope = "default
           <div ref={contentRef} className="settings-content">
         {!guidedSection && <div hidden={section !== "slides"}>
           <SlideSettings key={scope} active={active && section === "slides"} onJob={onJob} />
+        </div>}
+        {!guidedSection && <div hidden={section !== "semantic"}>
+          <SemanticSettings key={scope} active={active && section === "semantic"} onJob={onJob} />
         </div>}
         {!guidedSection && <div hidden={section !== "updates"}><UpdateSettings active={active && section === "updates"} /></div>}
         {!guidedSection && <div hidden={section !== "recall"}><UnsavedDraftScope onReview={() => showSection("recall")}>

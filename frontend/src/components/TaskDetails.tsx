@@ -78,7 +78,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
           : <button className="secondary-button" onClick={() => onOpen(job)}>{pptResources ? "打开 PPT 设置" : migrating ? "打开存储设置" : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "打开视频库" : "打开处理详情"}</button>}
       {job.status === "awaiting_api" && <button className="secondary-button" onClick={onSettings}><Settings2 size={16} />AI 服务设置</button>}
     </div>
-    {!migrating && (running || job.status === "resource_paused") && <div className="task-danger-zone"><button className="stop-job-button"
+    {!migrating && job.job_type !== "semantic_cleanup" && (running || job.status === "resource_paused") && <div className="task-danger-zone"><button className="stop-job-button"
       disabled={command.isPending || job.stage === "stopping"} onClick={() => command.mutate("stop")}><Ban size={15} />
       {command.isPending || job.stage === "stopping" ? "正在请求停止…" : "停止任务"}</button>
     </div>}

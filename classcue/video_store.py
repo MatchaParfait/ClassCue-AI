@@ -347,6 +347,8 @@ class VideoStore:
             initialize_subtitle_search(connection)
             from classcue.subtitle_phonetics import initialize_phonetic_search
             initialize_phonetic_search(connection)
+            from classcue.semantic_index import initialize_semantic_index
+            initialize_semantic_index(connection)
             initialize_bilibili(connection)
             from classcue.study_bookmarks import initialize_study_bookmarks
             initialize_study_bookmarks(connection)

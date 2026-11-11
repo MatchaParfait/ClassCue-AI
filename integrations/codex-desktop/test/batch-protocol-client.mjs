@@ -115,6 +115,25 @@ try {
   const around = await call("read_transcript", { video_id: bookmark.video_id, ...bookmark.context_range });
   evidence.bookmarks = around.isError === undefined && around.structuredContent.items.length === 1
     && bookmark.play_url.includes("start_ms=200");
+  const beforeSemantic = await call("get_semantic_status", { video_id: Number(videoId) });
+  assert.equal(beforeSemantic.structuredContent.ready, false);
+  const semanticRequest = { video_id: Number(videoId), request_id: "stdio-semantic-setup-001" };
+  const semantic = await call("start_semantic_setup", semanticRequest);
+  assert.equal(semantic.isError, undefined);
+  let semanticState = semantic.structuredContent;
+  for (let attempt = 0; attempt < 60 && ["queued", "running"].includes(semanticState.status); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    semanticState = (await call("get_job", { job_id: semanticState.job_id })).structuredContent;
+  }
+  evidence.semanticSetup = semanticState.status === "completed" && semanticState.summary.completed === 1;
+  const semanticReplay = await call("start_semantic_setup", semanticRequest);
+  evidence.semanticReused = semanticReplay.structuredContent.reused
+    && semanticReplay.structuredContent.job_id === semanticState.job_id;
+  const semanticSearch = await call("search_library", { video_id: Number(videoId),
+    semantic_query: "哪些内容需要学会", sources: ["subtitles"] });
+  assert.equal(semanticSearch.isError, undefined);
+  evidence.semanticRetrieval = semanticSearch.structuredContent.items[0].evidence[0].text === "会考，必须掌握"
+    && semanticSearch.structuredContent.semantic_coverage.indexed_videos === 1;
   assert.ok(Object.entries(evidence).every(([key, value]) => key === "version" || value === true));
   console.log(JSON.stringify(evidence));
 } finally {

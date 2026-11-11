@@ -10,10 +10,10 @@
 .global-search-heading h2 { font-size: 22px; margin: 5px 0 0; }
 .global-search-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 24px 14px; min-width: 0; flex-shrink: 0; }
 .global-search-folder-name { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; color: var(--ui-muted); font-size: 12px; }
-.global-search-range { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); }
-.global-search-range button { min-height: 32px; padding: 6px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-muted); background: transparent; font-size: 12px; }
-.global-search-range button:hover { color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
-.global-search-range button[aria-pressed="true"] { color: var(--ui-accent-strong); border-color: var(--ui-accent); background: var(--ui-surface); }
+.global-search-range, .global-search-mode { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); }
+.global-search-range button, .global-search-mode button { min-height: 32px; padding: 6px 9px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-muted); background: transparent; font-size: 12px; }
+.global-search-range button:hover, .global-search-mode button:hover { color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
+.global-search-range button[aria-pressed="true"], .global-search-mode button[aria-pressed="true"] { color: var(--ui-accent-strong); border-color: var(--ui-accent); background: var(--ui-surface); }
 .global-search-field { display: flex; align-items: center; gap: 12px; margin: 0 24px; padding: 4px 12px 4px 16px; border: 1px solid var(--ui-border-strong); border-radius: 16px; background: var(--ui-surface); color: var(--ui-accent-strong); flex-shrink: 0; }
 .global-search-field:focus-within { outline: 2px solid var(--ui-accent-strong); outline-offset: 2px; }
 .global-search-field input { width: 100%; min-width: 0; padding: 12px 0; border: 0; outline: none; box-shadow: none; background: transparent; color: var(--ui-text); font-size: 16px; }

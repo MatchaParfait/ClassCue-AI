@@ -1,0 +1,41 @@
+.semantic-settings { min-width: 0; }
+.semantic-model-row { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; }
+.semantic-model-row > div { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.semantic-model-row .settings-hint { display: block; margin-top: 6px; }
+.semantic-device-status { margin-top: 12px; overflow-wrap: anywhere; }
+.semantic-device-selector { flex: 0 1 auto; }
+.semantic-device-selector .firered-device-modes label { min-height: 38px; font-size: 14px; }
+.semantic-device-selector small { font-size: 12px; }
+.semantic-download-estimate { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; color: var(--ui-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.semantic-download-estimate strong { flex-basis: 100%; color: var(--ui-text); font-weight: 600; }
+.semantic-cleanup-section { display: grid; gap: 16px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--ui-border); }
+.semantic-cache-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.semantic-cache-heading > div { flex: 1 1 240px; }
+.semantic-cleanup-section h3 { margin: 0 0 8px; font-size: 14px; }
+.semantic-cleanup-section p { margin: 0; overflow-wrap: anywhere; }
+.semantic-cleanup-section > button { justify-self: start; }
+.semantic-cache-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(150px, 1fr); align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
+.semantic-resource-actions { display: grid; gap: 18px; }
+.semantic-resource-action { display: grid; justify-items: start; gap: 7px; min-width: 0; }
+.semantic-resource-action button { max-width: 100%; white-space: normal; text-align: left; }
+.semantic-resource-action button svg { flex-shrink: 0; }
+.semantic-resource-action button span { min-width: 0; overflow-wrap: anywhere; }
+.semantic-cache-state { display: grid; gap: 5px; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.semantic-cache-state small { color: var(--ui-muted); font-size: 12px; }
+.semantic-task .model-preparation { margin: 0; border: 0; padding: 0; border-radius: 0; background: transparent; }
+@media (max-width: 600px) {
+  .semantic-cache-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; }
+  .semantic-cache-row > strong { grid-column: 1; }
+  .semantic-cache-state { grid-column: 2; }
+}
+.semantic-settings .field-label { display: grid; gap: 8px; min-width: 0; }
+.semantic-settings select { width: 100%; max-width: 100%; min-width: 0; min-height: 38px; padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: 8px; background-color: var(--ui-surface); color: var(--ui-text); font: inherit; font-size: 14px; text-overflow: ellipsis; }
+.semantic-index-section { display: grid; gap: 20px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--ui-border); }
+.semantic-index-section > button { justify-self: start; }
+.semantic-index-summary { display: flex; flex-wrap: wrap; gap: 20px 36px; margin: 0; font-variant-numeric: tabular-nums; }
+.semantic-index-summary dt { color: var(--ui-muted); font-size: 13px; }
+.semantic-index-summary dd { margin: 6px 0 0; font-size: 16px; font-weight: 600; }
+.semantic-task { display: grid; gap: 12px; margin-top: 24px; }
+.semantic-task > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.semantic-task > div > span { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.semantic-task progress { width: 100%; height: 8px; accent-color: var(--ui-accent-strong); }

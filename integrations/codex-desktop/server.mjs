@@ -10,7 +10,7 @@ import { realpath } from "node:fs/promises";
 import { discussionResource, resourceUri } from "./resource.mjs";
 import { courseTools, legacyCourseTools, callCourseTool } from "./course-tools.mjs";
 
-const server = new Server({ name: "classcue", version: "0.12.0" },
+const server = new Server({ name: "classcue", version: "0.13.0" },
   { capabilities: { tools: {}, resources: {} } });
 const properties = {
   request_id: { type: "string", pattern: "^[a-f0-9]{32}$" },

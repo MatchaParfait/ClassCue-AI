@@ -3,7 +3,7 @@ import type { Job, JobStatus } from "../types";
 import { remainingTime } from "./ModelPreparationProgress";
 
 export function isCleanupJob(job?: Job) {
-  return Boolean(job && (["asr_delete", "asr_runtime_delete", "asr_download_cleanup", "cache_cleanup", "slide_cache_cleanup"].includes(job.job_type ?? "")
+  return Boolean(job && (["asr_delete", "asr_runtime_delete", "asr_download_cleanup", "cache_cleanup", "semantic_cleanup", "slide_cache_cleanup"].includes(job.job_type ?? "")
     || (job.job_type === "slide_prepare" && job.cleanup
       && (job.status !== "completed" || job.cleanup.phase === "completed"))));
 }

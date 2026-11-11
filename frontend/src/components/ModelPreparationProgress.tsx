@@ -3,6 +3,7 @@ import type { Job, JobStatus } from "../types";
 
 export function hasActivePreparation(job?: JobStatus & { job_type?: string }) {
   return Boolean(job && ["queued", "running"].includes(job.status)
+    && !(job.job_type === "semantic_setup" && job.stage === "indexing")
     && (["asr_prepare", "slide_prepare"].includes(job.job_type ?? "") || job.preparation?.active === true));
 }
 
@@ -30,8 +31,8 @@ export function remainingTime(seconds: number) {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
 }
 
-export function ModelPreparationProgress({ job, connectionError = false, label: sectionLabel = "模型准备进度" }: {
-  job?: Job; connectionError?: boolean; label?: string;
+export function ModelPreparationProgress({ job, connectionError = false, label: sectionLabel = "模型准备进度", indeterminateLabel = "进行中" }: {
+  job?: Job; connectionError?: boolean; label?: string; indeterminateLabel?: string;
 }) {
   const [now, setNow] = useState(Date.now);
   const detail = job?.preparation;
@@ -55,12 +56,13 @@ export function ModelPreparationProgress({ job, connectionError = false, label: 
   const speed = !pausing && !stale && !connectionError && downloading ? detail?.speed_bytes_per_second : null;
   const components: Record<string, string> = {
     recognizer: "语音识别权重", aligner: "时间戳对齐权重", vad: "语音活动检测权重",
+    embedding: "课程检索权重",
   };
   const label = detail?.label ?? "等待准备任务启动";
   return <section className="model-preparation" aria-label={sectionLabel}>
     <div className="model-preparation-heading" role="status">
       <strong>{label}{detail?.step && detail.steps ? ` · 步骤 ${detail.step}/${detail.steps}` : ""}</strong>
-      <span>{percent === undefined ? "进行中" : `${Math.floor(percent)}%`}</span>
+      <span>{percent === undefined ? indeterminateLabel : `${Math.floor(percent)}%`}</span>
     </div>
     <div className={`model-preparation-track${known ? "" : " indeterminate"}`}
       role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100}

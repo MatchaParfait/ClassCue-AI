@@ -27,6 +27,7 @@ class LibrarySearch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: Term | None = None
+    semantic_query: str | None = Field(default=None, min_length=1, max_length=1000)
     queries: list[Term] | None = Field(default=None, min_length=1, max_length=8)
     term_groups: list[Annotated[list[Term], Field(min_length=1, max_length=8)]] | None = Field(
         default=None, min_length=1, max_length=6)
@@ -47,8 +48,15 @@ class LibrarySearch(BaseModel):
 
     @model_validator(mode="after")
     def validate_search(self):
-        if sum(v is not None for v in (self.query, self.queries, self.term_groups)) != 1:
+        literal_count = sum(v is not None for v in (self.query, self.queries, self.term_groups))
+        if literal_count > 1 or (literal_count == 0 and self.semantic_query is None):
             raise ValueError("请只提供 query、queries 或 term_groups 中的一项")
+        if self.semantic_query is not None:
+            self.semantic_query = self.semantic_query.strip()
+            if not self.semantic_query or "\x00" in self.semantic_query:
+                raise ValueError("语义查询不能为空或包含空字符")
+            if "subtitles" not in self.sources:
+                raise ValueError("语义检索需要包含 subtitles 来源")
         if self.term_groups is not None and self.match_mode != "any":
             raise ValueError("term_groups 已规定组内任一、组间全部，不同时设置 match_mode=all")
         if self.query is not None:
@@ -73,6 +81,8 @@ class LibrarySearch(BaseModel):
         return self
 
     def groups(self):
+        if self.query is None and self.queries is None and self.term_groups is None:
+            return []
         if self.term_groups is not None:
             return self.term_groups
         terms = self.queries or [self.query]
@@ -360,7 +370,8 @@ class _Search:
                 while remaining and len(evidence) < MAX_EVIDENCE:
                     best = max(range(len(remaining)), key=lambda i: (
                         len(self._evidence_groups(remaining[i]) - covered),
-                        len(remaining[i]["matched_terms"])))
+                        len(remaining[i]["matched_terms"]),
+                        len(remaining[i]["text"]) if "semantic_similarity" in remaining[i] else 0))
                     item = remaining.pop(best)
                     evidence.append(item)
                     covered.update(self._evidence_groups(item))
@@ -377,6 +388,7 @@ class _Search:
                 result_id = hashlib.sha256(json.dumps([video_id, sorted(identity)]).encode()).hexdigest()[:24]
                 merged.append({
                     "result_id": result_id, "video_id": video_id, "video_name": video["video_name"],
+                    "duration_seconds": video["duration_ms"] / 1000,
                     "folder_id": video["library_folder_id"], "folder_path": self.paths[video_id],
                     "sources": sources, "score": hit["score"], "matched_terms": hit["matched_terms"],
                     "match_type": self._match_type(hit["evidence"]),
@@ -387,6 +399,9 @@ class _Search:
                     "evidence": evidence, "evidence_count": len(hit["evidence"]),
                     "evidence_truncated": bool(remaining),
                     "play_url": self.url(video_id, position / 1000 if position is not None else 0),
+                    **({"semantic_similarity": max(e["semantic_similarity"] for e in hit["evidence"]
+                                                   if "semantic_similarity" in e)}
+                       if any("semantic_similarity" in e for e in hit["evidence"]) else {}),
                 })
         merged.sort(key=lambda item: (item["match_type"] != "literal", -item["score"], item["video_id"],
                                      item["position_seconds"] if item["position_seconds"] is not None else -1,
@@ -409,10 +424,11 @@ class _Search:
     @staticmethod
     def _match_type(evidence):
         kinds = {e["match_type"] for e in evidence}
-        return "literal" if kinds == {"literal"} else "phonetic" if kinds == {"phonetic"} else "mixed"
+        return next(iter(kinds)) if len(kinds) == 1 else "mixed"
 
 
-def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True):
+def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True,
+                   semantic_vector=None, semantic_version=None):
     """Read one final snapshot; only a requested fallback warms a derived cache."""
     predicates, parameters = ["v.is_secondary=0"], []
     if root_only:
@@ -432,8 +448,9 @@ def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True):
              "WHERE s.video_id=v.id) has_subtitles FROM videos v WHERE " + " AND ".join(predicates))
     search = _Search(db, args, scope, parameters, url)
     hits = []
-    for source in args.sources:
-        hits.extend(getattr(search, source)())
+    if search.terms:
+        for source in args.sources:
+            hits.extend(getattr(search, source)())
     phonetic_used, index_pending = False, 0
     if (args.phonetic_mode != "off" and "subtitles" in args.sources and search.videos
             and (args.phonetic_mode == "always" or (not hits and not search.truncated))):
@@ -449,12 +466,31 @@ def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True):
                 prepare_phonetic_index(db, scope, parameters, time_filter)
                 db.execute("BEGIN")
                 return search_library(db, args, folder_id=folder_id, root_only=root_only,
-                                      url=url, _prepare_index=False)
+                                      url=url, _prepare_index=False, semantic_vector=semantic_vector,
+                                      semantic_version=semantic_version)
             hits = [hit for hit in hits if not any(e["source"] == "subtitles" for e in hit["evidence"])]
             search.counts["subtitles"] = 0
             search.truncated = [s for s in search.truncated if s != "subtitles"]
             hits.extend(search.subtitles())
     items = search.finish(hits)
+    semantic_meta = {}
+    semantic_pending = 0
+    semantic_truncated = False
+    if args.semantic_query is not None:
+        if semantic_vector is None or not semantic_version:
+            raise RuntimeError("语义查询缺少本地模型结果")
+        from classcue.semantic_search import fuse, retrieve
+        candidates, index_coverage, semantic_truncated = retrieve(search, semantic_vector, semantic_version)
+        semantic_pending = index_coverage["pending_videos"]
+        semantic_meta = {
+            "retrieval_mode": "hybrid" if search.terms else "semantic",
+            "semantic_model": "Qwen/Qwen3-Embedding-0.6B",
+            "semantic_model_version": semantic_version,
+            "semantic_coverage": index_coverage,
+            "semantic_candidates_truncated": semantic_truncated,
+            "semantic_candidate_limit": 100,
+        }
+        items = fuse(items, candidates, diverse=args.diverse)
     coverage = {
         "video_count": len(search.videos),
         "with_subtitles": sum(bool(video["has_subtitles"]) for video in search.videos.values()),
@@ -462,7 +498,7 @@ def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True):
     }
     query = args.model_dump(exclude={"limit", "offset", "snapshot_id"})
     snapshot = hashlib.sha256(json.dumps(
-        [query, items, coverage, search.truncated, search.counts, phonetic_used, index_pending],
+        [query, items, coverage, search.truncated, search.counts, phonetic_used, index_pending, semantic_meta],
         ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if args.snapshot_id and args.snapshot_id != snapshot:
         raise ValueError("搜索资料或参数已变化，请从 offset=0 重新搜索，不沿用旧 snapshot_id")
@@ -472,15 +508,19 @@ def search_library(db, args, *, folder_id, root_only, url, _prepare_index=True):
         "items": page, "total": len(items), "total_videos": len({item["video_id"] for item in items}),
         "has_more": has_more, "next_offset": args.offset + len(page) if has_more else None,
         "snapshot_id": snapshot, "searched_sources": args.sources, "source_counts": search.counts,
-        "coverage": coverage, "match_type": "phonetic_passage" if phonetic_used else "literal_passage",
+        "coverage": coverage,
+        "match_type": (("hybrid_passage" if search.terms else "semantic_passage") if args.semantic_query
+                       else "phonetic_passage" if phonetic_used else "literal_passage"),
         "phonetic_mode": args.phonetic_mode, "phonetic_search_used": phonetic_used,
         "phonetic_index_pending": index_pending,
         "phonetic_terms": list(search.phonetic_keys),
         "term_groups": args.groups(),
         "exclude_terms": args.exclude_terms, "window_seconds": args.window_seconds,
-        "search_complete": not search.truncated and not index_pending,
-        "total_is_exact": not search.truncated and not index_pending,
+        "search_complete": not search.truncated and not index_pending and not semantic_pending and not semantic_truncated,
+        "total_is_exact": not args.semantic_query and not search.truncated and not index_pending,
         "candidate_truncated_sources": search.truncated, "candidate_limit_per_source": CANDIDATE_LIMIT,
         "empty_reason": (None if items else "no_videos" if not search.videos else
-                         "incomplete_search" if search.truncated or index_pending else "no_matching_content"),
+                         "incomplete_search" if search.truncated or index_pending or semantic_pending or semantic_truncated
+                         else "no_matching_content"),
+        **semantic_meta,
     }

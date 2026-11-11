@@ -28,7 +28,7 @@ const transcriptItem = { segment_id: id, start_seconds: seconds, end_seconds: se
 const searchSources = ["catalog", "bookmarks", "subtitles", "analysis"];
 const searchTerm = { type: "string", minLength: 1, maxLength: 120 };
 const nullableSeconds = { type: ["number", "null"], minimum: 0 };
-const searchMatchType = { enum: ["literal", "phonetic", "mixed"] };
+const searchMatchType = { enum: ["literal", "phonetic", "mixed", "semantic"] };
 const phoneticModes = ["auto", "off", "always"];
 const phoneticMatch = { type: "object", properties: {
   query_term: searchTerm, source_text: { type: "string" },
@@ -68,7 +68,7 @@ const retrievalSchemas = {
     snapshot_id: { type: "string", pattern: "^[a-f0-9]{64}$" },
     searched_sources: { type: "array", items: { enum: searchSources } },
     source_counts: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
-    match_type: { enum: ["literal_passage", "phonetic_passage"] },
+    match_type: { enum: ["literal_passage", "phonetic_passage", "semantic_passage", "hybrid_passage"] },
     phonetic_mode: { enum: phoneticModes }, phonetic_search_used: { type: "boolean" },
     phonetic_index_pending: { type: "integer", minimum: 0 },
     phonetic_terms: { type: "array", items: searchTerm, maxItems: 32 },
@@ -149,7 +149,9 @@ const retrievalSchemas = {
 };
 const batchJobSchema = { ...resultSchema, properties: {
   ...resultSchema.properties, job_id: { type: "string" }, job_type: { type: "string" },
-  status: { type: "string" }, summary: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
+  status: { type: "string" }, summary: { type: "object",
+    properties: { elapsed_seconds: { type: "number", minimum: 0 } },
+    additionalProperties: { type: "integer", minimum: 0 } },
   entries: { type: "array", maxItems: 50, items: { type: "object" } },
   reused: { type: "boolean" }, next_offset: { type: ["integer", "null"], minimum: 0 },
   has_more: { type: "boolean" },
@@ -190,7 +192,8 @@ function tool(name, description, properties, required = [], readOnly = true, ann
   // Image tools use content only; outputSchema would require structuredContent.
   const outputSchema = ["read_slide", "read_video_frame"].includes(name) ? undefined
     : retrievalSchemas[name] ?? (name === "preview_batch" ? batchPreviewSchema
-    : ["start_batch_processing", "retry_batch", "resume_batch", "start_processing_sequence", "get_job", "cancel_job"].includes(name)
+    : ["start_batch_processing", "retry_batch", "resume_batch", "start_processing_sequence",
+      "start_semantic_prepare", "start_semantic_setup", "get_job", "cancel_job"].includes(name)
       ? batchJobSchema : resultSchema);
   return { name, description, inputSchema: { type: "object", properties,
     required, additionalProperties: false, ...rules }, ...(outputSchema ? { outputSchema } : {}),
@@ -204,6 +207,8 @@ const allCourseTools = [
       ...pagination }),
   tool("search_library", "统一搜索视频库名称目录、人工书签提醒、字幕、已保存考点与题目，找回哪个视频的哪段讲解。默认全部来源；sources 可限定 catalog/bookmarks/subtitles/analysis。query 为短语；queries 配合 any/all；term_groups 组内任一、组间全部（如[[范式,规范化],[冗余,分解]]）。字幕可在 window_seconds 内跨句满足组合，单词或发音序列不跨句。phonetic_mode 默认 auto：完整字面检索无结果时尝试字幕同音匹配；用户提示 ASR 同音错字或已有结果不相关时用 always，off 仅字面检索。明确错词如 B包 可与闭包作为同组字面候选。发音仅忽略声调的完整音节匹配，不是纠错或语义模型。证据保留原字幕，phonetic_matches 是待上下文核实的假设。可接 read_transcript 核对或 list_slides/read_slide 看图。名称和整段提醒不推测时间，备注和分析不是教师原话。search_complete=false 时不能断言没有内容；phonetic_index_pending>0 表示仍有待建索引，可同参数从首页重试或收紧范围。继续翻页须带 snapshot_id，不自动扩大范围。",
     { query: searchTerm, queries: { type: "array", minItems: 1, maxItems: 8, items: searchTerm },
+      semantic_query: { type: "string", minLength: 1, maxLength: 1000,
+        description: "按意思查找字幕的完整问题。单独提供做语义检索；与一组字面词同传做混合检索。需先准备本地 Qwen 模型并为该范围建立索引。相似度不是置信度；仍须读前后文核实。仅字幕参与，保留课程、视频、时间和排除词约束。" },
       term_groups: { type: "array", minItems: 1, maxItems: 6,
         items: { type: "array", minItems: 1, maxItems: 8, items: searchTerm },
         description: "组内任一词，组间全部满足；最多32词。词由 Agent 根据问题提出。" },
@@ -220,9 +225,22 @@ const allCourseTools = [
       snapshot_id: { type: "string", pattern: "^[a-f0-9]{64}$",
         description: "翻页时原样传入上一页快照；资料变化会要求重新搜索。" },
     }, [], true, {}, {
-      oneOf: ["query", "queries", "term_groups"].map(name => ({ required: [name] })),
+      anyOf: ["query", "queries", "term_groups", "semantic_query"].map(name => ({ required: [name] })),
       dependentRequired: { start_seconds: ["end_seconds"], end_seconds: ["start_seconds"] },
     }),
+  tool("get_semantic_status", "读取本地 Qwen 检索模型及指定范围的字幕索引覆盖，不加载模型、不下载、不建立索引。pending_videos 表示仍未索引的字幕视频，无索引不能据此断言课堂没有内容。",
+    { ...course, video_id: id }),
+  tool("start_semantic_prepare", "准备或切换本地 Qwen3-Embedding-0.6B 检索模型，可下载共享权重和所选 CPU/GPU 独立环境。省略 device 沿用当前设备，首次检测到可用 GPU 时默认 GPU，否则 CPU；不建立索引、不转写、不调用外部 AI。仅用户要求准备检索模型时使用。持久 request_id 保障响应丢失重试不重复提交；用 get_job 查询、cancel_job 停止。",
+    { request_id: requestId, device: { type: "string", enum: ["cpu", "cuda"] } },
+    ["request_id"], false, { idempotentHint: true, openWorldHint: true }),
+  tool("start_semantic_setup", "为用户明确指定的课程或视频准备语义检索：先准备或切换本地 Qwen 检索环境，再为已有字幕建立索引；可下载共享模型权重和 CPU/GPU 环境。省略 device 沿用当前设备，首次检测到可用 GPU 时默认 GPU，否则 CPU。不转写、不做 OCR、不调用外部 AI。仅用户要求开启该范围的语义检索时使用，普通查找不隐式下载或索引。持久 request_id 保障重试不重复；用 get_job 查询、cancel_job 停止，保留已完成视频索引。",
+    { ...course, video_id: id, request_id: requestId,
+      device: { type: "string", enum: ["cpu", "cuda"] } },
+    ["request_id"], false, { idempotentHint: true, openWorldHint: true },
+    { anyOf: [{ required: ["course_id"] }, { required: ["video_id"] }] }),
+  tool("start_semantic_index", "为明确指定的课程或视频建立本地字幕语义索引。只使用已准备的 Qwen3-Embedding-0.6B，不转写、不调用外部 AI，不处理 PPT。后台执行并复用已有索引；返回任务 ID，用 get_job 查询或 cancel_job 停止。停止保留已完成视频。",
+    { ...course, video_id: id }, [], false, {},
+    { anyOf: [{ required: ["course_id"] }, { required: ["video_id"] }] }),
   tool("search_bookmarks", "检索用户在 ClassCue 自己添加的复习书签和提醒。用户说“我记得有个视频讲过自注意力”或寻找自己的标记时优先使用。只对书签备注做字面匹配；可用 query 或 queries（any/all），均省略则分页浏览全部书签。可限定课程或视频，返回备注原文、文件夹、可空时间点、播放链接和附近字幕读取区间。无时间点表示整段视频提醒，不能推测讲解位置；备注不是教师原话，不修改书签、不启动转写或模型。",
     { ...course, video_id: id, query: { ...string, minLength: 1 },
       queries: { type: "array", minItems: 1, maxItems: 8, items: { ...string, minLength: 1 } },

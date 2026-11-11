@@ -116,6 +116,21 @@ it("shows course transcription counts and failures and returns to the library", 
   expect(taskDestination(job)).toBe("/");
 });
 
+it("shows RAG cleanup progress without stop or pause controls and opens semantic settings", async () => {
+  const job = { id: "rag-cleanup", status: "running", job_type: "semantic_cleanup",
+    cleanup_target: "cuda" as const, message: "正在清理GPU 环境", progress: .3 };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([job]);
+  vi.mocked(api.getJob).mockResolvedValue(job);
+  await mount();
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="查看任务详情"]')!.click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("正在清理GPU 环境"));
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.querySelector(".model-cleanup")).not.toBeNull();
+  expect([...dialog.querySelectorAll("button")].some(button => /停止|暂停/.test(button.textContent ?? ""))).toBe(false);
+  expect(api.cancelJob).not.toHaveBeenCalled();
+  expect(taskDestination(job)).toBe("/settings?section=semantic");
+});
+
 it("shows local sequence steps and routes the task back to the library", async () => {
   const job = {
     id: "sequence-job", status: "failed", job_type: "course_sequence", progress: 50,
@@ -133,6 +148,22 @@ it("shows local sequence steps and routes the task back to the library", async (
   expect(text).toContain("PPT 提取：失败");
   expect(text).not.toContain("待 AI");
   expect(taskDestination(job)).toBe("/");
+});
+
+it("shows setup indexing progress without retaining the earlier model verification phase", async () => {
+  const job = { id: "semantic-setup", status: "running", job_type: "semantic_setup", stage: "indexing",
+    progress: 70, message: "建立课程索引 · 视频 1/2",
+    preparation: { active: true, phase: "verifying" as const, label: "验证检索模型",
+      message: "正在验证", updated_at: Date.now() / 1000 - 20 } };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([job]);
+  vi.mocked(api.getJob).mockResolvedValue(job);
+  await mount();
+  await settle(() => expect(container.textContent).toContain("70%"));
+  expect(container.textContent).not.toContain("验证检索模型");
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="查看任务详情"]')!.click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("建立课程索引"));
+  expect(document.querySelector('[role="dialog"] [aria-label="模型准备进度"]')).toBeNull();
+  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("验证检索模型");
 });
 
 it("routes historical material tasks home while paused and restores their destination when enabled", () => {

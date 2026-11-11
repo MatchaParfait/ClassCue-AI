@@ -130,6 +130,19 @@ class JobsPage(Arguments):
     offset: int = Field(default=0, ge=0, le=MAX_INTEGER, strict=True)
 
 
+class SemanticScope(Arguments):
+    course_id: str | None = Field(default=None, min_length=1, max_length=100)
+    video_id: int | None = Field(default=None, gt=0, le=MAX_INTEGER, strict=True)
+
+
+class SemanticTarget(SemanticScope):
+    @model_validator(mode="after")
+    def explicit_target(self):
+        if self.course_id is None and self.video_id is None:
+            raise ValueError("请明确指定需要建立索引的课程或视频")
+        return self
+
+
 class Start(Arguments):
     course_id: str | None = Field(default=None, max_length=100)
     video_ids: list[Annotated[int, Field(strict=True, gt=0, le=MAX_INTEGER)]] | None = Field(
@@ -184,6 +197,16 @@ class BatchTarget(Arguments):
 RequestId = Annotated[str, Field(min_length=8, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")]
 
 
+class SemanticPrepare(Arguments):
+    request_id: RequestId
+    device: Literal["cpu", "cuda"] | None = None
+
+
+class SemanticSetup(SemanticTarget):
+    request_id: RequestId
+    device: Literal["cpu", "cuda"] | None = None
+
+
 class BatchStart(BatchTarget):
     request_id: RequestId
 
@@ -216,7 +239,9 @@ SCHEMAS = {"list_courses": Page, "list_videos": ScopedPage, "search_library": Li
            "start_batch_processing": BatchStart, "retry_batch": BatchCommand,
            "resume_batch": BatchCommand, "start_processing_sequence": SequenceStart,
            "list_slides": SlidePage, "read_slide": SlideImage, "read_video_frame": Open,
-           "read_analysis": AnalysisPage, "list_jobs": JobsPage, "get_processing_status": Arguments}
+           "read_analysis": AnalysisPage, "list_jobs": JobsPage, "get_processing_status": Arguments,
+           "get_semantic_status": SemanticScope, "start_semantic_index": SemanticTarget,
+           "start_semantic_prepare": SemanticPrepare, "start_semantic_setup": SemanticSetup}
 
 
 class CourseTools:
@@ -346,14 +371,105 @@ class CourseTools:
             if expected_library_id is not None and library_id != expected_library_id:
                 raise ValueError("视频库身份已变化，请重新搜索")
             folder = self._folder(args.course_id)
+        semantic = {}
+        if args.semantic_query is not None:
+            from classcue.semantic_embeddings import encoder
+            from classcue.semantic_index import model_version
+            with encoder.lock:
+                if self.jobs.is_running():
+                    raise RuntimeError("后台任务正在使用处理资源，请完成或停止任务后再做语义检索；原文搜索仍可使用")
+                version = model_version()
+                vector = encoder.encode([args.semantic_query], query=True)[0]
+            if model_version() != version:
+                raise RuntimeError("检索模型已变化，请重新搜索")
+            semantic = {"semantic_vector": vector, "semantic_version": version}
         with store.connect() as db:
             db.execute("BEGIN")
             result = search_library(db, args, folder_id=None if folder == "root" else folder,
-                                    root_only=folder == "root", url=self._url)
+                                    root_only=folder == "root", url=self._url, **semantic)
         with self.jobs._lock:
             if library_id != self.provider.library_id() or store.path != self.store.path:
                 raise ValueError("视频库身份已变化，请重新搜索")
         return {"library_id": library_id, **result}
+
+    def _semantic_videos(self, args):
+        videos = self._videos(args.course_id)
+        if args.video_id is not None:
+            self._video(args.video_id)
+            videos = [row for row in videos if row["id"] == args.video_id]
+        return [row["id"] for row in videos]
+
+    def get_semantic_status(self, args):
+        from classcue.semantic_embeddings import model_status
+        from classcue.semantic_index import coverage
+        ids = self._semantic_videos(args)
+        with self.store.connect() as db:
+            indexed = coverage(db, ids)
+        active = next((str(row["id"]) for row in self.store.list_active_jobs()
+                       if row["job_type"] in {
+                           "semantic_prepare", "semantic_index", "semantic_setup", "semantic_cleanup"}), None)
+        return {**model_status(), "coverage": indexed,
+                "busy": self.jobs.is_running() or bool(self.store.list_paused_jobs()),
+                "active_job_id": active}
+
+    def _start_semantic(self, args, *, index):
+        from classcue.semantic_embeddings import model_status, prepare_model
+        from classcue.semantic_index import build_index
+        kind = "semantic_setup" if index else "semantic_prepare"
+
+        def operation(marker):
+            self.ensure_changes()
+            device = args.device or model_status()["device"]
+            ids, store = (self._semantic_videos(args) if index else []), self.store
+            if index and not ids:
+                raise ValueError("指定范围内没有视频")
+            state = {"kind": kind, "model_id": "Qwen3-Embedding-0.6B", "device": device,
+                     "mcp_request": marker, "entries": [{"video_id": value} for value in ids]}
+            if index:
+                state["course_id"] = args.course_id
+            job_id = uuid4().hex
+
+            def run(update, stop):
+                if stop():
+                    raise ProcessingCancelled("已停止课程检索准备")
+                prepare_model(device, lambda value, message, stage: update(
+                    value * .5 if index else value, message, stage), stop)
+                if stop():
+                    raise ProcessingCancelled("已停止课程检索准备，已有索引保留")
+                if index:
+                    summary = build_index(store, ids, lambda value, message, stage: update(
+                        .5 + value * .5, message, stage), stop)
+                    state["summary"] = summary
+                    store.update_job(job_id, request_json=json.dumps(state, ensure_ascii=False))
+                    return {"message": f"课程检索已就绪 · {summary['chunks']} 个字幕片段"}
+                return {"message": f"{'CPU' if device == 'cpu' else 'GPU'} 检索模型已就绪"}
+
+            self.jobs.submit(kind, None, run, request=state, job_id=job_id)
+            return {"job_id": job_id}
+
+        return self._batch_request(f"start_{kind}", args, operation)
+
+    def start_semantic_prepare(self, args):
+        return self._start_semantic(args, index=False)
+
+    def start_semantic_setup(self, args):
+        return self._start_semantic(args, index=True)
+
+    def start_semantic_index(self, args):
+        from classcue.semantic_embeddings import model_status
+        from classcue.semantic_index import build_index
+        self.ensure_changes()
+        if not model_status()["ready"]:
+            raise RuntimeError("请先用 start_semantic_setup 准备该范围，或在设置 → 课程检索中准备模型")
+        ids, store = self._semantic_videos(args), self.store
+        if not ids:
+            raise ValueError("指定范围内没有视频")
+        job_id = self.jobs.submit(
+            "semantic_index", None, lambda update, stop: build_index(store, ids, update, stop),
+            request={"kind": "semantic_index", "course_id": args.course_id,
+                     "entries": [{"video_id": value} for value in ids]})
+        return {"job_id": job_id, "job_type": "semantic_index", "status": "queued",
+                "video_count": len(ids)}
 
     def search_subtitles(self, args):
         from classcue.subtitle_search import validate_query
@@ -568,7 +684,9 @@ class CourseTools:
             self._video(args.video_id)
         with self.store.connect() as db:
             rows = db.execute(
-                "SELECT * FROM processing_jobs WHERE job_type IN ('course_transcribe','course_sequence','batch_video_process') "
+                "SELECT * FROM processing_jobs WHERE job_type IN "
+                "('course_transcribe','course_sequence','batch_video_process','semantic_index','semantic_prepare',"
+                "'semantic_setup','semantic_cleanup') "
                 "ORDER BY CASE WHEN status IN ('queued','running','resource_paused','awaiting_api') THEN 0 ELSE 1 END,"
                 "COALESCE(finished_at,started_at,created_at) DESC,rowid DESC").fetchall()
         items = []
@@ -802,8 +920,20 @@ class CourseTools:
         return operation
 
     def _job(self, row, *, offset=0, limit=50):
-        if row is None or row["job_type"] not in {JOB_TYPE, SEQUENCE_TYPE, "batch_video_process"}:
+        if row is None or row["job_type"] not in {
+            JOB_TYPE, SEQUENCE_TYPE, "batch_video_process", "semantic_index", "semantic_prepare",
+            "semantic_setup", "semantic_cleanup"
+        }:
             raise KeyError("课程转写或批处理任务不存在")
+        if row["job_type"] in {"semantic_index", "semantic_prepare", "semantic_setup", "semantic_cleanup"}:
+            state = json.loads(row["request_json"] or "{}")
+            return {"job_id": row["id"], "job_type": row["job_type"], "status": row["status"],
+                    "stage": row["stage"], "progress": row["progress"], "message": row["message"],
+                    "error_message": row["error_message"], "summary": state.get("summary", {}),
+                    "next_action": ("在 APP 设置 → 课程检索中重新清理"
+                                    if row["job_type"] == "semantic_cleanup" else
+                                    "使用新的 request_id 重新提交原范围，复用已准备模型和已完成索引")
+                    if row["status"] in {"failed", "interrupted"} else None}
         if row["job_type"] == "batch_video_process":
             return self._batch_job(row, offset=offset, limit=limit)
         state = json.loads(row["request_json"] or "{}")
@@ -932,7 +1062,8 @@ class CourseTools:
         with self.jobs._lock:
             with self.store.connect() as db:
                 candidates = db.execute(
-                    "SELECT * FROM processing_jobs WHERE job_type IN ('batch_video_process','course_sequence') "
+                    "SELECT * FROM processing_jobs WHERE job_type IN "
+                    "('batch_video_process','course_sequence','semantic_prepare','semantic_setup') "
                     "AND json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END, "
                     "'$.mcp_request.request_id') = ?",
                     (args.request_id,),

@@ -279,7 +279,8 @@ it("does not inspect ASR models or AI services in the default storage category",
   const page = mountSettings();
   try {
     await waitFor(() => expect(api.getStorageDirectories).toHaveBeenCalled());
-    expect(page.container.querySelectorAll(".settings-navigation button:not(.settings-onboarding-trigger)")).toHaveLength(9);
+    expect(page.container.querySelectorAll(".settings-navigation button:not(.settings-onboarding-trigger)")).toHaveLength(10);
+    expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("课程检索");
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("快捷键");
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("桌面设置");
     expect(page.container.querySelector(".settings-navigation")?.textContent).not.toContain("工作区");

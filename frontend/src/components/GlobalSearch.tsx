@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMatch, useNavigate } from "react-router-dom";
 import { ArrowUpRight, FileVideo, LoaderCircle, RotateCcw, Search, X } from "lucide-react";
 import { getLibrary, getLibraryStatus, searchSubtitles } from "../api/client";
+import { searchSemanticSubtitles, type SemanticCoverage } from "../api/semantic";
 import type { SubtitleSearchHit, SubtitleSearchResult } from "../types";
 import { formatTime } from "../utils";
 import { useModalFocus } from "../hooks/useModalFocus";
@@ -13,7 +14,7 @@ import "../search.css";
 
 interface SearchFolder { id: number; name: string }
 const SearchContext = createContext<((folder?: SearchFolder) => void) | null>(null);
-const hitKey = (hit: SubtitleSearchHit) => `${hit.video_id}:${hit.segment_id}`;
+const hitKey = (hit: SubtitleSearchHit) => hit.result_id ?? `${hit.video_id}:${hit.segment_id}`;
 
 function useReviewVideoId() {
   const match = useMatch("/review/:videoId");
@@ -58,7 +59,11 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const [folder, setFolder] = useState<SearchFolder | null>(null);
   const [fromFolder, setFromFolder] = useState(false);
   const [allVideos, setAllVideos] = useState(false);
-  const [data, setData] = useState<(SubtitleSearchResult & { preferredVideoId: number | null; folderId: number | null }) | null>(null);
+  const [mode, setMode] = useState<"literal" | "semantic">("literal");
+  const [data, setData] = useState<(SubtitleSearchResult & {
+    preferredVideoId: number | null; folderId: number | null; mode: "literal" | "semantic";
+    snapshot_id?: string; semantic_coverage?: SemanticCoverage;
+  }) | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -79,14 +84,16 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const rootFolders = (rootLibrary.data?.items ?? []).flatMap(item =>
     item.type === "folder" && item.folder && item.folder.parent_id == null ? [item.folder] : []);
   const folderId = folder && !allVideos ? folder.id : null;
-  const preferredVideoId = folderId === null ? reviewVideoId : null;
+  const preferredVideoId = folderId === null && mode === "literal" ? reviewVideoId : null;
   const client = useQueryClient();
   const trimmed = query.trim();
-  const valid = trimmed.length > 0 && [...trimmed].length <= 120;
+  const queryLimit = mode === "semantic" ? 1000 : 120;
+  const valid = trimmed.length > 0 && [...trimmed].length <= queryLimit;
   const sameLibrary = !libraryId || data?.library_id === libraryId;
   const sameVideo = data?.preferredVideoId === preferredVideoId;
   const sameFolder = data?.folderId === folderId;
-  const current = data?.query === trimmed && sameLibrary && sameVideo && sameFolder && !composing ? data : null;
+  const current = data?.query === trimmed && sameLibrary && sameVideo && sameFolder
+    && data.mode === mode && !composing ? data : null;
   const items = current?.items ?? [];
   const show = useCallback((target?: SearchFolder) => {
     setFolder(target ?? null); setFromFolder(Boolean(target)); setAllVideos(false); setOpen(true);
@@ -105,6 +112,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
       controller.current?.abort(); ++generation.current;
       setOpen(false); setPreview(null); setQuery(""); setData(null); setError(""); setBusy(false); setSelected(0); setComposing(false);
       setFolder(null); setFromFolder(false); setAllVideos(false);
+      setMode("literal");
     }
     previousScope.current = scope;
   }, [scope]);
@@ -126,7 +134,10 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
   const load = async (offset: number, token: number, signal: AbortSignal) => {
     setBusy(true); setError("");
     try {
-      const result = folderId !== null
+      const result = mode === "semantic"
+        ? await searchSemanticSubtitles(trimmed, offset, signal, folderId ?? undefined,
+          offset > 0 ? data?.snapshot_id : undefined)
+        : folderId !== null
         ? await searchSubtitles(trimmed, offset, signal, undefined, folderId)
         : await searchSubtitles(trimmed, offset, signal, preferredVideoId ?? undefined);
       if (signal.aborted || token !== generation.current) return;
@@ -137,10 +148,11 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
       }
       setData((previous) => {
         if (!offset || !previous || previous.library_id !== result.library_id || previous.query !== result.query
-            || previous.preferredVideoId !== preferredVideoId || previous.folderId !== folderId) return { ...result, preferredVideoId, folderId };
+            || previous.mode !== mode || previous.preferredVideoId !== preferredVideoId
+            || previous.folderId !== folderId) return { ...result, preferredVideoId, folderId, mode };
         const merged = new Map(previous.items.map((hit) => [hitKey(hit), hit]));
         result.items.forEach((hit) => merged.set(hitKey(hit), hit));
-        return { ...result, preferredVideoId, folderId, items: [...merged.values()] };
+        return { ...result, preferredVideoId, folderId, mode, items: [...merged.values()] };
       });
     } catch (failure) {
       if (!signal.aborted && token === generation.current) setError(failure instanceof Error ? failure.message : "搜索失败，请重试。");
@@ -154,7 +166,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
     const token = ++generation.current;
     setBusy(false); setError(""); setPreview(null);
     if (!valid || composing) { setData(null); setSelected(0); return; }
-    if (!open || (data?.query === trimmed && sameLibrary && sameVideo && sameFolder)) return;
+    if (!open || (data?.query === trimmed && sameLibrary && sameVideo && sameFolder && data.mode === mode)) return;
     setData(null); setSelected(0); setBusy(true);
     const request = new AbortController();
     controller.current = request;
@@ -162,7 +174,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
     return () => { window.clearTimeout(timer); request.abort(); };
     // Data updates and polling must not replay searches or reset pagination.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trimmed, composing, open, revision, scope, preferredVideoId, folderId]);
+  }, [trimmed, composing, open, revision, scope, preferredVideoId, folderId, mode]);
   useEffect(() => () => { controller.current?.abort(); }, []);
 
   const loadMore = () => {
@@ -190,6 +202,12 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
         <div className="global-search-heading"><div><span className="global-search-eyebrow">{folderId !== null ? "当前文件夹及所有子文件夹" : preferredVideoId === null ? "跨视频查找" : "本视频优先 · 跨视频查找"}</span><h2 id="global-search-title">{folderId !== null ? "文件夹字幕搜索" : "全局字幕搜索"}</h2></div>
           <button type="button" className="icon-button" aria-label="关闭全局搜索" onClick={close}><X size={20} /></button>
         </div>
+        <div className="global-search-scope">
+          <div className="global-search-mode" aria-label="字幕搜索方式">
+            <button type="button" aria-pressed={mode === "literal"} onClick={() => setMode("literal")}>原文</button>
+            <button type="button" aria-pressed={mode === "semantic"} onClick={() => setMode("semantic")}>语义</button>
+          </div>
+        </div>
         {fromFolder && folder && <div className="global-search-scope">
           <span className="global-search-folder-name" title={folder.name}>{folder.name}</span>
           <div className="global-search-range" aria-label="字幕搜索范围">
@@ -215,7 +233,7 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
           <input autoComplete="off" spellCheck={false} role="combobox" aria-label={folderId !== null ? "搜索当前文件夹及子文件夹的字幕" : "搜索所有视频的字幕"} aria-autocomplete="list"
             aria-expanded={items.length > 0} aria-controls="global-search-results"
             aria-activedescendant={items[selected] ? `search-hit-${hitKey(items[selected])}` : undefined}
-            placeholder={folderId !== null ? "输入关键词，查找文件夹内的字幕…" : preferredVideoId === null ? "输入课堂上说过的关键词…" : "输入关键词，优先查找本视频字幕…"} value={query}
+            placeholder={mode === "semantic" ? "描述你要找的课堂讲解…" : folderId !== null ? "输入关键词，查找文件夹内的字幕…" : preferredVideoId === null ? "输入课堂上说过的关键词…" : "输入关键词，优先查找本视频字幕…"} value={query}
             onChange={(event) => { clearPreview(); setQuery(event.target.value); }}
             onCompositionStart={() => { clearPreview(); setComposing(true); }} onCompositionEnd={(event) => { setQuery(event.currentTarget.value); setComposing(false); }}
             onKeyDown={(event) => {
@@ -241,13 +259,23 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
           <button type="button" className="text-button" onClick={() => void rootLibrary.refetch()}>重试</button>
         </div>}
         <div className="global-search-summary" role="status" aria-live="polite">
-          {!valid && trimmed ? "关键词最多 120 个字符" : busy ? <><LoaderCircle className="spin" size={14} />正在查找…</>
-            : current ? `${current.total} 处字幕 · ${current.total_videos} 个视频` : folderId !== null ? "仅搜索当前文件夹及所有子文件夹中已保存的字幕" : "搜索视频库所有文件夹中已保存的字幕"}
+          {!valid && trimmed ? `${mode === "semantic" ? "搜索内容" : "关键词"}最多 ${queryLimit} 个字符` : busy ? <><LoaderCircle className="spin" size={14} />正在查找…</>
+            : current ? `${current.total} 处${mode === "semantic" ? "候选" : "字幕"} · ${current.total_videos} 个视频` : folderId !== null ? "仅搜索当前文件夹及所有子文件夹中已保存的字幕" : "搜索视频库所有文件夹中已保存的字幕"}
           {current && !busy && <button type="button" className="secondary-button compact global-search-refresh" onClick={refresh}><RotateCcw size={14} aria-hidden="true" />刷新结果</button>}
         </div>
         <div className="global-search-scroll">
+          {mode === "semantic" && current?.semantic_coverage?.pending_videos ? <div className="global-search-folder-error" role="status">
+            <span>{current.semantic_coverage.pending_videos} 个字幕视频尚未建立索引</span>
+            <button type="button" className="text-button" onClick={() => {
+              close(); navigate("/settings?section=semantic");
+            }}>课程检索设置</button>
+          </div> : null}
           {error && <div className="global-search-error" role="alert"><span>搜索失败：{error}</span>
-            <button className="text-button" type="button" onClick={current ? loadMore : refresh}>重试</button></div>}
+            <button className="text-button" type="button" onClick={mode === "semantic" ? refresh : current ? loadMore : refresh}>重试</button>
+            {mode === "semantic" && <button className="text-button" type="button" onClick={() => {
+              close(); navigate("/settings?section=semantic");
+            }}>课程检索设置</button>}
+          </div>}
           <div id="global-search-results" role="listbox" aria-label="字幕搜索结果">
             {current && preferredVideoId !== null && <div className="global-search-section-label">
               <strong>本视频</strong><span>{groups.get(preferredVideoId)?.[0].video_match_count ?? 0} 处匹配</span>
@@ -260,7 +288,8 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
                 && <div className="global-search-section-label is-other" role="separator" aria-label="其他视频"><strong>其他视频</strong></div>}
               <div className="global-search-group" role="group" aria-labelledby={`search-video-${videoId}`}>
               <div className="global-search-video" id={`search-video-${videoId}`}><FileVideo size={19} aria-hidden="true" />
-                <div><strong>{hits[0].video_name || hits[0].filename}</strong><span>{hits[0].folder_name || "视频库"} · {hits[0].video_match_count} 处匹配</span></div>
+                <div><strong>{hits[0].video_name || hits[0].filename}</strong><span>{hits[0].folder_name || "视频库"} · {mode === "semantic"
+                  ? `已加载 ${hits.length} 处候选` : `${hits[0].video_match_count} 处匹配`}</span></div>
               </div>
               {hits.map((hit) => {
                 const index = items.indexOf(hit);
@@ -271,12 +300,15 @@ function SearchSession({ children, libraryId, scope }: { children: ReactNode; li
             </div></Fragment>)}
           </div>
           {!busy && !error && (!current || !items.length) && <div className="global-search-empty"><Search size={32} aria-hidden="true" />
-            <strong>{current ? "没有找到匹配字幕" : "记得一句话，就能找到那堂课"}</strong>
-            <p>{current ? "试试更短的关键词，或检查视频是否已完成转写。" : "支持中文短词与英文，按原文匹配。尚未转写的视频不会出现在结果中。"}</p>
+            <strong>{mode === "semantic" ? current ? "暂无语义候选" : "查找课堂讲解"
+              : current ? "没有找到匹配字幕" : "记得一句话，就能找到那堂课"}</strong>
+            <p>{mode === "semantic" ? current?.semantic_coverage?.pending_videos
+              ? "当前范围的索引尚未完整建立。" : "请在课程检索设置中检查索引状态。"
+              : current ? "试试更短的关键词，或检查视频是否已完成转写。" : "支持中文短词与英文，按原文匹配。尚未转写的视频不会出现在结果中。"}</p>
           </div>}
           {current?.has_more && <button type="button" className="secondary-button global-search-more" disabled={busy} onClick={loadMore}>{busy ? "正在加载…" : "加载更多字幕"}</button>}
         </div>
-        <div className="global-search-footer"><span>悬停 / ↑ ↓ 预览 · Enter 跳转 · Esc 关闭</span><span>仅搜索字幕原文</span></div>
+        <div className="global-search-footer"><span>悬停 / ↑ ↓ 预览 · Enter 跳转 · Esc 关闭</span><span>{mode === "semantic" ? "语义候选 · 字幕原文" : "仅搜索字幕原文"}</span></div>
       </SearchDialog>}
     </AnimatePresence>
   </SearchContext.Provider>;

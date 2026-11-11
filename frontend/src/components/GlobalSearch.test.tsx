@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FolderSubtitleSearchButton, GlobalSearchButton, GlobalSearchProvider } from "./GlobalSearch";
 import { getLibrary, getLibraryStatus, searchSubtitles } from "../api/client";
+import { searchSemanticSubtitles } from "../api/semantic";
 import type { SubtitleSearchHit, SubtitleSearchResult } from "../types";
 
 vi.mock("../api/client", () => ({
@@ -13,6 +14,7 @@ vi.mock("../api/client", () => ({
   getSearchPreviewUrl: (videoId: number, timeMs: number, libraryId: string) =>
     `/api/videos/${videoId}/preview-frame?time_ms=${timeMs}&library_id=${libraryId}`,
 }));
+vi.mock("../api/semantic", () => ({ searchSemanticSubtitles: vi.fn() }));
 vi.mock("./Motion", () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => children,
   useIsPresent: () => true,
@@ -90,6 +92,50 @@ it("debounces, groups literal highlights, navigates by keyboard and retains the 
   expect(vi.mocked(searchSubtitles).mock.calls[1][3]).toBe(1);
 });
 
+it("only invokes semantic inference when selected and keeps folder scope and index coverage visible", async () => {
+  vi.mocked(searchSemanticSubtitles).mockResolvedValue({
+    ...result("减少重复保存", [hit(2, 9)]), snapshot_id: "a".repeat(64),
+    semantic_coverage: { video_count: 2, with_subtitles: 2, missing_subtitles: 0,
+      indexed_videos: 1, pending_videos: 1, chunk_count: 4 },
+  });
+  act(() => button("搜索文件夹字幕").click());
+  type("减少重复保存"); await tick();
+  expect(searchSemanticSubtitles).not.toHaveBeenCalled();
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-mode button")[1].click());
+  await tick();
+  expect(vi.mocked(searchSemanticSubtitles).mock.calls[0].slice(0, 2)).toEqual(["减少重复保存", 0]);
+  expect(vi.mocked(searchSemanticSubtitles).mock.calls[0][3]).toBe(7);
+  expect(container.textContent).toContain("1 个字幕视频尚未建立索引");
+  expect(container.querySelector('[role="option"]')?.id).toBe("search-hit-2:9");
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-mode button")[0].click());
+  await tick();
+  expect(searchSubtitles).toHaveBeenCalledTimes(2);
+});
+
+it("counts accumulated semantic candidates for each video across pages", async () => {
+  const query = "重复保存";
+  const semantic_coverage = { video_count: 1, with_subtitles: 1, missing_subtitles: 0,
+    indexed_videos: 1, pending_videos: 0, chunk_count: 25 };
+  const page = (offset: number, count: number) => ({
+    ...result(query, Array.from({ length: count }, (_, index) => ({
+      ...hit(2, offset + index + 1), video_match_count: count,
+    })), { total: 25, offset, has_more: offset === 0 }),
+    snapshot_id: "a".repeat(64), semantic_coverage,
+  });
+  vi.mocked(searchSemanticSubtitles).mockResolvedValueOnce(page(0, 20))
+    .mockResolvedValueOnce(page(20, 5));
+  open();
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-mode button")[1].click());
+  type(query); await tick();
+  expect(container.querySelector(".global-search-video")?.textContent).toContain("已加载 20 处候选");
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-more")!.click());
+  await tick();
+  expect(container.querySelectorAll('[role="option"]')).toHaveLength(25);
+  expect(container.querySelector(".global-search-video")?.textContent).toContain("已加载 25 处候选");
+  expect(container.querySelector(".global-search-video")?.textContent).not.toContain("处匹配");
+  expect(vi.mocked(searchSemanticSubtitles).mock.calls.at(-1)?.[4]).toBe("a".repeat(64));
+});
+
 function selectFolder(value: string) {
   act(() => {
     const select = container.querySelector<HTMLSelectElement>('[aria-label="搜索文件夹范围"]')!;
@@ -97,6 +143,29 @@ function selectFolder(value: string) {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
+
+it("restarts semantic search from page one after a pagination snapshot expires", async () => {
+  const query = "重复保存";
+  const semantic_coverage = { video_count: 1, with_subtitles: 1, missing_subtitles: 0,
+    indexed_videos: 1, pending_videos: 0, chunk_count: 25 };
+  vi.mocked(searchSemanticSubtitles).mockResolvedValueOnce({
+    ...result(query, [hit(2, 1)], { has_more: true, total: 25 }),
+    snapshot_id: "a".repeat(64), semantic_coverage,
+  }).mockRejectedValueOnce(new Error("搜索资料或参数已变化"))
+    .mockResolvedValueOnce({ ...result(query, [hit(2, 9)]), snapshot_id: "b".repeat(64), semantic_coverage });
+  open();
+  act(() => container.querySelectorAll<HTMLButtonElement>(".global-search-mode button")[1].click());
+  type(query); await tick();
+  act(() => container.querySelector<HTMLButtonElement>(".global-search-more")!.click()); await tick();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("搜索资料或参数已变化");
+  act(() => [...container.querySelectorAll<HTMLButtonElement>('[role="alert"] button')]
+    .find(item => item.textContent === "重试")!.click());
+  await tick();
+  expect(vi.mocked(searchSemanticSubtitles).mock.calls.at(-1)?.[1]).toBe(0);
+  expect(vi.mocked(searchSemanticSubtitles).mock.calls.at(-1)?.[4]).toBeUndefined();
+  expect(container.querySelector('[role="option"]')?.id).toBe("search-hit-2:9");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
 
 it("offers only first-level folder prefixes and preserves keywords while switching and paginating", async () => {
   open(); await tick(1);

@@ -138,6 +138,7 @@ export interface VisualEvidence {
 }
 
 export interface SubtitleSearchHit {
+  result_id?: string;
   video_id: number;
   video_name: string;
   filename: string;
@@ -389,6 +390,8 @@ export interface JobStatus {
   resource?: FireRedResource | null;
   preparation?: PreparationProgress | null;
   cleanup?: CleanupProgress | null;
+  cleanup_target?: "cpu" | "cuda" | "weights" | "all";
+  semantic_device?: "cpu" | "cuda" | null;
   migration?: StorageMigrationProgress | null;
   started_at?: string | null;
   finished_at?: string | null;
