@@ -163,8 +163,11 @@ def extract_and_store_slides(
     store, video_id: int, slide_root: Path, *, roi: SlideRoi | None = None,
     ignore_regions: tuple[SlideRoi, ...] = (), force: bool = False,
     progress: ProgressCallback | None = None, should_stop: Callable[[], bool] | None = None,
-    backend: str = "auto",
+    backend: str | None = None,
 ) -> dict:
+    if backend is None:
+        from classcue.slide_runtime import selected_backend
+        backend = selected_backend()
     if backend not in {"auto", "cpu", "cuda"}:
         raise ValueError("无效的 PPT 处理设备")
     video = store.get_video(video_id)

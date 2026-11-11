@@ -3,22 +3,22 @@ import { Ban, CheckCircle2, Crop, Image as ImageIcon, LoaderCircle, Presentation
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { cancelJob, extractVideoSlides, getVideoSlides, getStreamUrl, getJob } from "../api/client";
 import type { Job, Video } from "../types";
-import type { SlideBackend } from "../api/slides";
 import { SlideDeviceControl } from "./SlideDeviceControl";
 
 export function SlideExtractionControls({
   video,
   active,
   busy,
+  showSettingsLink = true,
 }: {
   video: Video;
   active: boolean;
   busy: boolean;
+  showSettingsLink?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [roi, setRoi] = useState<PixelRegion | null>(null);
-  const [backend, setBackend] = useState<SlideBackend>("auto");
-  const [preparingDevice, setPreparingDevice] = useState(false);
+  const [deviceState, setDeviceState] = useState({ blocked: true, preparing: false });
   const [ignoreRegions, setIgnoreRegions] = useState<PixelRegion[]>([]);
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const loadedVideo = useRef<number | null>(null);
@@ -51,7 +51,6 @@ export function SlideExtractionControls({
       force,
       ignore_regions: ignoreRegions,
       ...(roi ? { roi } : {}),
-      ...(backend !== "auto" ? { backend } : {}),
     }),
     onSuccess: (result) => {
       const id = result.job_id ?? result.id;
@@ -68,7 +67,7 @@ export function SlideExtractionControls({
   });
   const currentJob = job.data;
   const terminal = Boolean(currentJob && isTerminal(currentJob.status));
-  const isRunning = preparingDevice || extraction.isPending || Boolean(currentJob && !terminal);
+  const isRunning = deviceState.preparing || extraction.isPending || Boolean(currentJob && !terminal);
   const slideCount = slides.data?.length ?? 0;
   const primaryCount = slides.data?.filter((slide) => slide.retention_class === "primary").length ?? 0;
   useEffect(() => {
@@ -134,7 +133,7 @@ export function SlideExtractionControls({
   };
 
   const start = (force = false) => {
-    if (isRunning || busy || slides.isPending || slides.isError || (slideCount > 0 && !replaceConfirmed)) return;
+    if (isRunning || busy || deviceState.blocked || slides.isPending || slides.isError || (slideCount > 0 && !replaceConfirmed)) return;
     setError(null);
     extraction.mutate(force);
   };
@@ -157,7 +156,7 @@ export function SlideExtractionControls({
         {roi && <span>已设置 PPT 区域</span>}
       </div>
       <SlideDeviceControl active={active} busy={busy || extraction.isPending || Boolean(currentJob && !terminal)}
-        value={backend} onChange={setBackend} onBusy={setPreparingDevice} />
+        onStateChange={setDeviceState} showSettingsLink={showSettingsLink} />
       <div className="slide-extraction-actions">
         <button className="secondary-button compact" type="button" disabled={busy || isRunning}
           onClick={() => setSelecting((value) => value === "roi" ? null : "roi")}>
@@ -167,10 +166,10 @@ export function SlideExtractionControls({
           onClick={() => setSelecting((value) => value === "ignore" ? null : "ignore")}>
           <Ban size={15} />{selecting === "ignore" ? "取消排除区域" : "排除干扰区域"}
         </button>
-        <button className="primary-button compact" type="button" disabled={busy || isRunning || slides.isPending || slides.isError || (slideCount > 0 && !replaceConfirmed)}
+        <button className="primary-button compact" type="button" disabled={busy || isRunning || deviceState.blocked || slides.isPending || slides.isError || (slideCount > 0 && !replaceConfirmed)}
           onClick={() => start(slideCount > 0)}>
           {isRunning ? <LoaderCircle className="spin" size={15} /> : <Presentation size={15} />}
-          {preparingDevice ? "正在准备…" : isRunning ? "正在提取…" : slideCount ? "重新提取 PPT" : "提取 PPT 页面"}
+          {deviceState.preparing ? "正在准备…" : isRunning ? "正在提取…" : slideCount ? "重新提取 PPT" : "提取 PPT 页面"}
         </button>
       </div>
       {slides.isError && <p className="field-error" role="alert">

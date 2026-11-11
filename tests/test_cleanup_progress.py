@@ -75,6 +75,20 @@ def test_outside_target_rejected_before_any_deletion(tmp_path):
     assert (outside / "ready.json").exists()
 
 
+def test_file_targets_share_inventory_and_leave_parent_directory(tmp_path):
+    root = tmp_path / "assets"
+    target = root / ".runtime" / "selection.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"choice")
+    sibling = target.parent / "keep.txt"
+    sibling.write_bytes(b"shared")
+    events = []
+    with cleanup.cleanup_events(events.append):
+        assert cleanup.cleanup_directories(root, [(target, "设备选择")], scope="test") == 6
+    assert not target.exists() and sibling.read_bytes() == b"shared"
+    assert events[-1]["files_deleted"] == 1 and events[-1]["directories_deleted"] == 0
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction safety")
 def test_nested_junction_rejected_before_deleting_siblings(tmp_path):
     root = tmp_path / "runtime"
@@ -127,6 +141,64 @@ def test_cancelled_cleanup_invalidates_ready_marker_and_can_be_retried(tmp_path)
     assert not any(event["phase"] == "completed" for event in events)
     cleanup.cleanup_directories(root, [(target, "owned")], scope="retry")
     assert not target.exists()
+
+
+def test_stop_after_unlink_reports_the_completed_deletion(tmp_path, monkeypatch):
+    root = tmp_path / "runtime"
+    target = root / "owned"
+    target.mkdir(parents=True)
+    file = target / "package.bin"
+    file.write_bytes(b"completed deletion")
+    size = file.stat().st_size
+    events = []
+    stopped = False
+    original = cleanup._remove_file
+    monkeypatch.setattr(cleanup.time, "monotonic", lambda: 100.)
+
+    def remove(path):
+        nonlocal stopped
+        original(path)
+        stopped = True
+
+    def check():
+        if stopped:
+            raise ProcessingCancelled("stop after unlink")
+
+    monkeypatch.setattr(cleanup, "_remove_file", remove)
+    with preparation_events(None, checkpoint=check), cleanup.cleanup_events(events.append):
+        with pytest.raises(ProcessingCancelled, match="stop after unlink"):
+            cleanup.cleanup_directories(root, [(target, "owned")], scope="test")
+    assert not file.exists()
+    assert events[-1]["files_deleted"] == 1
+    assert events[-1]["bytes_deleted"] == size
+    assert not any(event["phase"] == "completed" for event in events)
+
+
+def test_failure_flushes_completed_deletions_before_the_next_file(tmp_path, monkeypatch):
+    root = tmp_path / "runtime"
+    target = root / "owned"
+    target.mkdir(parents=True)
+    first = target / "ready.json"
+    first.write_bytes(b"ready")
+    blocked = target / "blocked.bin"
+    blocked.write_bytes(b"keep")
+    events = []
+    original = cleanup._remove_file
+    monkeypatch.setattr(cleanup.time, "monotonic", lambda: 100.)
+
+    def remove(path):
+        if path == blocked:
+            raise PermissionError("synthetic file in use")
+        original(path)
+
+    monkeypatch.setattr(cleanup, "_remove_file", remove)
+    with cleanup.cleanup_events(events.append):
+        with pytest.raises(OSError, match="blocked.bin"):
+            cleanup.cleanup_directories(root, [(target, "owned")], scope="test")
+    assert not first.exists() and blocked.read_bytes() == b"keep"
+    assert events[-1]["files_deleted"] == 1
+    assert events[-1]["bytes_deleted"] == len(b"ready")
+    assert not any(event["phase"] == "completed" for event in events)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows read-only attributes")

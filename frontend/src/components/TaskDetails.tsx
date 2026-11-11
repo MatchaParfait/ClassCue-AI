@@ -38,7 +38,9 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
   const migrating = job.job_type === "storage_migration";
   const downloadPaused = job.stage === "download_paused";
   const waiting = ["resource_paused", "awaiting_api"].includes(job.status);
-  const modelFraction = job.job_type === "asr_prepare" ? job.preparation?.phase_progress : null;
+  const preparing = running && ["asr_prepare", "slide_prepare"].includes(job.job_type ?? "");
+  const pptResources = ["slide_prepare", "slide_cache_cleanup"].includes(job.job_type ?? "");
+  const modelFraction = preparing ? job.preparation?.phase_progress : null;
   const progress = Math.max(0, Math.min(100, modelFraction != null ? modelFraction * 100 : job.progress ?? 0));
   const summary = job.batch_summary;
   const retryableBatch = job.job_type === "batch_video_process"
@@ -49,11 +51,12 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
     <div className="task-details-title">{running ? <LoaderCircle className="spin" size={22} /> : waiting || downloadPaused ? <PauseCircle size={22} />
       : job.status === "completed" ? <CheckCircle2 size={22} /> : <AlertCircle size={22} />}
       <div><h3>{job.stage === "download_paused" ? "下载已暂停" : job.stage === "pausing" ? "正在暂停下载" : taskLabel(job.status)}</h3><span>{taskTypeLabel(job)}{job.video_name ? ` · ${job.video_name}` : ""}</span></div>
-      {!cleaning && !(running && job.job_type === "asr_prepare") && <output>{Math.round(progress)}%</output>}</div>
-    {cleaning ? <ModelCleanupProgress job={job} /> : running && job.job_type === "asr_prepare" ? <ModelPreparationProgress job={job} />
+      {!cleaning && !preparing && <output>{Math.round(progress)}%</output>}</div>
+    {cleaning ? <ModelCleanupProgress job={job} label={pptResources ? "PPT 资源清理进度" : undefined} />
+      : preparing ? <ModelPreparationProgress job={job} label={pptResources ? "PPT GPU 安装进度" : undefined} />
       : <div className="job-progress"><span style={{ width: `${progress}%` }} /></div>}
     <p className="task-message">{job.message}</p>
-    {job.job_type !== "asr_prepare" && hasActivePreparation(job) && <ModelPreparationProgress job={job} />}
+    {!preparing && hasActivePreparation(job) && <ModelPreparationProgress job={job} />}
     {summary && <dl className="task-summary">{(job.job_type === "course_sequence" ? [
       ["已完成", summary.completed], ["已跳过", summary.skipped],
       ["失败", summary.failed], ["待处理", summary.pending_asr],
@@ -72,12 +75,13 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       {job.status === "resource_paused" ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("resume")}>{commandIcon}继续任务</button>
         : job.job_type === "batch_video_process" && ["awaiting_api", "failed", "interrupted"].includes(job.status) && retryableBatch
           ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("retry")}>{commandIcon}重试未完成视频</button>
-          : job.job_type !== "slide_prepare" && <button className="secondary-button" onClick={() => onOpen(job)}>{migrating ? "打开存储设置" : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "打开视频库" : "打开处理详情"}</button>}
+          : <button className="secondary-button" onClick={() => onOpen(job)}>{pptResources ? "打开 PPT 设置" : migrating ? "打开存储设置" : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "打开视频库" : "打开处理详情"}</button>}
       {job.status === "awaiting_api" && <button className="secondary-button" onClick={onSettings}><Settings2 size={16} />AI 服务设置</button>}
     </div>
     {!migrating && (running || job.status === "resource_paused") && <div className="task-danger-zone"><button className="stop-job-button"
       disabled={command.isPending || job.stage === "stopping"} onClick={() => command.mutate("stop")}><Ban size={15} />
-      {command.isPending || job.stage === "stopping" ? "正在请求停止…" : "停止任务"}</button></div>}
+      {command.isPending || job.stage === "stopping" ? "正在请求停止…" : "停止任务"}</button>
+    </div>}
     {job.batch_entries && <ul className="task-entry-list">{job.batch_entries.map((entry, index) =>
       <li key={`${entry.video_id}:${index}`}><div><strong>{entry.label || `视频 ${entry.video_id ?? index + 1}`}</strong>
         <span>{job.job_type === "course_sequence" && ["pending", "running"].includes(entry.status)

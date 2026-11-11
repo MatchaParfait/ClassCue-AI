@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import * as slideApi from "../api/slides";
@@ -11,7 +12,15 @@ vi.mock("../api/client", () => ({
   cancelJob: vi.fn(), extractVideoSlides: vi.fn(), getVideoSlides: vi.fn(),
   getStreamUrl: vi.fn(() => "/fixture.mp4"), getJob: vi.fn(),
 }));
-vi.mock("../api/slides", () => ({ getSlideAcceleration: vi.fn(), prepareSlideAcceleration: vi.fn() }));
+vi.mock("../api/slides", () => ({
+  getSlideAcceleration: vi.fn(), prepareSlideAcceleration: vi.fn(),
+  getSlideSelection: vi.fn(), saveSlideSelection: vi.fn(),
+}));
+
+const acceleration = {
+  ready: true, runtime_ready: true, gpu_detected: true, gpu_prepare_available: true,
+  gpu_name: "Synthetic GPU", gpu_unavailable_reason: null, message: "",
+};
 
 const video: Video = {
   id: 7, display_name: "Synthetic lesson", filename: "lesson.mp4",
@@ -34,7 +43,9 @@ const settle = async () => act(async () => { await new Promise((resolve) => setT
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
-  vi.mocked(slideApi.getSlideAcceleration).mockResolvedValue({ ready: true, gpu_name: "Synthetic GPU", message: "" });
+  vi.mocked(slideApi.getSlideAcceleration).mockResolvedValue(acceleration);
+  vi.mocked(slideApi.getSlideSelection).mockResolvedValue({ backend: "auto" });
+  vi.mocked(slideApi.saveSlideSelection).mockImplementation(async backend => ({ backend }));
   vi.mocked(api.getStreamUrl).mockReturnValue("/fixture.mp4");
   vi.mocked(api.getVideoSlides).mockResolvedValue([]);
   vi.mocked(api.extractVideoSlides).mockResolvedValue({ id: "slide-job", status: "queued" });
@@ -52,7 +63,7 @@ afterEach(async () => {
 
 async function mount() {
   act(() => root.render(<QueryClientProvider client={client}>
-    <SlideExtractionControls video={video} active busy={false} />
+    <MemoryRouter><SlideExtractionControls video={video} active busy={false} /></MemoryRouter>
   </QueryClientProvider>));
   await settle();
 }
@@ -108,51 +119,38 @@ it("refreshes slides and library counts after completion", async () => {
   expect(api.getVideoSlides).toHaveBeenCalledTimes(2);
 });
 
-it("passes the explicitly selected CPU or CUDA backend", async () => {
+it("shows the saved device with a settings link and no installation or device editing controls", async () => {
+  vi.mocked(slideApi.getSlideSelection).mockResolvedValue({ backend: "cpu" });
   await mount();
-  const select = container.querySelector<HTMLSelectElement>('select[aria-label="PPT 处理设备"]')!;
-  act(() => {
-    select.value = "cuda";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  expect(container.textContent).toContain("默认设备：CPU");
+  expect(container.querySelector('a[href="/settings?section=slides"]')).not.toBeNull();
+  expect(container.querySelector("select")).toBeNull();
+  expect(slideApi.prepareSlideAcceleration).not.toHaveBeenCalled();
+  expect(slideApi.getSlideAcceleration).not.toHaveBeenCalled();
   act(() => button("提取 PPT 页面").click());
   await settle();
-  expect(api.extractVideoSlides).toHaveBeenCalledWith(7, { force: false, ignore_regions: [], backend: "cuda" });
+  expect(api.extractVideoSlides).toHaveBeenCalledWith(7, { force: false, ignore_regions: [] });
 });
 
-it("prepares CUDA as a separate cancellable task and blocks extraction", async () => {
-  vi.mocked(slideApi.getSlideAcceleration).mockResolvedValue({ ready: false, gpu_name: null, message: "" });
-  vi.mocked(slideApi.prepareSlideAcceleration).mockResolvedValue({ job_id: "prepare" });
+it("blocks extraction when the saved GPU is no longer available and points to settings", async () => {
+  vi.mocked(slideApi.getSlideAcceleration).mockResolvedValue({
+    ...acceleration, ready: false, gpu_detected: false, gpu_prepare_available: false,
+    gpu_name: null, gpu_unavailable_reason: "未检测到可用的 NVIDIA 显卡及驱动，GPU 已禁用。",
+  });
+  vi.mocked(slideApi.getSlideSelection).mockResolvedValue({ backend: "cuda" });
   await mount();
-  expect(container.querySelector<HTMLOptionElement>('option[value="cuda"]')?.disabled).toBe(true);
-  act(() => button("准备 CUDA").click());
   await settle();
-  expect(button("正在准备…").disabled).toBe(true);
-  act(() => button("停止准备").click());
-  await settle();
-  expect(api.cancelJob).toHaveBeenCalledWith("prepare");
-  expect(api.extractVideoSlides).not.toHaveBeenCalled();
+  expect(button("提取 PPT 页面").disabled).toBe(true);
+  expect(container.textContent).toContain("请在设置中准备 GPU 或切换设备");
+  expect(container.querySelector('a[href="/settings?section=slides"]')).not.toBeNull();
 });
 
-it.each([false, true])("recovers preparation status reads with previous data: %s", async (hasPreviousData) => {
-  vi.mocked(slideApi.getSlideAcceleration).mockResolvedValue({ ready: false, gpu_name: null, message: "" });
-  vi.mocked(slideApi.prepareSlideAcceleration).mockResolvedValue({ job_id: "prepare" });
-  if (!hasPreviousData) vi.mocked(api.getJob).mockRejectedValue(new Error("status unavailable"));
+it("blocks extraction until the saved preference is readable", async () => {
+  vi.mocked(slideApi.getSlideSelection).mockRejectedValue(new Error("unavailable"));
   await mount();
-  act(() => button("准备 CUDA").click());
+  expect(button("提取 PPT 页面").disabled).toBe(true);
+  vi.mocked(slideApi.getSlideSelection).mockResolvedValue({ backend: "cpu" });
+  act(() => button("重新读取设备选择").click());
   await settle();
-  await settle();
-  if (hasPreviousData) {
-    vi.mocked(api.getJob).mockRejectedValue(new Error("status unavailable"));
-    await act(async () => { await client.invalidateQueries({ queryKey: ["jobs", "prepare"] }); });
-    await settle();
-  }
-  expect(container.textContent).toContain("无法读取 CUDA 准备进度");
-  expect(button("正在准备…").disabled).toBe(true);
-  expect(button("停止准备").disabled).toBe(false);
-  vi.mocked(api.getJob).mockResolvedValue({ id: "prepare", status: "completed", progress: 1 });
-  act(() => button("重新读取准备进度").click());
-  await settle();
-  expect(container.textContent).not.toContain("无法读取 CUDA 准备进度");
   expect(button("提取 PPT 页面").disabled).toBe(false);
 });

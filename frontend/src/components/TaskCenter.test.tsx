@@ -85,6 +85,8 @@ it("keeps PPT CUDA preparation progress and stopping without an unrelated settin
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain("正在准备 PPT CUDA 环境");
   expect(dialog.textContent).not.toContain("打开处理详情");
+  expect(dialog.textContent).toContain("打开 PPT 设置");
+  expect(taskDestination(job)).toBe("/settings?section=slides");
   const stop = [...dialog.querySelectorAll("button")].find(button => button.textContent?.includes("停止任务"))!;
   await act(async () => stop.click());
   expect(api.cancelJob).toHaveBeenCalledWith("slide-prepare");

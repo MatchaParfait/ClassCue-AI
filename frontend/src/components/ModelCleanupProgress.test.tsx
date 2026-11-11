@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanupSummary, ModelCleanupProgress } from "./ModelCleanupProgress";
+import { cleanupSummary, isCleanupJob, ModelCleanupProgress } from "./ModelCleanupProgress";
 import type { JobStatus } from "../types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,12 +28,21 @@ function mount(value?: JobStatus, connectionError = false) {
   return { element, render };
 }
 
+it("does not claim automatic cleanup completed just because installation succeeded", () => {
+  const value = { ...job(), job_type: "slide_prepare" };
+  expect(isCleanupJob(value)).toBe(true);
+  expect(isCleanupJob({ ...value, status: "completed" })).toBe(false);
+  expect(isCleanupJob({ ...value, status: "completed",
+    cleanup: { ...value.cleanup!, phase: "completed" } })).toBe(true);
+});
+
 it("shows actual file and directory counts, released bytes and numeric ETA", () => {
   const value = job(), { element } = mount(value);
   expect(element.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("40");
   expect(element.textContent).toContain("40 / 100 个文件");
   expect(element.textContent).toContain("4 / 10 个目录");
   expect(element.textContent).toContain("100.0 MB / 250.0 MB");
+  expect(element.textContent).toContain("进度按文件和目录数量计算");
   expect(element.textContent).toContain("torch.dll");
   expect(element.textContent).toContain("还需约 30 秒");
   expect(cleanupSummary(value)).toContain("40/100");
@@ -48,6 +57,13 @@ it("does not invent a percentage while discovering the number of files", () => {
   expect(element.textContent).toContain("已检查 100 个文件");
   expect(element.textContent).toContain("总数量尚在统计");
   expect(element.textContent).not.toContain("还需约");
+});
+
+it("shows identical cleanup scope and target only once", () => {
+  const value = job();
+  value.cleanup!.current_target = value.cleanup!.scope;
+  const { element } = mount(value);
+  expect(element.querySelector(".model-preparation-component")?.textContent).toBe("Dolphin GPU 环境");
 });
 
 it("withdraws stale ETA and explains a blocked system file operation", () => {

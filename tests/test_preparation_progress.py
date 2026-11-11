@@ -9,6 +9,15 @@ import pytest
 import classcue.preparation_progress as telemetry
 
 
+def test_device_probe_reports_verification_instead_of_dependency_installation():
+    events = []
+    with telemetry.preparation_events(events.append):
+        result = telemetry.run_logged([sys.executable, "-c", "pass", "--probe"], timeout=5)
+    assert result.returncode == 0
+    assert events[0]["phase"] == "verifying"
+    assert events[0]["label"] == "验证计算设备与运算"
+
+
 def test_transfer_eta_uses_new_bytes_and_expires_when_stalled(monkeypatch):
     clock = [0.]
     monkeypatch.setattr(telemetry.time, "monotonic", lambda: clock[0])

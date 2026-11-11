@@ -149,6 +149,8 @@ def component_manifest(model_id):
 
 
 def command_label(command):
+    if "--probe" in command:
+        return "验证计算设备与运算"
     if "clone" in command:
         return "下载 Dolphin 官方推理代码"
     if "checkout" in command:
@@ -164,10 +166,12 @@ def command_label(command):
 
 def run_logged(command, *, progress=None, step=None, steps=None, relay=False, **kwargs):
     """Poll in the caller's context; never block the task behind a silent child."""
-    phase = "verifying" if relay else "installing"
+    phase = "verifying" if relay or "--probe" in command else "installing"
     label = "检查权重与模型结构" if relay else command_label(command)
     detail = dict(step=step, steps=steps,
                   phase_progress=(step - 1) / steps if step and steps else None)
+    if "--probe" in command:
+        detail["label"] = label
     stage(phase, label, **detail)
     if relay:
         kwargs["env"] = {**kwargs.get("env", os.environ), "ASR_PREPARATION_EVENTS": "1"}

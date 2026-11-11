@@ -23,6 +23,7 @@ export function useRecentTasks(active = true, poll = true) {
 
 export function taskDestination(job: Job) {
   return job.job_type === "storage_migration" ? "/settings?section=storage"
+    : ["slide_prepare", "slide_cache_cleanup"].includes(job.job_type ?? "") ? "/settings?section=slides"
     : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "/"
     : job.job_type === "material_preprocess" ? MATERIALS_ENABLED ? "/materials" : "/"
     : job.job_type === "batch_video_process" ? "/batch-process"

@@ -1,0 +1,36 @@
+.ppt-default-device, .ppt-resource-actions, .ppt-resource-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ppt-default-device { flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+.slide-settings .settings-section-heading { flex-direction: row; align-items: center; }
+.slide-settings .model-preparation-heading > span { flex-shrink: 0; white-space: nowrap; }
+.ppt-device-selector .firered-device-modes label { min-height: 38px; font-size: 14px; }
+.ppt-resources {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 16px;
+  margin-top: 20px;
+}
+.ppt-resource-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+.ppt-resource-row > :last-child { justify-self: end; }
+.ppt-resource-name { min-width: 0; align-items: flex-start; }
+.ppt-resource-name > svg { flex-shrink: 0; margin-top: 2px; color: var(--ui-muted); }
+.ppt-resource-name .settings-hint { margin: 5px 0 0; overflow-wrap: anywhere; }
+.ppt-resource-size { justify-self: end; white-space: nowrap; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ppt-resource-task { margin-top: 18px; }
+@media (max-width: 680px) {
+  .ppt-resources { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .ppt-resource-row { gap: 12px; }
+  .ppt-resource-name { grid-column: 1 / -1; }
+  .ppt-resource-size { justify-self: start; }
+}

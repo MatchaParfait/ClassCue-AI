@@ -3,7 +3,7 @@
 from collections import deque
 from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import stat
@@ -36,8 +36,11 @@ class CleanupProgress:
                            phase_progress=None, eta_seconds=None)
 
     def report(self, *, force=False, **fields):
-        checkpoint()
         self.detail.update(fields)
+        checkpoint()
+        self.publish(force=force)
+
+    def publish(self, *, force=False):
         now = time.monotonic()
         if not force and now - self.last_report < .2:
             return
@@ -71,6 +74,7 @@ class Inventory:
     files: list
     directories: list
     bytes_total: int = 0
+    file_parents: dict = field(default_factory=dict)
 
 
 def _scan(targets, progress):
@@ -81,8 +85,17 @@ def _scan(targets, progress):
         except FileNotFoundError:
             continue
         _no_link(info)
+        if stat.S_ISREG(info.st_mode):
+            parent = target.parent.lstat()
+            _no_link(parent)
+            inventory.file_parents[target.parent] = _identity(parent)
+            inventory.files.append((target, info.st_size))
+            inventory.bytes_total += info.st_size
+            progress.report(current_target=label, current_path=target.name,
+                            files_scanned=len(inventory.files))
+            continue
         if not stat.S_ISDIR(info.st_mode):
-            raise ValueError("清理目标必须是应用管理的目录")
+            raise ValueError("清理目标必须是应用管理的目录或普通文件")
         pending = [(target, info)]
         while pending:
             directory, info = pending.pop()
@@ -125,7 +138,7 @@ def _remove_file(path):
 
 
 def cleanup_directories(owned_root, targets, *, scope, locks=()):
-    """Validate all targets before mutation, scan once, then consume that inventory.
+    """Validate owned directory/file targets, scan once, then consume that inventory.
 
     targets: (absolute Path, user-facing label). Inference environments and model
     caches use the same implementation while retaining their existing locks.
@@ -146,6 +159,8 @@ def cleanup_directories(owned_root, targets, *, scope, locks=()):
     progress = CleanupProgress(scope)
     progress.report(force=True, phase="checking", message="检查清理范围与运行状态")
     with ExitStack() as stack:
+        # Preserve completed deletions when cancellation or an error interrupts a throttled update.
+        stack.callback(progress.publish, force=True)
         if root.exists():
             for lock in locks:
                 lock = Path(lock).absolute()
@@ -157,10 +172,10 @@ def cleanup_directories(owned_root, targets, *, scope, locks=()):
         # No recursive resolve/stat walk is repeated during size accounting or
         # deletion. Recheck each directory identity before consuming its files.
         checked = set()
-        identities = dict(inventory.directories)
+        identities = {**inventory.file_parents, **dict(inventory.directories)}
         files = sorted(inventory.files, key=lambda item: item[0].name != "ready.json")
         progress.report(force=True, phase="deleting", message="正在删除文件",
-                        files_total=len(files), directories_total=len(identities),
+                        files_total=len(files), directories_total=len(inventory.directories),
                         bytes_total=inventory.bytes_total, current_target="", current_path=None)
 
         def location(path):

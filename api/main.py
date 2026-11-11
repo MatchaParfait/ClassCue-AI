@@ -452,7 +452,17 @@ class SlideExtractionPayload(BaseModel):
     roi: SlideRoiPayload | None = None
     ignore_regions: list[SlideRoiPayload] = Field(default_factory=list, max_length=16)
     force: bool = False
-    backend: Literal["auto", "cpu", "cuda"] = "auto"
+    backend: Literal["auto", "cpu", "cuda"] | None = None
+
+
+class SlideSelectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    backend: Literal["auto", "cpu", "cuda"]
+
+
+class SlideCleanupPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope: Literal["runtime", "downloads", "all"] = "all"
 
 
 class RecallSelectionPayload(BaseModel):
@@ -789,7 +799,7 @@ class JobManager:
 
             def report_cleanup(detail):
                 nonlocal current_stage
-                cleanup_checkpoint()
+                # Cleanup publishes its final deletion counts even after a stop request.
                 current_stage = "cleaning"
                 fraction = detail.get("phase_progress")
                 store.update_job(job_id, cleanup_json=json.dumps(detail, ensure_ascii=False),
@@ -1163,7 +1173,10 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
     update_center = UpdateCenter(DIRECTORY_PROJECT_ROOT)
     recovery_needs_restart = Event()
     from api.cache_cleanup import router as cache_cleanup_router
-    cache_routes, schedule_cache_cleanup = cache_cleanup_router(DIRECTORY_PROJECT_ROOT, provider, jobs, update_center)
+    cache_routes, schedule_cache_cleanup = cache_cleanup_router(
+        DIRECTORY_PROJECT_ROOT, provider, jobs, update_center,
+        on_slide_cleanup=lambda: status_cache.clear_sizes("slides|"),
+    )
 
     def check_storage_before_job(kind):
         if updating.is_set():
@@ -1185,15 +1198,17 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 log_exception(LOGGER, "Path picker reaper failed", exc=exc)
 
     async def maintain_caches():
+        initial = True
         while True:
-            await asyncio.sleep(300)
             try:
-                await asyncio.to_thread(schedule_cache_cleanup)
+                await asyncio.to_thread(schedule_cache_cleanup, installers_only=initial)
             except RuntimeError:
                 # Maintenance waits for a later idle window, never queues ahead of study.
                 pass
             except Exception as exc:
                 log_exception(LOGGER, "Scheduled cache cleanup deferred", exc=exc)
+            initial = False
+            await asyncio.sleep(300)
 
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
@@ -3550,20 +3565,95 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
         }
 
     @api.get("/api/slides/acceleration")
-    def get_slide_acceleration():
+    def get_slide_acceleration(refresh: bool = False):
         from classcue.slide_runtime import acceleration_status
-        return acceleration_status()
+        return acceleration_status(refresh=refresh)
+
+    def slide_resource_key():
+        from classcue.slide_runtime import runtime_directory
+        return f"slides|{runtime_directory()}|"
+
+    @api.get("/api/slides/resources")
+    def get_slide_resources(refresh: bool = False):
+        from classcue.slide_runtime import acceleration_status, cached_wheel, download_resources, resource_size, runtime_directory
+        prefix = slide_resource_key()
+        if refresh:
+            status_cache.clear_sizes(prefix)
+        active = provider.get().list_active_jobs()
+        owned_job = next((row for row in active
+                          if row["job_type"] in {"slide_prepare", "slide_cache_cleanup"}), None)
+        return {
+            **acceleration_status(refresh=refresh),
+            "runtime_size_bytes": status_cache.size(prefix + "runtime-size",
+                                                   lambda: resource_size(runtime_directory())),
+            "download_cache_size_bytes": status_cache.size(prefix + "download-size",
+                                                          lambda: sum(resource_size(path) for path, _ in download_resources())),
+            "shared_download_cache_bytes": resource_size(cached_wheel()),
+            "busy": jobs.is_running(),
+            "active_job_id": owned_job["id"] if owned_job else None,
+            "active_job_kind": owned_job["job_type"] if owned_job else None,
+        }
+
+    @api.get("/api/slides/selection")
+    def get_slide_selection():
+        from classcue.slide_runtime import selected_backend
+        return {"backend": selected_backend(DIRECTORY_PROJECT_ROOT)}
+
+    @api.put("/api/slides/selection")
+    def put_slide_selection(payload: SlideSelectionPayload):
+        from classcue.slide_runtime import select_backend
+        with jobs._lock:
+            if payload.backend == "cuda" and any(
+                row["job_type"] == "slide_cache_cleanup"
+                for row in provider.get().list_active_jobs()
+            ):
+                raise HTTPException(status_code=409, detail="PPT 资源正在清理，请等待完成后再选择 GPU。")
+            try:
+                select_backend(payload.backend, DIRECTORY_PROJECT_ROOT)
+            except (ValueError, RuntimeError, OSError) as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"backend": payload.backend}
 
     @api.post("/api/slides/acceleration/prepare", status_code=202)
     def prepare_slide_acceleration():
-        from classcue.slide_runtime import install_runtime
+        from classcue.slide_runtime import install_runtime, require_gpu_hardware
+        try:
+            require_gpu_hardware()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        def operation(update, _stop):
+            try:
+                message = install_runtime(update)
+                return {"message": message or "PPT GPU 环境已准备"}
+            finally:
+                status_cache.clear_sizes(slide_resource_key())
         try:
             job_id = jobs.submit("slide_prepare", None,
-                                 lambda update, _stop: install_runtime(update),
+                                 operation,
                                  request={"kind": "slide_prepare"})
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return {"job_id": job_id, "status": "queued", "job_type": "slide_prepare"}
+
+    @api.post("/api/slides/cache/cleanup", status_code=202)
+    def cleanup_slide_resources(payload: SlideCleanupPayload):
+        from classcue.slide_runtime import clear_resources, selected_backend
+
+        def operation(_update, _stop):
+            try:
+                released = clear_resources(payload.scope, DIRECTORY_PROJECT_ROOT)
+                return {"released_bytes": released, "message": "PPT 资源清理完成"}
+            finally:
+                status_cache.clear_sizes(slide_resource_key())
+        try:
+            with jobs._lock:
+                if payload.scope != "downloads" and selected_backend(DIRECTORY_PROJECT_ROOT) == "cuda":
+                    raise HTTPException(status_code=400, detail="请先将 PPT 默认设备切换到 CPU 或自动，再清理 GPU 环境。")
+                job_id = jobs.submit("slide_cache_cleanup", None, operation,
+                                     request={"kind": "slide_cache_cleanup", "scope": payload.scope})
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"job_id": job_id, "job_type": "slide_cache_cleanup"}
 
     @api.post("/api/videos/{video_id}/slides/extract", status_code=202)
     def extract_video_slides(
@@ -3575,7 +3665,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             video = _video_or_404(store, video_id)
             if video["status"] == "processing":
                 raise HTTPException(status_code=409, detail="该视频正在处理中")
-            options = payload or SlideExtractionPayload()
+            options = resolved_slide_options(payload)
             try:
                 job_id = jobs.submit(
                     "slide_extract",
@@ -3591,19 +3681,34 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             return {"job_id": job_id, "video_id": video_id, "status": "queued", "job_type": "slide_extract"}
 
-    def slide_operation(video_id, options=None):
+    def resolved_slide_options(options=None):
+        from classcue.slide_runtime import require_cuda, selected_backend
         options = options or SlideExtractionPayload()
+        if options.backend is None:
+            options = options.model_copy(update={"backend": selected_backend(DIRECTORY_PROJECT_ROOT)})
+        if options.backend == "cuda":
+            try:
+                require_cuda()
+            except RuntimeError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+        return options
+
+    def slide_operation(video_id, options=None):
+        options = resolved_slide_options(options)
         store = provider.get()
         slide_root = asr_storage.slide_directory(DIRECTORY_PROJECT_ROOT, provider.data_root())
 
         def operation(update, should_cancel):
-            result = extract_and_store_slides(
-                store, video_id, slide_root,
-                roi=options.roi.to_roi() if options.roi is not None else None,
-                ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
-                force=options.force, progress=update, should_stop=should_cancel,
-                backend=options.backend,
-            )
+            try:
+                result = extract_and_store_slides(
+                    store, video_id, slide_root,
+                    roi=options.roi.to_roi() if options.roi is not None else None,
+                    ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
+                    force=options.force, progress=update, should_stop=should_cancel,
+                    backend=options.backend,
+                )
+            finally:
+                status_cache.clear_sizes(slide_resource_key())
             from classcue.question_visuals import assign_after_extraction
             assign_after_extraction(store, video_id, slide_root=slide_root, should_cancel=should_cancel)
             return result

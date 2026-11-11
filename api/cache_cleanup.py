@@ -24,7 +24,7 @@ class CleanRequest(BaseModel):
         default_factory=lambda: list(AUTOMATIC), min_length=1, max_length=7)
 
 
-def router(project, provider, jobs, update_center=None):
+def router(project, provider, jobs, update_center=None, *, on_slide_cleanup=None):
     routes = APIRouter(prefix="/api/cache")
 
     def manager():
@@ -40,10 +40,32 @@ def router(project, provider, jobs, update_center=None):
 
             return jobs.submit("cache_cleanup", None, operation, request={"categories": categories, "mode": mode})
 
-    def schedule():
-        current = manager()
-        if current.due():
-            start(current.state()["preferences"]["categories"], automatic=True)
+    def schedule(*, installers_only=False):
+        from classcue import slide_runtime
+
+        with jobs._lock:
+            if jobs.is_running() or provider.get().list_paused_jobs():
+                return
+        if not installers_only:
+            current = manager()
+            if current.due():
+                return start(current.state()["preferences"]["categories"], automatic=True)
+        if slide_runtime.installer_cleanup_pending() and slide_runtime.acceleration_status()["ready"]:
+            with jobs._lock:
+                if jobs.is_running() or provider.get().list_paused_jobs():
+                    return
+
+                def operation(_update, _stop):
+                    try:
+                        released = slide_runtime.clear_installer_downloads()
+                        return {"released_bytes": released,
+                                "message": "PPT 安装包已自动清理" if released else "PPT 安装包检查完成，无需清理"}
+                    finally:
+                        if on_slide_cleanup:
+                            on_slide_cleanup()
+
+                return jobs.submit("slide_cache_cleanup", None, operation,
+                                   request={"kind": "slide_cache_cleanup", "scope": "installers", "automatic": True})
 
     @routes.get("")
     def status():

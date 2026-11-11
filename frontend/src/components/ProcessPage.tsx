@@ -519,6 +519,7 @@ export function ProcessPage({ embedded = false, active = true, onClose, onJob, o
 
           {registeredVideo && !showSpace && <ProcessVideoPreview key={`preview:${registeredVideo.id}`} video={registeredVideo} active={active} />}
           {registeredVideo && !showSpace && <SlideExtractionControls
+            showSettingsLink={!guided}
             key={`slides:${registeredVideo.id}`}
             video={registeredVideo}
             active={active}

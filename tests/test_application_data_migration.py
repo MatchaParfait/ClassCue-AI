@@ -79,6 +79,16 @@ def test_offline_backup_moves_all_small_data_and_keeps_identity_and_large_paths(
     assert migration.read_journal(f.project)["status"] == "completed"
 
 
+def test_slide_device_preference_moves_with_application_settings(library):
+    f = library
+    preference = f.data / "slide_settings.json"
+    preference.write_text('{"backend":"cpu"}', encoding="utf-8")
+    plan, _record = stage(f)
+    assert str(preference) in [item["source"] for item in plan["files"]]
+    migration.apply_pending(f.project, Path(f.store.path))
+    assert (f.destination / "config/slide_settings.json").read_bytes() == preference.read_bytes()
+
+
 def test_removed_key_disabled_marker_migrates_with_ai_keys(library):
     f = library
     marker = f.data / "ai_keys" / "removed-profile.disabled"

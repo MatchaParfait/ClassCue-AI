@@ -3,7 +3,9 @@ import type { Job, JobStatus } from "../types";
 import { remainingTime } from "./ModelPreparationProgress";
 
 export function isCleanupJob(job?: Job) {
-  return Boolean(job && ["asr_delete", "asr_runtime_delete", "asr_download_cleanup", "cache_cleanup"].includes(job.job_type ?? ""));
+  return Boolean(job && (["asr_delete", "asr_runtime_delete", "asr_download_cleanup", "cache_cleanup", "slide_cache_cleanup"].includes(job.job_type ?? "")
+    || (job.job_type === "slide_prepare" && job.cleanup
+      && (job.status !== "completed" || job.cleanup.phase === "completed"))));
 }
 
 export function cleanupSummary(job: JobStatus) {
@@ -55,10 +57,11 @@ export function ModelCleanupProgress({ job, connectionError = false, label = "�
       <span style={{ width: percent == null ? running ? undefined : "0%" : `${percent}%` }} />
     </div>
     {detail?.scope && <p className="model-preparation-component">{detail.scope}
-      {detail.current_target ? ` · ${detail.current_target}` : ""}</p>}
+      {detail.current_target && detail.current_target !== detail.scope ? ` · ${detail.current_target}` : ""}</p>}
     <p className="model-preparation-file" title={detail?.current_path ?? undefined}>
       {detail?.current_path ?? detail?.message ?? job?.message ?? "正在等待清理任务启动…"}</p>
     {detail?.files_total != null ? <>
+      <p className="settings-hint">进度按文件和目录数量计算。</p>
       <p>已删除 {detail.files_deleted.toLocaleString()} / {detail.files_total.toLocaleString()} 个文件
         {" · "}{detail.directories_deleted.toLocaleString()} / {detail.directories_total?.toLocaleString() ?? "0"} 个目录</p>
       <p>已释放 {bytes(detail.bytes_deleted)}{detail.bytes_total != null ? ` / ${bytes(detail.bytes_total)}` : ""}</p>

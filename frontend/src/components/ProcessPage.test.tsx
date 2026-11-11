@@ -24,7 +24,10 @@ vi.mock("../api/client", () => ({
   getAsrModelStatus: vi.fn(),
 }));
 vi.mock("../api/slides", () => ({
-  getSlideAcceleration: async () => ({ ready: false, gpu_name: null, message: "" }),
+  getSlideAcceleration: async () => ({ ready: false, gpu_name: null, message: "",
+    runtime_ready: false, gpu_detected: false, gpu_prepare_available: false, gpu_unavailable_reason: "" }),
+  getSlideSelection: async () => ({ backend: "auto" }),
+  saveSlideSelection: vi.fn(),
   prepareSlideAcceleration: vi.fn(),
 }));
 

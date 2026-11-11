@@ -42,6 +42,7 @@ export function taskLabel(status: string) {
 export function taskTypeLabel(job: Job) {
   if (job.job_type === "slide_extract") return "PPT 提取";
   if (job.job_type === "slide_prepare") return "PPT CUDA 准备";
+  if (job.job_type === "slide_cache_cleanup") return "PPT 资源清理";
   if (job.job_type === "video_analysis") return job.analysis_modes?.length === 1
     && job.analysis_modes[0] === "question_extraction" ? "题目提取" : "考点提取";
   return ({

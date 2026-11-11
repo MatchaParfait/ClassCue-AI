@@ -4,11 +4,13 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import * as api from "../api/client";
+import * as slideApi from "../api/slides";
 import { SettingsPage, type GuidedSettingsSection } from "./SettingsPage";
 import { ONBOARDING_RESET_EVENT } from "../components/OnboardingGuide";
 import type { AiSettings, AsrModel } from "../types";
 
 vi.mock("../api/client");
+vi.mock("../api/slides");
 
 const catalogue: AsrModel[] = [
   { id: "whisper-turbo", name: "Whisper turbo", engine: "whisper", selected: true,
@@ -90,6 +92,26 @@ it("exposes the onboarding entry in the settings sidebar rather than the hidden 
   }
 });
 
+it("opens PPT device, installation and cache management as a separate settings category", async () => {
+  vi.resetAllMocks();
+  vi.mocked(slideApi.getSlideResources).mockResolvedValue({
+    ready: false, runtime_ready: false, gpu_detected: false, gpu_prepare_available: false,
+    gpu_name: null, gpu_unavailable_reason: "未检测到 GPU", message: "",
+    runtime_size_bytes: 0, download_cache_size_bytes: 0, busy: false,
+    active_job_id: null, active_job_kind: null,
+  });
+  vi.mocked(slideApi.getSlideSelection).mockResolvedValue({ backend: "cpu" });
+  const page = mountSettings("/settings?section=slides");
+  try {
+    await waitFor(() => expect(slideApi.getSlideResources).toHaveBeenCalled());
+    const section = page.container.querySelector('section[aria-label="PPT 提取设置"]')!;
+    expect(section.closest("[hidden]")).toBeNull();
+    expect(section.querySelector('[aria-label="PPT 默认处理设备"]')).not.toBeNull();
+    expect(section.textContent).toContain("PPT 下载与计算缓存");
+    expect(page.container.querySelector('[data-onboarding-section="slides"]')?.getAttribute("aria-current")).toBe("page");
+    expect(api.getAsrModels).not.toHaveBeenCalled();
+  } finally { await page.dispose(); }
+});
 it("places the remembered secondary alignment switch under storage and import settings", async () => {
   vi.resetAllMocks();
   const page = mountSettings("/settings?section=storage");
@@ -257,7 +279,7 @@ it("does not inspect ASR models or AI services in the default storage category",
   const page = mountSettings();
   try {
     await waitFor(() => expect(api.getStorageDirectories).toHaveBeenCalled());
-    expect(page.container.querySelectorAll(".settings-navigation button:not(.settings-onboarding-trigger)")).toHaveLength(8);
+    expect(page.container.querySelectorAll(".settings-navigation button:not(.settings-onboarding-trigger)")).toHaveLength(9);
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("快捷键");
     expect(page.container.querySelector(".settings-navigation")?.textContent).toContain("桌面设置");
     expect(page.container.querySelector(".settings-navigation")?.textContent).not.toContain("工作区");
@@ -628,7 +650,7 @@ it("requires explicit GPU migration for saved FireRed CPU without model preparat
     ));
     await settle(() => expect(container.querySelector<HTMLInputElement>('input[value="gpu"]')).not.toBeNull());
     expect(saveButton().disabled).toBe(true);
-    expect(container.querySelector('input[value="cpu"]')).toBeNull();
+    expect(container.querySelector('[data-model-id="fireredasr2-aed"] input[value="cpu"]')).toBeNull();
     expect(container.querySelector<HTMLInputElement>('input[value="gpu"]')!.checked).toBe(false);
     expect(container.textContent).toContain("CPU 处理已禁用");
     expect(api.selectAsrModel).not.toHaveBeenCalled();
