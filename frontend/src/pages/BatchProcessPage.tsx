@@ -147,7 +147,8 @@ export function BatchProcessPage({ embedded = false, active = true, onClose, onJ
     refetchOnWindowFocus: true,
   });
   const previewCurrent = JSON.stringify(validFolders) === JSON.stringify(checkedFolders);
-  const canImport = validFolders.length > 0 && previewCurrent && preview.isSuccess && !preview.isFetching && preview.data.valid;
+  const canImport = pickerIndex === null && validFolders.length > 0 && previewCurrent
+    && preview.isSuccess && !preview.isFetching && preview.data.valid;
 
   const chooseFolder = async (index: number) => {
     setPickerIndex(index);
@@ -205,7 +206,6 @@ export function BatchProcessPage({ embedded = false, active = true, onClose, onJ
         <section className="process-section process-video-section">
           <div className="section-heading compact">
             <div><p className="eyebrow">步骤 1</p><h2><CharacterEye heading />选择视频文件夹</h2></div>
-            <FolderOpen size={20} />
           </div>
           <div className="batch-folder-list">
             {folders.map((folder, index) => (
@@ -213,19 +213,21 @@ export function BatchProcessPage({ embedded = false, active = true, onClose, onJ
                 <input
                   aria-label={`视频文件夹 ${index + 1}`}
                   value={folder}
-                  disabled={isBusy}
+                  disabled={isBusy || pickerIndex !== null}
                   onChange={(event) => setFolders((current) => current.map((value, currentIndex) => currentIndex === index ? event.target.value : value))}
-                  placeholder="例如：D:\\课程\\第一章"
+                  placeholder="例如：D:\课程\第一章"
                 />
                 <button className="secondary-button" type="button" disabled={isBusy || pickerIndex !== null} onClick={() => void chooseFolder(index)}>
                   {pickerIndex === index ? <LoaderCircle className="spin" size={15} /> : <FolderOpen size={15} />} 选择文件夹
                 </button>
-                {folders.length > 1 && <button className="icon-button" type="button" disabled={isBusy} aria-label="移除文件夹" onClick={() => setFolders((current) => current.filter((_value, currentIndex) => currentIndex !== index))}><X size={16} /></button>}
+                {folders.length > 1 && <button className="icon-button" type="button" disabled={isBusy || pickerIndex !== null}
+                  aria-label={`移除文件夹 ${index + 1}`} title={`移除文件夹 ${index + 1}`}
+                  onClick={() => setFolders((current) => current.filter((_value, currentIndex) => currentIndex !== index))}><X size={16} /></button>}
               </div>
             ))}
           </div>
-          <button className="secondary-button compact" type="button" disabled={isBusy} onClick={() => setFolders((current) => [...current, ""])}><Plus size={15} /> 添加另一个文件夹</button>
-          <p className="field-hint">支持包含子文件夹的目录，导入后会在视频库保留相同层级（含空子文件夹）。任意层包含非视频文件都会拦截本次导入。是否保留原文件取决于设置中的“导入后删除原文件”；重复视频保留来源副本。</p>
+          {Boolean(folders[0]?.trim()) && <button className="secondary-button compact" type="button" disabled={isBusy || pickerIndex !== null} onClick={() => setFolders((current) => [...current, ""])}><Plus size={15} /> 添加另一个文件夹</button>}
+          <p className="field-hint">文件夹中请勿包含其他非视频文件。</p>
           {validFolders.length > 0 && (!previewCurrent || preview.isFetching) && <p className="field-hint" role="status"><LoaderCircle className="spin" size={14} /> 正在检查文件夹…</p>}
           {previewCurrent && preview.isError && <p className="field-error" role="alert"><AlertCircle size={14} />{preview.error.message}<button className="icon-button" type="button" title="重新检查文件夹" aria-label="重新检查文件夹" onClick={() => void preview.refetch()}><RotateCcw size={14} /></button></p>}
           {previewCurrent && preview.data && validFolders.length > 0 && <div className="batch-directory-checks">

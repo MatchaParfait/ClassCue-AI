@@ -87,6 +87,11 @@
 .review-sidebar .marker-item.is-question-emphasized { background: var(--ui-warning-soft); border-color: color-mix(in srgb, var(--ui-amber) 45%, var(--ui-border)); }
 .review-sidebar .marker-item.is-question-emphasized:hover { background: color-mix(in srgb, var(--ui-amber) 8%, var(--ui-warning-soft)); }
 .review-sidebar .marker-item.is-question-emphasized.is-selected { background: var(--ui-warning-soft); border-color: var(--ui-accent-strong); }
+.review-sidebar .marker-item.is-manual-question { border-style: dashed; }
+.question-origin-row { display: flex; padding: 0 2px 6px; }
+.question-origin { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--ui-border); border-radius: 5px; color: var(--ui-muted); background: var(--ui-surface-soft); font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap; }
+.question-origin svg { flex-shrink: 0; }
+.question-origin.is-manual { border-color: color-mix(in srgb, var(--ui-accent-strong) 35%, var(--ui-border)); color: var(--ui-accent-strong); background: var(--ui-accent-soft); }
 .question-emphasis-control { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; min-width: 28px; }
 .question-emphasis-toggle.icon-button { width: 28px; min-height: 28px; padding: 5px; color: var(--ui-muted); border-color: transparent; background: transparent; }
 .question-emphasis-toggle[aria-pressed="true"] { color: var(--ui-amber); }

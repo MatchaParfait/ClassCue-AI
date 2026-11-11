@@ -1,6 +1,6 @@
 import { useShortcuts, shortcutTitle, shortcutAria } from "../shortcuts";
 import { AnimatePresence, AnimatedListItem, AnimatedQuote, Collapse, FadeRegion, SelectionIndicator, useEntryMotion, useSelectionScope } from "./Motion";
-import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Redo2, Save, Search, Star, Trash2, Undo2, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, Circle, LoaderCircle, Pencil, Plus, Redo2, Save, Search, Sparkles, Star, Trash2, Undo2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AnalysisRun, Marker, MarkerImportance, MarkerMode, RecallMode, ReviewFilter, ReviewStatus } from "../types";
 import { recallLabel, useRecallSchemes } from "../hooks/useRecallSchemes";
@@ -280,7 +280,7 @@ export function ReviewSidebar({
             <span>切换筛选条件，或返回复习其他模式。</span>
           </div>
         ) : markers.map((marker) => (
-          <AnimatedListItem data-marker-id={marker.id} className={`marker-item${selectedMarkerId === marker.id ? " is-selected" : ""}${viewedMarkerIds.has(marker.id) ? " is-viewed" : ""}${marker.analysis_mode === "question_extraction" && marker.question_emphasized ? " is-question-emphasized" : ""}${createdMarkerId === marker.id ? " is-new-question" : ""}`} key={marker.id}
+          <AnimatedListItem data-marker-id={marker.id} className={`marker-item${isManualQuestion(marker) ? " is-manual-question" : ""}${selectedMarkerId === marker.id ? " is-selected" : ""}${viewedMarkerIds.has(marker.id) ? " is-viewed" : ""}${marker.analysis_mode === "question_extraction" && marker.question_emphasized ? " is-question-emphasized" : ""}${createdMarkerId === marker.id ? " is-new-question" : ""}`} key={marker.id}
             onClick={(event) => {
               if (!(event.target instanceof Element)
                 || event.target.closest("button, a, input, label, select, textarea, summary, [role='button'], .marker-time-editor, .marker-importance-control, .manual-question-title-editor")
@@ -300,6 +300,13 @@ export function ReviewSidebar({
               {marker.analysis_mode === "question_extraction" && onChangeQuestionEmphasis
                 && <QuestionEmphasisControl marker={marker} onChange={onChangeQuestionEmphasis} />}
             </div>
+            {marker.analysis_mode === "question_extraction" && <div className="question-origin-row">
+              <span className={`question-origin ${isManualQuestion(marker) ? "is-manual" : "is-ai"}`}
+                title={isManualQuestion(marker) ? "由你手动添加的题目定位" : "根据教师字幕自动识别的题目"}>
+                {isManualQuestion(marker) ? <Pencil size={12} aria-hidden="true" /> : <Sparkles size={12} aria-hidden="true" />}
+                {isManualQuestion(marker) ? "手动添加" : "AI 识别"}
+              </span>
+            </div>}
             {editingTitleId === marker.id && onRenameQuestion ? <ManualQuestionTitleEditor marker={marker}
               onSave={title => onRenameQuestion(marker, title)} onClose={() => closeTitleEditor(marker.id)} /> :
             <button className="marker-main" type="button" title={isManualQuestion(marker) && onRenameQuestion ? "修改题目名称" : `跳转到 ${formatTime(markerJumpTime(marker))}`}

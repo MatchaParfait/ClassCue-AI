@@ -67,19 +67,18 @@
 .study-bookmark-editor textarea:focus { border-color: var(--ui-accent-strong); }
 .study-bookmark-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .study-bookmark-character-count { margin-right: auto; color: var(--ui-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.study-bookmark-list { list-style: none; padding: 0; margin: 0; }
-.study-bookmark-list li { display: flex; align-items: flex-start; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--ui-border); }
-.study-bookmark-list li:last-child { border-bottom: 0; }
-.study-bookmark-open { position: relative; isolation: isolate; display: grid; flex: 1; min-width: 0; gap: 12px; padding: 0; text-align: left; color: var(--ui-text); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-.study-bookmark-open::before {
-  content: ""; position: absolute; z-index: -1; inset: -10px; pointer-events: none;
-  border: 1px solid transparent; border-radius: 6px; background: transparent;
+.study-bookmark-list { display: grid; gap: 12px; list-style: none; padding: 16px 0; margin: 0; }
+.study-bookmark-list li {
+  display: flex; align-items: flex-start; gap: 16px; min-width: 0; padding: 16px;
+  border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface);
   transition: background-color 180ms var(--ui-ease), border-color 180ms var(--ui-ease);
 }
-.study-bookmark-open:focus-visible { outline-offset: 10px; }
-.study-bookmark-open:focus-visible::before {
-  background: color-mix(in srgb, var(--ui-accent-soft) 64%, transparent);
-  border-color: color-mix(in srgb, var(--ui-accent-strong) 18%, transparent);
+.study-bookmark-open { display: grid; flex: 1; min-width: 0; gap: 12px; padding: 0; text-align: left; color: var(--ui-text); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.study-bookmark-open:focus-visible { outline: none; }
+.study-bookmark-list li:has(.study-bookmark-open:focus-visible) {
+  outline: 2px solid var(--ui-accent-strong); outline-offset: 2px;
+  background: color-mix(in srgb, var(--ui-accent-soft) 64%, var(--ui-surface));
+  border-color: var(--ui-accent-strong);
 }
 .study-bookmark-open:focus-visible .study-bookmark-time { background: var(--ui-accent-soft); }
 .study-bookmark-open:focus-visible .study-bookmark-action { opacity: 1; transform: translateX(0); }
@@ -99,9 +98,9 @@
 .study-bookmark-action { opacity: 0; transform: translateX(-4px); font-size: 11px; font-weight: 400; transition: opacity 180ms var(--ui-ease), transform 180ms var(--ui-ease); }
 .study-bookmark-jump-arrow { opacity: .45; transition: opacity 180ms var(--ui-ease), transform 180ms var(--ui-ease); }
 @media (hover: hover) and (pointer: fine) {
-  .study-bookmark-open:hover:not(:disabled)::before {
-    background: color-mix(in srgb, var(--ui-accent-soft) 64%, transparent);
-    border-color: color-mix(in srgb, var(--ui-accent-strong) 18%, transparent);
+  .study-bookmark-list li:has(.study-bookmark-open:hover:not(:disabled)) {
+    background: color-mix(in srgb, var(--ui-accent-soft) 64%, var(--ui-surface));
+    border-color: var(--ui-accent-strong);
   }
   .study-bookmark-open:hover:not(:disabled) .study-bookmark-time { background: var(--ui-accent-soft); }
   .study-bookmark-open:hover:not(:disabled) .study-bookmark-action { opacity: 1; transform: translateX(0); }
@@ -127,7 +126,7 @@
   .study-bookmarks-heading-copy { flex-basis: calc(100% - 114px); }
   .study-bookmarks-total { order: 1; margin-left: 50px; }
   .study-bookmarks-content { padding-inline: 16px; }
-  .study-bookmark-list li { gap: 10px; padding-block: 18px; }
+  .study-bookmark-list li { gap: 10px; padding: 12px; }
   .study-bookmark-tools { flex-direction: column; }
   .study-bookmark-tools .icon-button { min-width: 44px; min-height: 44px; margin-top: 0; }
   .study-bookmark-tools .icon-button + .icon-button { margin-top: 4px; }
@@ -137,7 +136,7 @@
   .study-progress-error { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .study-resume, .study-bookmark-count, .study-bookmark-time, .study-bookmark-open::before,
+  .study-resume, .study-bookmark-count, .study-bookmark-time, .study-bookmark-list li,
   .study-bookmark-action, .study-bookmark-jump-arrow { transition: none; }
   .study-bookmark-open .study-bookmark-action, .study-bookmark-open .study-bookmark-jump-arrow { transform: none; }
   .study-bookmark-open:is(:hover, :focus-visible, :active):not(:disabled) :is(.study-bookmark-action, .study-bookmark-jump-arrow) { transform: none; }

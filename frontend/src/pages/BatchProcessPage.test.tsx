@@ -201,9 +201,9 @@ async function mountBatch() {
   await pause(30);
   return {
     container,
-    change(value: string) {
+    change(value: string, index = 0) {
       act(() => {
-        const input = container.querySelector<HTMLInputElement>(".batch-folder-row input")!;
+        const input = container.querySelectorAll<HTMLInputElement>(".batch-folder-row input")[index];
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
         input.dispatchEvent(new Event("input", { bubbles: true }));
       });
@@ -222,6 +222,98 @@ async function pause(ms: number) {
 }
 
 describe("directory checks and persistent retries", () => {
+  it("shows the add-folder action only after the first path is filled", async () => {
+    const view = await mountBatch();
+    try {
+      const addFolder = () => [...view.container.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes("添加另一个文件夹"));
+      expect(addFolder()).toBeUndefined();
+      view.change("   ");
+      expect(addFolder()).toBeUndefined();
+      view.change("D:\\course");
+      expect(addFolder()).toBeTruthy();
+      act(() => addFolder()!.click());
+      expect(view.container.querySelectorAll(".batch-folder-row")).toHaveLength(2);
+      expect(view.container.querySelectorAll<HTMLInputElement>(".batch-folder-row input")[0].value).toBe("D:\\course");
+      view.change("");
+      expect(addFolder()).toBeUndefined();
+      expect(view.container.querySelectorAll(".batch-folder-row")).toHaveLength(2);
+    } finally { await view.dispose(); }
+  });
+
+  it("reveals the add-folder action after picking a folder and keeps it hidden on cancellation", async () => {
+    vi.mocked(api.openPicker).mockResolvedValue({ picker_id: "folder-picker" });
+    vi.mocked(api.pollPicker).mockResolvedValueOnce(null).mockResolvedValueOnce("D:\\course");
+    const view = await mountBatch();
+    try {
+      const choose = view.container.querySelector<HTMLButtonElement>(".batch-folder-row button")!;
+      act(() => choose.click());
+      await pause(40);
+      expect(view.container.textContent).not.toContain("添加另一个文件夹");
+      act(() => choose.click());
+      await pause(40);
+      expect(view.container.querySelector<HTMLInputElement>(".batch-folder-row input")!.value).toBe("D:\\course");
+      expect(view.container.textContent).toContain("添加另一个文件夹");
+    } finally { await view.dispose(); }
+  });
+
+  it("locks folder rows and imports while a picker is pending, then fills the original row", async () => {
+    let finish!: (path: string) => void;
+    vi.mocked(api.openPicker).mockResolvedValue({ picker_id: "folder-picker" });
+    vi.mocked(api.pollPicker).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const view = await mountBatch();
+    try {
+      const add = () => [...view.container.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent?.includes("添加另一个文件夹"))!;
+      view.change("D:\\first");
+      act(() => add().click());
+      view.change("D:\\second", 1);
+      act(() => add().click());
+      view.change("D:\\third", 2);
+      await pause(450);
+      const importButtons = () => view.container.querySelectorAll<HTMLButtonElement>(".batch-import-actions button");
+      expect(importButtons()[0].disabled).toBe(false);
+      const rows = () => view.container.querySelectorAll<HTMLElement>(".batch-folder-row");
+      act(() => rows()[1].querySelector<HTMLButtonElement>("button")!.click());
+      await vi.waitFor(() => expect(api.pollPicker).toHaveBeenCalledOnce());
+      expect([...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>(".batch-folder-row input, .batch-folder-row button")]
+        .every(control => control.disabled)).toBe(true);
+      expect(add().disabled).toBe(true);
+      expect([...importButtons()].every(button => button.disabled)).toBe(true);
+      act(() => view.container.querySelector<HTMLButtonElement>('[aria-label="移除文件夹 1"]')!.click());
+      expect(rows()).toHaveLength(3);
+      expect(api.processBatch).not.toHaveBeenCalled();
+      await act(async () => finish("D:\\chosen"));
+      expect([...view.container.querySelectorAll<HTMLInputElement>(".batch-folder-row input")]
+        .map(input => input.value)).toEqual(["D:\\first", "D:\\chosen", "D:\\third"]);
+      expect(add().disabled).toBe(false);
+      expect([...view.container.querySelectorAll<HTMLInputElement>(".batch-folder-row input")]
+        .every(input => !input.disabled)).toBe(true);
+    } finally { await view.dispose(); }
+  });
+
+  it.each(["cancelled", "failed"])("unlocks existing paths when the picker is %s", async outcome => {
+    let finish!: (path: string | null) => void, fail!: (error: Error) => void;
+    vi.mocked(api.openPicker).mockResolvedValue({ picker_id: "folder-picker" });
+    vi.mocked(api.pollPicker).mockImplementation(() => new Promise((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    }));
+    const view = await mountBatch();
+    try {
+      view.change("D:\\keep");
+      act(() => view.container.querySelector<HTMLButtonElement>(".batch-folder-row button")!.click());
+      await vi.waitFor(() => expect(api.pollPicker).toHaveBeenCalledOnce());
+      expect(view.container.querySelector<HTMLInputElement>(".batch-folder-row input")!.disabled).toBe(true);
+      await act(async () => outcome === "cancelled" ? finish(null) : fail(new Error("选择器连接失败")));
+      const input = view.container.querySelector<HTMLInputElement>(".batch-folder-row input")!;
+      expect(input.value).toBe("D:\\keep");
+      expect(input.disabled).toBe(false);
+      if (outcome === "failed") expect(view.container.textContent).toContain("选择器连接失败");
+      expect(api.processBatch).not.toHaveBeenCalled();
+    } finally { await view.dispose(); }
+  });
+
   it("allows clearing recall choices and validates on submission before importing folders", async () => {
     vi.mocked(api.processBatch).mockResolvedValue({ job_id: "batch", status: "queued", video_ids: [1], errors: [] });
     vi.mocked(api.getJob).mockResolvedValue({ id: "batch", status: "queued" });
@@ -330,7 +422,7 @@ describe("directory checks and persistent retries", () => {
     } finally { await view.dispose(); }
   });
 
-  it("allows nested video directories and explains that the library keeps their hierarchy", async () => {
+  it("allows nested video directories with a concise video-only hint", async () => {
     vi.mocked(api.previewBatch).mockResolvedValue({
       valid: true, folders: [{
         path: "D:\\nested", valid: true, video_count: 3, non_video_count: 0,
@@ -342,7 +434,8 @@ describe("directory checks and persistent retries", () => {
       view.change("D:\\nested");
       await pause(450);
       expect(view.container.textContent).toContain("2 个子文件夹");
-      expect(view.container.textContent).toContain("保留相同层级");
+      expect(view.container.querySelector(".process-video-section .field-hint")?.textContent)
+        .toBe("文件夹中请勿包含其他非视频文件。");
       expect(view.container.querySelector<HTMLButtonElement>(".process-actions button")!.disabled).toBe(false);
     } finally { await view.dispose(); }
   });

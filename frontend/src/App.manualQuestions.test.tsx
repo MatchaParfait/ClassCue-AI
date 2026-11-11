@@ -121,6 +121,10 @@ it("W creates an independent point without selecting another item or interruptin
   expect([...container.querySelectorAll<HTMLElement>(".marker-item")].map(item => item.dataset.markerId)).toEqual(["1", "4", "2"]);
   expect(row(4).classList.contains("is-new-question")).toBe(true);
   expect(row(4).classList.contains("is-selected")).toBe(true);
+  expect(row(4).classList.contains("is-manual-question")).toBe(true);
+  expect(row(4).querySelector(".question-origin")?.textContent).toBe("手动添加");
+  expect(row(1).classList.contains("is-manual-question")).toBe(false);
+  expect(row(1).querySelector(".question-origin")?.textContent).toBe("AI 识别");
   expect(container.querySelectorAll(".marker-item.is-viewed")).toHaveLength(0);
   expect(container.querySelector("video")!.currentTime).toBe(150.425);
   expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
@@ -166,6 +170,7 @@ it("renames inline and suppresses W while typing without jumping", async () => {
   key("w");
   await until(() => expect(row(4)).not.toBeNull());
   act(() => row(4).querySelector<HTMLButtonElement>(".marker-main")!.click());
+  expect(row(4).querySelector(".question-origin")?.textContent).toBe("手动添加");
   const input = row(4).querySelector<HTMLInputElement>('input[aria-label="题目名称"]')!;
   key("w", {}, input);
   expect(api.createManualQuestion).toHaveBeenCalledTimes(1);
@@ -177,6 +182,8 @@ it("renames inline and suppresses W while typing without jumping", async () => {
   await act(async () => row(4).querySelector<HTMLButtonElement>('button[type=submit]')!.click());
   await until(() => expect(row(4).querySelector(".marker-main strong")?.textContent).toBe("Added example"));
   expect(api.renameManualQuestion).toHaveBeenCalledWith(4, "Added example");
+  expect(row(4).querySelector(".question-origin")?.textContent).toBe("手动添加");
+  expect(row(4).classList.contains("is-manual-question")).toBe(true);
   expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
 });
 
@@ -247,6 +254,8 @@ it("supports emphasis, removal, undo and timestamp jumps for a newly created poi
   await act(async () => container.querySelector<HTMLButtonElement>(".undo-banner button")!.click());
   await until(() => expect(row(4)).not.toBeNull());
   expect(row(4).classList.contains("is-question-emphasized")).toBe(true);
+  expect(row(4).querySelector(".question-origin")?.textContent).toBe("手动添加");
+  expect(row(4).classList.contains("is-manual-question")).toBe(true);
   container.querySelector("video")!.currentTime = 20;
   act(() => row(4).querySelector<HTMLButtonElement>(".marker-time-jump")!.click());
   expect(container.querySelector("video")!.currentTime).toBe(150.425);
