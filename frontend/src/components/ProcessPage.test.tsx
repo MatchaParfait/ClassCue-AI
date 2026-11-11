@@ -23,6 +23,10 @@ vi.mock("../api/client", () => ({
   getAsrSelection: vi.fn(),
   getAsrModelStatus: vi.fn(),
 }));
+vi.mock("../api/slides", () => ({
+  getSlideAcceleration: async () => ({ ready: false, gpu_name: null, message: "" }),
+  prepareSlideAcceleration: vi.fn(),
+}));
 
 const video = {
   id: 1, display_name: "Lesson", filename: "lesson.mp4", duration_ms: 10000,

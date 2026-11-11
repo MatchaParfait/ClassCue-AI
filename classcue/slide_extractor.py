@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import OrderedDict
 from fractions import Fraction
+from functools import lru_cache
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Callable
 
 import cv2
@@ -97,6 +101,7 @@ class SlideExtractionResult:
     ignore_regions: tuple[SlideRoi, ...] = ()
     cache_identity: str = ""
     extraction_version: str = SLIDE_EXTRACTION_VERSION
+    backend: str = "cpu"
 
 
 def _slide_row_payload(result: SlideExtractionResult, slide: SlideDraft, image_path: str) -> dict:
@@ -158,7 +163,10 @@ def extract_and_store_slides(
     store, video_id: int, slide_root: Path, *, roi: SlideRoi | None = None,
     ignore_regions: tuple[SlideRoi, ...] = (), force: bool = False,
     progress: ProgressCallback | None = None, should_stop: Callable[[], bool] | None = None,
+    backend: str = "auto",
 ) -> dict:
+    if backend not in {"auto", "cpu", "cuda"}:
+        raise ValueError("无效的 PPT 处理设备")
     video = store.get_video(video_id)
     if video is None:
         raise ValueError("视频记录不存在")
@@ -183,8 +191,11 @@ def extract_and_store_slides(
     staging = Path(tempfile.mkdtemp(prefix="generation-", dir=target))
     published = False
     try:
-        result = extract_slides(source, staging, source_hash, roi=region, ignore_regions=ignored,
-                                progress=progress, should_stop=should_stop)
+        from classcue.slide_runtime import extract_with_backend
+        result = extract_with_backend(
+            source, staging, source_hash, duration_ms=duration, backend=backend,
+            roi=region, ignore_regions=ignored, progress=progress, should_stop=should_stop,
+        )
         _check_stop(should_stop)
         if not result.slides:
             raise ValueError("未找到持续至少 2 秒的稳定 PPT 画面，已有截图未替换")
@@ -207,13 +218,15 @@ def extract_and_store_slides(
                     path.unlink(missing_ok=True)
                 except OSError:
                     pass
+        message = f"PPT 提取完成（{result.backend.upper()}），保留 {len(rows)} 张代表截图"
         if progress:
             try:
-                progress(1.0, f"PPT 提取完成，保留 {len(rows)} 张代表截图", "completed")
+                progress(1.0, message, "completed")
             except ProcessingCancelled:
                 # Publication has committed; cancellation can no longer undo it.
                 pass
-        return dict(status="completed", slides=stored, count=len(stored), committed=True)
+        return dict(status="completed", slides=stored, count=len(stored), committed=True,
+                    backend=result.backend, message=message)
     finally:
         if not published:
             shutil.rmtree(staging, ignore_errors=True)
@@ -227,7 +240,10 @@ def _frame_time_ms(frame, stream, fallback_ms: int) -> int:
     return fallback_ms
 
 
-def _feature(rgb: np.ndarray, roi: SlideRoi, ignored: tuple[SlideRoi, ...], width: int) -> dict:
+def _feature(
+    rgb: np.ndarray, roi: SlideRoi, ignored: tuple[SlideRoi, ...], width: int, *,
+    include_edges: bool = True,
+) -> dict:
     height, source_width = rgb.shape[:2]
     size = (max(8, min(width, source_width)), max(8, round(min(width, source_width) * height / source_width)))
     preview = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
@@ -244,58 +260,143 @@ def _feature(rgb: np.ndarray, roi: SlideRoi, ignored: tuple[SlideRoi, ...], widt
         raise ValueError("排除区域覆盖了整个 PPT 区域")
     preview[valid == 0] = 0
     gray = cv2.cvtColor(preview, cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(gray, EDGE_LOW, EDGE_HIGH)
-    edges[cv2.erode(valid, np.ones((3, 3), np.uint8)) == 0] = 0
-    return dict(rgb=preview, gray=gray, edges=edges > 0, valid=valid > 0)
+    edges = None
+    if include_edges:
+        edges = cv2.Canny(gray, EDGE_LOW, EDGE_HIGH)
+        edges[cv2.erode(valid, np.ones((3, 3), np.uint8)) == 0] = 0
+        edges = edges > 0
+    return dict(rgb=preview, gray=gray, edges=edges, valid=valid > 0)
+
+
+def _changed_pixels(delta: np.ndarray, threshold: int) -> np.ndarray:
+    return cv2.inRange(delta, (0, 0, 0), (threshold, threshold, threshold)) == 0
+
+
+def _detect_difference(previous: dict, current: dict, compare) -> dict:
+    delta = cv2.absdiff(previous["rgb"], current["rgb"])
+    unchanged = cv2.inRange(
+        delta, (0, 0, 0), (PIXEL_THRESHOLD, PIXEL_THRESHOLD, PIXEL_THRESHOLD),
+    )
+    raw_pixels = unchanged.size - cv2.countNonZero(unchanged)
+    # SSIM can only remove pixels from this set, so the changed-pixel
+    # minimum is unreachable. Preserve the count for high-resolution retry.
+    if raw_pixels < MIN_CHANGE_PIXELS:
+        return dict(changed=False, raw_pixels=raw_pixels)
+    return compare(previous, current)
 
 
 def _difference(previous: dict, current: dict) -> dict:
-    delta = np.max(cv2.absdiff(previous["rgb"], current["rgb"]), axis=2)
+    delta = cv2.absdiff(previous["rgb"], current["rgb"])
     _, similarity_map = structural_similarity(previous["gray"], current["gray"],
                                                data_range=255, full=True)
-    mask = ((delta > PIXEL_THRESHOLD) & (
-        (similarity_map < STRUCTURE_THRESHOLD) | (delta > COLOR_CHANGE_THRESHOLD)
+    raw = _changed_pixels(delta, PIXEL_THRESHOLD)
+    mask = (raw & (
+        (similarity_map < STRUCTURE_THRESHOLD) | _changed_pixels(delta, COLOR_CHANGE_THRESHOLD)
     )).astype(np.uint8)
     mask &= current["valid"].astype(np.uint8)
+    return _summarize_difference(
+        current, mask, int(raw.sum()),
+        float(similarity_map[current["valid"]].mean()),
+    )
+
+
+class _CpuDifference:
+    """Reuse exact 7x7 integer moments without changing the SSIM rules."""
+
+    def __init__(self):
+        self.frames = OrderedDict()
+
+    @staticmethod
+    def _box(value: np.ndarray) -> np.ndarray:
+        return cv2.boxFilter(
+            value, cv2.CV_64F, (7, 7), normalize=False, borderType=cv2.BORDER_REFLECT,
+        ).astype(np.int32)
+
+    def _frame(self, feature: dict):
+        key = id(feature)
+        if key in self.frames and self.frames[key][0] is feature:
+            self.frames.move_to_end(key)
+            return self.frames[key][1]
+        gray = feature["gray"].astype(np.float64)
+        total = self._box(gray)
+        variance = 49 * self._box(gray * gray) - total * total
+        data = gray, total, variance
+        self.frames[key] = feature, data
+        while len(self.frames) > 8:
+            self.frames.popitem(last=False)
+        return data
+
+    def __call__(self, previous: dict, current: dict) -> dict:
+        x, sx, vx = self._frame(previous)
+        y, sy, vy = self._frame(current)
+        product = sx * sy
+        covariance = 49 * self._box(x * y) - product
+        # With uint8 input these products fit int32. Keeping unnormalised
+        # moments avoids repeated filters and cancellation in the variance.
+        luminance = (2 * product + 2.55**2 * 49**2) / (
+            sx * sx + sy * sy + 2.55**2 * 49**2
+        )
+        contrast = (2 * covariance + 7.65**2 * 49 * 48) / (
+            vx + vy + 7.65**2 * 49 * 48
+        )
+        similarity = luminance * contrast
+        delta = cv2.absdiff(previous["rgb"], current["rgb"])
+        raw = _changed_pixels(delta, PIXEL_THRESHOLD)
+        mask = (raw & ((similarity < STRUCTURE_THRESHOLD)
+                       | _changed_pixels(delta, COLOR_CHANGE_THRESHOLD)) & current["valid"])
+        return _summarize_difference(
+            current, mask.astype(np.uint8), int(raw.sum()),
+            float(similarity[current["valid"]].mean()),
+        )
+
+
+def _summarize_difference(current: dict, mask: np.ndarray, raw_pixels: int, similarity: float) -> dict:
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     keep = np.zeros(count, np.uint8)
     if count > 1:
         keep[1:] = (stats[1:, cv2.CC_STAT_AREA] >= MIN_COMPONENT_PIXELS)
     cleaned = keep[labels] > 0
-    pixels = int(cleaned.sum())
-    ys, xs = np.nonzero(cleaned)
-    span = int(max(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1)) if pixels else 0
+    components = stats[keep > 0]
+    pixels = int(components[:, cv2.CC_STAT_AREA].sum())
+    span = int(max(
+        np.max(components[:, cv2.CC_STAT_LEFT] + components[:, cv2.CC_STAT_WIDTH])
+        - np.min(components[:, cv2.CC_STAT_LEFT]),
+        np.max(components[:, cv2.CC_STAT_TOP] + components[:, cv2.CC_STAT_HEIGHT])
+        - np.min(components[:, cv2.CC_STAT_TOP]),
+    )) if pixels else 0
     area = pixels / max(int(current["valid"].sum()), 1)
     # Retain thin formula strokes; remove isolated speckles, not whole small regions.
     area_threshold = MIN_CHANGED_AREA * min(1.0, (FEATURE_WIDTH / current["gray"].shape[1]) ** 2)
     changed = pixels >= MIN_CHANGE_PIXELS and span >= MIN_CHANGE_SPAN and area >= area_threshold
-    return dict(changed=changed, area=area, raw_pixels=int((delta > PIXEL_THRESHOLD).sum()),
-                similarity=float(similarity_map[current["valid"]].mean()), mask=cleaned)
+    return dict(changed=changed, area=area, raw_pixels=raw_pixels,
+                similarity=similarity, mask=cleaned)
 
 
 def _covers(complete: dict, partial: dict) -> bool:
     """Conservative visual containment, including colour and existing strokes."""
     edges = partial["edges"]
     count = int(edges.sum())
-    delta = np.max(cv2.absdiff(complete["rgb"], partial["rgb"]), axis=2)
+    delta = cv2.absdiff(complete["rgb"], partial["rgb"])
     if count < 8:
         complete_bg = np.median(complete["rgb"][complete["valid"]], axis=0)
         partial_bg = np.median(partial["rgb"][partial["valid"]], axis=0)
         return (np.max(np.abs(complete_bg - partial_bg)) < 8
-                and float((delta[partial["valid"]] > PIXEL_THRESHOLD).mean()) < PAGE_CHANGE_AREA)
+                and float(_changed_pixels(delta, PIXEL_THRESHOLD)[partial["valid"]].mean())
+                < PAGE_CHANGE_AREA)
     nearby = cv2.dilate(complete["edges"].astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    lost = edges & (~nearby | (delta > COVERAGE_PIXEL_THRESHOLD))
+    changed = _changed_pixels(delta, COVERAGE_PIXEL_THRESHOLD)
+    lost = edges & (~nearby | changed)
     if int(lost.sum()) > max(2, int(count * COVERAGE_LOSS_RATIO)):
         return False
     # A stroke touching an old formula can change a symbol rather than add a new line.
     old_nearby = cv2.dilate(edges.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     added = complete["edges"] & ~edges
-    touched = added & old_nearby & (delta > COVERAGE_PIXEL_THRESHOLD)
+    touched = added & old_nearby & changed
     return int(touched.sum()) <= max(2, int(count * COVERAGE_LOSS_RATIO))
 
 
-def _same_page(previous: dict, current: dict) -> bool:
-    difference = _difference(previous, current)
+def _same_page(previous: dict, current: dict, *, compare=None) -> bool:
+    difference = (compare or _difference)(previous, current)
     if not difference["changed"]:
         return True
     if _covers(current, previous) or _covers(previous, current):
@@ -334,17 +435,27 @@ class _Candidate:
 
 
 class _PageCollector:
-    def __init__(self, directory: Path, roi: SlideRoi, ignored: tuple[SlideRoi, ...]):
+    def __init__(self, directory: Path, roi: SlideRoi, ignored: tuple[SlideRoi, ...], *,
+                 compare=None, should_stop=None, on_select=None):
         self.directory, self.roi, self.ignored = directory, roi, ignored
         self.candidates: list[_Candidate] = []
         self.slides: list[SlideDraft] = []
         self.page_start = 0
         self.previous: dict | None = None
         self.published_paths: set[Path] = set()
+        self.compare = compare
+        self.feature_store = None
+        self.should_stop = should_stop
+        self.on_select = on_select
+
+    def close(self):
+        if self.feature_store is not None:
+            self.feature_store.close()
 
     def accept(self, start: int, end: int, representative: int, rgb: np.ndarray) -> None:
+        _check_stop(self.should_stop)
         feature = _feature(rgb, self.roi, self.ignored, REFINE_WIDTH)
-        if self.previous is not None and not _same_page(self.previous, feature):
+        if self.previous is not None and not _same_page(self.previous, feature, compare=self.compare):
             self.flush(start)
         self.previous = feature
         if not self.candidates:
@@ -362,16 +473,23 @@ class _PageCollector:
             self.candidates[-1].visible_until_ms = end
             self.previous = feature
             return
+        score = _information_score(feature)
+        if len(self.candidates) >= 16 and self.feature_store is None:
+            from classcue.slide_features import FeatureStore
+            self.feature_store = FeatureStore(self.directory)
+            for candidate in self.candidates:
+                candidate.feature = self.feature_store.store(candidate.feature)
+        stored_feature = self.feature_store.store(feature) if self.feature_store is not None else feature
         self.candidates.append(_Candidate(
-            start, start, end, representative, feature, path, image_hash,
-            _information_score(feature),
-        ))
+            start, start, end, representative, stored_feature, path, image_hash, score))
 
     def flush(self, end: int) -> None:
         if not self.candidates:
             return
+        if self.on_select:
+            self.on_select(end)
         primary = end - self.page_start >= PRIMARY_MIN_DURATION_MS
-        preferred = _preferred_candidates(self.candidates)
+        preferred = _preferred_candidates(self.candidates, should_stop=self.should_stop)
         for index, candidate in enumerate(self.candidates):
             stop = self.candidates[index + 1].start_ms if index + 1 < len(self.candidates) else end
             is_preferred = index in preferred
@@ -390,6 +508,8 @@ class _PageCollector:
             self.published_paths.add(candidate.path)
         self.candidates.clear()
         self.previous = None
+        if self.feature_store is not None:
+            self.feature_store.clear()
 
 
 def _information_score(feature: dict) -> float:
@@ -402,11 +522,14 @@ def _information_score(feature: dict) -> float:
     return round(min(1.0, 0.7 * min(1.0, edge_density * 8.0) + 0.3 * contrast), 6)
 
 
-def _preferred_candidates(candidates: list[_Candidate]) -> set[int]:
+def _preferred_candidates(candidates: list[_Candidate], *, should_stop=None) -> set[int]:
     """Select content representatives without deleting any time-addressable state."""
     if not candidates:
         return set()
-    features = _selection_features([candidate.feature for candidate in candidates])
+    features = _selection_features([candidate.feature for candidate in candidates], should_stop=should_stop)
+    @lru_cache(maxsize=16)
+    def prepared(index):
+        return _selection_data(features[index])
     # Select representatives directly, so approximate equality cannot discard
     # both members of a pair or collapse a chain with no surviving endpoint.
     order = sorted(range(len(candidates)), key=lambda i: (
@@ -416,10 +539,22 @@ def _preferred_candidates(candidates: list[_Candidate]) -> set[int]:
     ), reverse=True)
     preferred: set[int] = set()
     for index in order:
-        if any(_selection_covers(features[other], features[index]) for other in preferred):
+        _check_stop(should_stop)
+        covered = False
+        for other in preferred:
+            _check_stop(should_stop)
+            if _selection_covers(features[other], features[index],
+                                 complete_data=prepared(other), partial_data=prepared(index)):
+                covered = True
+                break
+        if covered:
             continue
-        replaced = {other for other in preferred
-                    if _selection_covers(features[index], features[other])}
+        replaced = set()
+        for other in preferred:
+            _check_stop(should_stop)
+            if _selection_covers(features[index], features[other],
+                                 complete_data=prepared(index), partial_data=prepared(other)):
+                replaced.add(other)
         preferred.difference_update(replaced)
         preferred.add(index)
     return preferred
@@ -437,7 +572,14 @@ def _has_selection_detail(mask: np.ndarray) -> bool:
     ))
 
 
-def _selection_covers(complete: dict, partial: dict) -> bool:
+def _selection_data(feature: dict) -> tuple[np.ndarray, np.ndarray]:
+    return (cv2.GaussianBlur(feature["rgb"], (3, 3), 0),
+            cv2.dilate(feature["edges"].astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
+
+
+def _selection_covers(
+    complete: dict, partial: dict, *, complete_data=None, partial_data=None,
+) -> bool:
     """Tolerate recording noise, but retain coherent missing or modified strokes."""
     valid = complete["valid"] & partial["valid"]
     edges = partial["edges"] & valid
@@ -445,15 +587,15 @@ def _selection_covers(complete: dict, partial: dict) -> bool:
     if count < 8:
         return _covers(complete, partial)
     kernel = np.ones((3, 3), np.uint8)
-    nearby = cv2.dilate(complete["edges"].astype(np.uint8), kernel) > 0
+    complete_rgb, nearby = complete_data if complete_data is not None else _selection_data(complete)
     # Blur suppresses JPEG/antialiasing noise without weakening geometric checks.
-    complete_rgb = cv2.GaussianBlur(complete["rgb"], (3, 3), 0)
-    partial_rgb = cv2.GaussianBlur(partial["rgb"], (3, 3), 0)
-    delta = np.max(cv2.absdiff(complete_rgb, partial_rgb), axis=2)
+    partial_rgb = partial_data[0] if partial_data is not None else cv2.GaussianBlur(partial["rgb"], (3, 3), 0)
+    delta = cv2.absdiff(complete_rgb, partial_rgb)
+    changed = _changed_pixels(delta, PIXEL_THRESHOLD)
     # Canny may toggle a faint compression/watermark edge even when the actual
     # pixels barely changed. Such an edge is not missing page information.
-    lost = edges & ~nearby & (delta > PIXEL_THRESHOLD)
-    recolored = edges & (delta > SELECTION_COLOR_THRESHOLD)
+    lost = edges & ~nearby & changed
+    recolored = edges & _changed_pixels(delta, SELECTION_COLOR_THRESHOLD)
     missing = lost | recolored
     if int(missing.sum()) > max(3, int(count * SELECTION_LOSS_RATIO)):
         return False
@@ -462,7 +604,7 @@ def _selection_covers(complete: dict, partial: dict) -> bool:
     # New strokes intersecting an old symbol may turn "-" into "+", not merely
     # complete an animation. Ignore subpixel edge jitter, not such modifications.
     old_nearby = cv2.dilate(edges.astype(np.uint8), kernel) > 0
-    added = complete["edges"] & valid & ~old_nearby & (delta > PIXEL_THRESHOLD)
+    added = complete["edges"] & valid & ~old_nearby & changed
     count, labels, stats, _ = cv2.connectedComponentsWithStats(added.astype(np.uint8), 8)
     near_old = cv2.dilate(edges.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
     for component in range(1, count):
@@ -475,21 +617,24 @@ def _selection_covers(complete: dict, partial: dict) -> bool:
     return True
 
 
-def _selection_features(features: list[dict]) -> list[dict]:
+def _selection_features(features: list[dict], *, should_stop=None) -> list[dict]:
     """Ignore recurrent footer replacements only within repeated-body clusters."""
     if len(features) <= CAPTION_MIN_REPLACEMENTS:
         return features
     height, width = features[0]["gray"].shape
     band_start = round(height * CAPTION_BAND_START)
     groups: list[list[int]] = []
-    blurred = [cv2.GaussianBlur(feature["rgb"], (3, 3), 0) for feature in features]
+    @lru_cache(maxsize=8)
+    def blurred(index):
+        return cv2.GaussianBlur(features[index]["rgb"], (3, 3), 0)
     for index, feature in enumerate(features):
+        _check_stop(should_stop)
         for group in groups:
             anchor = group[0]
             valid = feature["valid"][:band_start] & features[anchor]["valid"][:band_start]
-            delta = np.max(cv2.absdiff(blurred[index][:band_start],
-                                      blurred[anchor][:band_start]), axis=2)
-            if valid.any() and float((delta[valid] > PIXEL_THRESHOLD).mean()) <= CAPTION_CORE_CHANGE_RATIO:
+            delta = cv2.absdiff(blurred(index)[:band_start], blurred(anchor)[:band_start])
+            changed = _changed_pixels(delta, PIXEL_THRESHOLD)
+            if valid.any() and float(changed[valid].mean()) <= CAPTION_CORE_CHANGE_RATIO:
                 group.append(index)
                 break
         else:
@@ -498,13 +643,13 @@ def _selection_features(features: list[dict]) -> list[dict]:
     kernel = np.ones((3, 3), np.uint8)
     replacements: list[tuple[list[int], list[np.ndarray]]] = []
     for group in groups:
+        _check_stop(should_stop)
         row_changes = []
         for previous, current in zip(group, group[1:]):
             before = features[previous]["edges"][band_start:]
             after = features[current]["edges"][band_start:]
-            delta = np.max(cv2.absdiff(blurred[previous][band_start:],
-                                      blurred[current][band_start:]), axis=2)
-            changed = delta > PIXEL_THRESHOLD
+            delta = cv2.absdiff(blurred(previous)[band_start:], blurred(current)[band_start:])
+            changed = _changed_pixels(delta, PIXEL_THRESHOLD)
             lost = before & ~(cv2.dilate(after.astype(np.uint8), kernel) > 0) & changed
             added = after & ~(cv2.dilate(before.astype(np.uint8), kernel) > 0) & changed
             # Require repeated replacement, not just lines accumulating at the
@@ -521,6 +666,7 @@ def _selection_features(features: list[dict]) -> list[dict]:
     if len(all_changes) < CAPTION_MIN_REPLACEMENTS:
         return features
     recurring = np.sum(all_changes, axis=0) >= 2
+    masked_cache = OrderedDict()
     for group, changes in replacements:
         # A subtitle band learned from several body layouts also applies to a
         # page shown for only two spoken sentences, not only long-held pages.
@@ -529,29 +675,103 @@ def _selection_features(features: list[dict]) -> list[dict]:
             continue
         rows = cv2.dilate(rows.astype(np.uint8)[:, None], np.ones((5, 1), np.uint8))[:, 0] > 0
         for index in group:
-            original = features[index]
-            feature = {key: value.copy() for key, value in original.items()}
-            for value in feature.values():
-                value[band_start:][rows] = 0
-            selected[index] = feature
+            from classcue.slide_features import MaskedFeature
+            selected[index] = MaskedFeature(features[index], band_start, rows, masked_cache)
     return selected
+
+
+def _sample_frames(source, region, ignored, clock, should_stop, prefetch):
+    import av
+    from av.video.reformatter import VideoReformatter
+    from queue import Empty, Full, Queue
+    from threading import Event, Thread
+
+    stopped = Event()
+
+    def cancelled():
+        return stopped.is_set() or bool(should_stop and should_stop())
+
+    def prepare():
+        next_ms = 0
+        with av.open(str(source)) as container:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            stream.codec_context.thread_count = min(8, os.cpu_count() or 1)
+            reformatter = VideoReformatter()
+            for frame in container.decode(stream):
+                _check_stop(cancelled)
+                timestamp = _frame_time_ms(frame, stream, clock["last_ms"] + 1)
+                clock["last_ms"] = timestamp
+                if timestamp < next_ms:
+                    continue
+                next_ms = timestamp + SAMPLE_INTERVAL_MS
+                rgb = reformatter.reformat(frame, format="rgb24").to_ndarray()
+                rgb = np.ascontiguousarray(rgb[region.y:region.y + int(region.height),
+                                               region.x:region.x + int(region.width)])
+                yield timestamp, rgb, _feature(rgb, region, ignored, FEATURE_WIDTH, include_edges=False)
+
+    if not prefetch:
+        yield from prepare()
+        return
+    queue = Queue(maxsize=2)
+
+    def put(value):
+        while not cancelled():
+            try:
+                queue.put(value, timeout=0.1)
+                return
+            except Full:
+                pass
+
+    def produce():
+        try:
+            for value in prepare():
+                put(("frame", value))
+        except BaseException as error:
+            put(("error", error))
+        finally:
+            put(("done", None))
+
+    thread = Thread(target=produce, name="slide-decode", daemon=True)
+    thread.start()
+    try:
+        while True:
+            _check_stop(should_stop)
+            try:
+                kind, value = queue.get(timeout=0.1)
+            except Empty:
+                continue
+            if kind == "done":
+                break
+            if kind == "error":
+                raise value
+            yield value
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
 
 
 def extract_slides(
     source: Path, staging_directory: Path, source_content_hash: str, *,
     roi: SlideRoi | None = None, ignore_regions: tuple[SlideRoi, ...] = (),
     progress: ProgressCallback | None = None, should_stop: Callable[[], bool] | None = None,
+    compare=None, prefetch: bool = False,
 ) -> SlideExtractionResult:
-    import av
-
     source = source.expanduser().resolve()
     staging_directory.mkdir(parents=True, exist_ok=True)
     _, _, duration, region, ignored = _video_metadata(source, roi, ignore_regions)
-    collector = _PageCollector(staging_directory, region, ignored)
+    compare = compare or _CpuDifference()
+    collector = _PageCollector(
+        staging_directory, region, ignored, compare=compare, should_stop=should_stop,
+        on_select=(lambda end: progress(min(.98, end / duration), "正在精选 PPT 页面", "selecting"))
+        if progress and duration else None,
+    )
     anchor = None
     anchor_rgb = None
     refined_anchor = None
-    run_start = last_ms = next_ms = 0
+    run_start = 0
+    clock = {"last_ms": 0}
+    last_progress = -float("inf")
     tail_rgb = latest_rgb = None
     tail_ms = latest_ms = 0
 
@@ -559,24 +779,18 @@ def extract_slides(
         if latest_rgb is not None and end - run_start >= max(STABLE_WINDOW_MS, AUXILIARY_MIN_DURATION_MS):
             collector.accept(run_start, end, tail_ms, tail_rgb)
 
-    with av.open(str(source)) as container:
-        stream = container.streams.video[0]
-        for frame in container.decode(stream):
+    samples = _sample_frames(source, region, ignored, clock, should_stop, prefetch)
+    try:
+        for timestamp, rgb, feature in samples:
             _check_stop(should_stop)
-            timestamp = _frame_time_ms(frame, stream, last_ms + 1)
-            last_ms = timestamp
-            if timestamp < next_ms:
-                continue
-            next_ms = timestamp + SAMPLE_INTERVAL_MS
-            rgb = frame.to_ndarray(format="rgb24")
-            rgb = np.ascontiguousarray(rgb[region.y:region.y + int(region.height),
-                                           region.x:region.x + int(region.width)])
-            feature = _feature(rgb, region, ignored, FEATURE_WIDTH)
-            change = _difference(anchor, feature) if anchor is not None else None
+            change = _detect_difference(anchor, feature, compare) if anchor is not None else None
             if change and not change["changed"] and change["raw_pixels"] >= MIN_COMPONENT_PIXELS * 2:
                 if refined_anchor is None:
-                    refined_anchor = _feature(anchor_rgb, region, ignored, REFINE_WIDTH)
-                change = _difference(refined_anchor, _feature(rgb, region, ignored, REFINE_WIDTH))
+                    refined_anchor = _feature(anchor_rgb, region, ignored, REFINE_WIDTH, include_edges=False)
+                change = _detect_difference(
+                    refined_anchor, _feature(rgb, region, ignored, REFINE_WIDTH, include_edges=False),
+                    compare,
+                )
             if anchor is None or change["changed"]:
                 finish_run(timestamp)
                 anchor, run_start = feature, timestamp
@@ -585,14 +799,25 @@ def extract_slides(
             elif latest_rgb is not None and timestamp - latest_ms >= REPRESENTATIVE_TAIL_MS:
                 tail_rgb, tail_ms = latest_rgb, latest_ms
             latest_rgb, latest_ms = rgb, timestamp
-            if progress and duration:
+            now = time.monotonic()
+            if progress and duration and now - last_progress >= 0.5:
+                last_progress = now
                 progress(min(0.98, timestamp / duration),
                          f"正在筛选完整 PPT 画面（已读取 {timestamp // 1000} 秒）", "detecting")
-    end = duration or max(last_ms + 1, latest_ms + SAMPLE_INTERVAL_MS)
-    finish_run(end)
-    collector.flush(end)
-    used = {slide.image_path for slide in collector.slides}
-    for path in staging_directory.glob("*.jpg"):
-        if path not in used:
-            path.unlink()
-    return SlideExtractionResult(source_content_hash, end, region, collector.slides, ignored)
+    except BaseException:
+        collector.close()
+        raise
+    finally:
+        samples.close()
+    try:
+        _check_stop(should_stop)
+        end = duration or max(clock["last_ms"] + 1, latest_ms + SAMPLE_INTERVAL_MS)
+        finish_run(end)
+        collector.flush(end)
+        used = {slide.image_path for slide in collector.slides}
+        for path in staging_directory.glob("*.jpg"):
+            if path not in used:
+                path.unlink()
+        return SlideExtractionResult(source_content_hash, end, region, collector.slides, ignored)
+    finally:
+        collector.close()

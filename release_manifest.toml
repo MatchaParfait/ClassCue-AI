@@ -4,6 +4,10 @@ schema = 1
 files = [
     "classcue/__init__.py",
     "classcue/paths.py",
+    "classcue/slide_cuda.py",
+    "classcue/slide_features.py",
+    "classcue/slide_runtime.py",
+    "classcue/slide_worker.py",
     ".env.example",
     "LICENSE",
     "README.md",

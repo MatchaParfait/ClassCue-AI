@@ -452,6 +452,7 @@ class SlideExtractionPayload(BaseModel):
     roi: SlideRoiPayload | None = None
     ignore_regions: list[SlideRoiPayload] = Field(default_factory=list, max_length=16)
     force: bool = False
+    backend: Literal["auto", "cpu", "cuda"] = "auto"
 
 
 class RecallSelectionPayload(BaseModel):
@@ -779,6 +780,8 @@ class JobManager:
                                  stage="recovering" if resource.get("status") == "recovering" else None)
 
             from classcue.preparation_progress import preparation_events
+            from classcue.slide_runtime import release_idle_worker
+            release_idle_worker(job_type)
 
             def report_preparation(detail):
                 checkpoint()
@@ -1251,7 +1254,11 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 try:
                     await asyncio.to_thread(jobs.shutdown, wait=True)
                 finally:
-                    lease.release()
+                    from classcue.slide_runtime import close_workers
+                    try:
+                        await asyncio.to_thread(close_workers)
+                    finally:
+                        lease.release()
 
     api = FastAPI(title="课堂视频重点复习 API", version=VERSION, lifespan=lifespan)
     api.include_router(cache_routes)
@@ -3542,6 +3549,22 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
             "text": segment.text,
         }
 
+    @api.get("/api/slides/acceleration")
+    def get_slide_acceleration():
+        from classcue.slide_runtime import acceleration_status
+        return acceleration_status()
+
+    @api.post("/api/slides/acceleration/prepare", status_code=202)
+    def prepare_slide_acceleration():
+        from classcue.slide_runtime import install_runtime
+        try:
+            job_id = jobs.submit("slide_prepare", None,
+                                 lambda update, _stop: install_runtime(update),
+                                 request={"kind": "slide_prepare"})
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"job_id": job_id, "status": "queued", "job_type": "slide_prepare"}
+
     @api.post("/api/videos/{video_id}/slides/extract", status_code=202)
     def extract_video_slides(
         video_id: int,
@@ -3579,6 +3602,7 @@ def create_app(store: VideoStore | None = None) -> FastAPI:
                 roi=options.roi.to_roi() if options.roi is not None else None,
                 ignore_regions=tuple(region.to_roi() for region in options.ignore_regions),
                 force=options.force, progress=update, should_stop=should_cancel,
+                backend=options.backend,
             )
             from classcue.question_visuals import assign_after_extraction
             assign_after_extraction(store, video_id, slide_root=slide_root, should_cancel=should_cancel)

@@ -84,6 +84,7 @@ def test_slide_api_extracts_queries_and_serves_visual_evidence(tmp_path, monkeyp
                 break
             time.sleep(0.02)
         assert job["status"] == "completed"
+        assert "PPT 提取完成（CPU）" in job["message"]
 
         primary = client.get(f"/api/videos/{video_id}/slides").json()
         all_slides = client.get(

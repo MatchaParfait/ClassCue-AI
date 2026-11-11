@@ -3,6 +3,8 @@ import { Ban, CheckCircle2, Crop, Image as ImageIcon, LoaderCircle, Presentation
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { cancelJob, extractVideoSlides, getVideoSlides, getStreamUrl, getJob } from "../api/client";
 import type { Job, Video } from "../types";
+import type { SlideBackend } from "../api/slides";
+import { SlideDeviceControl } from "./SlideDeviceControl";
 
 export function SlideExtractionControls({
   video,
@@ -15,6 +17,8 @@ export function SlideExtractionControls({
 }) {
   const queryClient = useQueryClient();
   const [roi, setRoi] = useState<PixelRegion | null>(null);
+  const [backend, setBackend] = useState<SlideBackend>("auto");
+  const [preparingDevice, setPreparingDevice] = useState(false);
   const [ignoreRegions, setIgnoreRegions] = useState<PixelRegion[]>([]);
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const loadedVideo = useRef<number | null>(null);
@@ -47,6 +51,7 @@ export function SlideExtractionControls({
       force,
       ignore_regions: ignoreRegions,
       ...(roi ? { roi } : {}),
+      ...(backend !== "auto" ? { backend } : {}),
     }),
     onSuccess: (result) => {
       const id = result.job_id ?? result.id;
@@ -63,7 +68,7 @@ export function SlideExtractionControls({
   });
   const currentJob = job.data;
   const terminal = Boolean(currentJob && isTerminal(currentJob.status));
-  const isRunning = extraction.isPending || Boolean(currentJob && !terminal);
+  const isRunning = preparingDevice || extraction.isPending || Boolean(currentJob && !terminal);
   const slideCount = slides.data?.length ?? 0;
   const primaryCount = slides.data?.filter((slide) => slide.retention_class === "primary").length ?? 0;
   useEffect(() => {
@@ -151,6 +156,8 @@ export function SlideExtractionControls({
         <span><strong>{primaryCount}</strong> 个主要页面</span>
         {roi && <span>已设置 PPT 区域</span>}
       </div>
+      <SlideDeviceControl active={active} busy={busy || extraction.isPending || Boolean(currentJob && !terminal)}
+        value={backend} onChange={setBackend} onBusy={setPreparingDevice} />
       <div className="slide-extraction-actions">
         <button className="secondary-button compact" type="button" disabled={busy || isRunning}
           onClick={() => setSelecting((value) => value === "roi" ? null : "roi")}>
@@ -163,7 +170,7 @@ export function SlideExtractionControls({
         <button className="primary-button compact" type="button" disabled={busy || isRunning || slides.isPending || slides.isError || (slideCount > 0 && !replaceConfirmed)}
           onClick={() => start(slideCount > 0)}>
           {isRunning ? <LoaderCircle className="spin" size={15} /> : <Presentation size={15} />}
-          {isRunning ? "正在提取…" : slideCount ? "重新提取 PPT" : "提取 PPT 页面"}
+          {preparingDevice ? "正在准备…" : isRunning ? "正在提取…" : slideCount ? "重新提取 PPT" : "提取 PPT 页面"}
         </button>
       </div>
       {slides.isError && <p className="field-error" role="alert">
@@ -250,5 +257,5 @@ function jobStatusLabel(status: string) {
 }
 
 function stageLabel(stage?: string) {
-  return ({ reading: "读取视频", detecting: "检测 PPT 变化", encoding: "保存截图", saving: "保存数据库", completed: "已完成" } as Record<string, string>)[stage || ""] || "等待处理";
+  return ({ reading: "读取视频", detecting: "检测 PPT 变化", selecting: "精选页面", encoding: "保存截图", saving: "保存数据库", completed: "已完成" } as Record<string, string>)[stage || ""] || "等待处理";
 }

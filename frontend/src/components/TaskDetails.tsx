@@ -72,7 +72,7 @@ export function TaskDetails({ job, loading, error, onRetryLoad, onOpen, onSettin
       {job.status === "resource_paused" ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("resume")}>{commandIcon}继续任务</button>
         : job.job_type === "batch_video_process" && ["awaiting_api", "failed", "interrupted"].includes(job.status) && retryableBatch
           ? <button className="primary-button" aria-busy={command.isPending} disabled={command.isPending} onClick={() => command.mutate("retry")}>{commandIcon}重试未完成视频</button>
-          : <button className="secondary-button" onClick={() => onOpen(job)}>{migrating ? "打开存储设置" : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "打开视频库" : "打开处理详情"}</button>}
+          : job.job_type !== "slide_prepare" && <button className="secondary-button" onClick={() => onOpen(job)}>{migrating ? "打开存储设置" : ["course_transcribe", "course_sequence"].includes(job.job_type ?? "") ? "打开视频库" : "打开处理详情"}</button>}
       {job.status === "awaiting_api" && <button className="secondary-button" onClick={onSettings}><Settings2 size={16} />AI 服务设置</button>}
     </div>
     {!migrating && (running || job.status === "resource_paused") && <div className="task-danger-zone"><button className="stop-job-button"

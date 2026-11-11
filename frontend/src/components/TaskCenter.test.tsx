@@ -12,6 +12,7 @@ vi.mock("../featureFlags", () => ({ get MATERIALS_ENABLED() { return materialFea
 
 vi.mock("../api/client", async original => ({
   ...await original<typeof import("../api/client")>(), getRecentJobs: vi.fn(), getJob: vi.fn(),
+  cancelJob: vi.fn(),
 }));
 vi.mock("./Announcements", () => ({ Announcements: () => null }));
 vi.mock("./GlobalSearch", () => ({ GlobalSearchButton: () => null }));
@@ -70,6 +71,23 @@ it("does not read real tasks in demo mode", async () => {
   expect(api.getRecentJobs).not.toHaveBeenCalled();
   expect(api.getJob).not.toHaveBeenCalled();
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("暂无处理任务");
+});
+
+it("keeps PPT CUDA preparation progress and stopping without an unrelated settings link", async () => {
+  const job = { id: "slide-prepare", status: "running", job_type: "slide_prepare",
+    message: "正在准备 PPT CUDA 环境", progress: 45 };
+  vi.mocked(api.getRecentJobs).mockResolvedValue([job]);
+  vi.mocked(api.getJob).mockResolvedValue(job);
+  vi.mocked(api.cancelJob).mockResolvedValue({ ...job, status: "interrupted" });
+  await mount();
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="查看任务详情"]')!.click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("PPT CUDA 准备"));
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("正在准备 PPT CUDA 环境");
+  expect(dialog.textContent).not.toContain("打开处理详情");
+  const stop = [...dialog.querySelectorAll("button")].find(button => button.textContent?.includes("停止任务"))!;
+  await act(async () => stop.click());
+  expect(api.cancelJob).toHaveBeenCalledWith("slide-prepare");
 });
 
 it("shows course transcription counts and failures and returns to the library", async () => {

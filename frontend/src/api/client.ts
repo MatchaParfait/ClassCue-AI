@@ -965,6 +965,7 @@ export async function extractVideoSlides(
     roi?: { x: number; y: number; width: number; height: number };
     ignore_regions?: { x: number; y: number; width: number; height: number }[];
     force?: boolean;
+    backend?: "auto" | "cpu" | "cuda";
   } = {},
 ): Promise<Job> {
   return normalizeJob(await request<Job>(`/api/videos/${videoId}/slides/extract`, {
