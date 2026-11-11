@@ -3,6 +3,7 @@
 import atexit
 import base64
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import hashlib
 import importlib.util
 import json
@@ -13,7 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
-from threading import RLock, Thread, Timer
+from threading import Event, Lock, RLock, Thread, Timer
 import time
 from urllib.parse import quote
 
@@ -22,7 +23,7 @@ import numpy as np
 from classcue.asr_storage import active_storage_root, log_directory
 from classcue.desktop_runtime import atomic_json, read_json
 from classcue.paths import PROJECT_ROOT
-from classcue.processing_control import ProcessingCancelled
+from classcue.processing_control import ProcessingCancelled, ResourcePaused
 
 
 MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
@@ -384,6 +385,128 @@ def _stream_weight(url, partial, size, report, should_stop):
             time.sleep(attempt + 1)
 
 
+def _parallel_weight(url, partial, size, report, should_stop):
+    """Keep only a contiguous prefix on disk and at most eight chunks in memory."""
+    import httpx
+
+    offset = partial.stat().st_size if partial.exists() else 0
+    if offset > size:
+        partial.unlink()
+        offset = 0
+    if offset == size:
+        return
+    block = 4 * 1024 * 1024
+    starts = range(offset, size, block)
+    received = dict.fromkeys(starts, 0)
+    lock, stopped = Lock(), Event()
+
+    def fetch(start):
+        end = min(start + block, size) - 1
+        for attempt in range(3):
+            if stopped.is_set():
+                return None
+            with lock:
+                received[start] = 0
+            try:
+                with client.stream("GET", url, headers={
+                    "Range": f"bytes={start}-{end}", "Accept-Encoding": "identity",
+                }) as response:
+                    response.raise_for_status()
+                    if (response.status_code != 206 or response.headers.get("Content-Range")
+                            != f"bytes {start}-{end}/{size}"):
+                        raise ValueError("模型分段下载范围无效")
+                    content = bytearray()
+                    for chunk in response.iter_bytes(64 * 1024):
+                        if stopped.is_set():
+                            return None
+                        if len(content) + len(chunk) > end - start + 1:
+                            raise ValueError("模型分段下载超过文件清单大小")
+                        content.extend(chunk)
+                        with lock:
+                            received[start] = len(content)
+                    if len(content) != end - start + 1:
+                        raise httpx.ReadError("模型分段下载未完成")
+                    return content
+            except (httpx.TransportError, httpx.HTTPStatusError) as error:
+                if (isinstance(error, httpx.HTTPStatusError) and error.response.status_code < 500
+                        or attempt == 2):
+                    raise
+                if stopped.wait(attempt + 1):
+                    return None
+
+    report(offset)
+    with httpx.Client(trust_env=False, follow_redirects=True,
+                      timeout=httpx.Timeout(20, connect=10)) as client:
+        pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="embedding-download")
+        pending = OrderedDict()
+        remaining = iter(starts)
+        last_report = 0
+        try:
+            with partial.open("ab" if offset else "wb") as target:
+                while pending or remaining is not None:
+                    _checkpoint(should_stop)
+                    while remaining is not None and len(pending) < 8:
+                        start = next(remaining, None)
+                        if start is None:
+                            remaining = None
+                        else:
+                            pending[start] = pool.submit(fetch, start)
+                    if not pending:
+                        break
+                    if time.monotonic() - last_report >= 1:
+                        with lock:
+                            completed = offset + sum(received.values())
+                        report(completed)
+                        last_report = time.monotonic()
+                    start, future = next(iter(pending.items()))
+                    try:
+                        content = future.result(timeout=.2)
+                    except FutureTimeout:
+                        continue
+                    _checkpoint(should_stop)
+                    target.write(content)
+                    del content
+                    del future
+                    del pending[start]
+        finally:
+            stopped.set()
+            pool.shutdown(wait=True, cancel_futures=True)
+            report(partial.stat().st_size if partial.exists() else 0)
+
+
+def _download_weight(name, item, partial, tracker, should_stop):
+    from scripts.prepare_asr_modelscope import _verified
+    import httpx
+
+    sources = [
+        ("ModelScope", f"https://modelscope.cn/models/{MODEL_ID}/resolve/"
+         f"{item['Revision']}/{quote(name)}"),
+        ("HF 镜像", f"https://hf-mirror.com/{MODEL_ID}/resolve/main/{quote(name)}"),
+    ]
+    for index, (source, url) in enumerate(sources):
+        _checkpoint(should_stop)
+        tracker.source = source
+        try:
+            if item["Size"] >= 16 * 1024 * 1024:
+                try:
+                    _parallel_weight(url, partial, item["Size"], tracker.report, should_stop)
+                except ValueError:
+                    # Some mirrors ignore bounded ranges; sequential resume checks its own range.
+                    _stream_weight(url, partial, item["Size"], tracker.report, should_stop)
+            else:
+                _stream_weight(url, partial, item["Size"], tracker.report, should_stop)
+            if _verified(partial, item, tracker):
+                return
+            partial.unlink(missing_ok=True)
+        except (ProcessingCancelled, ResourcePaused):
+            raise
+        except (httpx.HTTPError, RuntimeError, ValueError):
+            if index == len(sources) - 1:
+                raise RuntimeError(f"检索模型下载失败：{name}，请检查网络后重试") from None
+        if index == len(sources) - 1:
+            raise RuntimeError(f"检索模型文件校验失败：{name}")
+
+
 def _prepare_weights(progress, should_stop):
     from classcue.preparation_progress import DownloadProgress, stage
     from scripts.prepare_asr_modelscope import _verified
@@ -414,8 +537,8 @@ def _prepare_weights(progress, should_stop):
                                if progress else None)
     for name, item in files.items():
         _checkpoint(should_stop)
+        tracker.source = "ModelScope"
         tracker.file("embedding", MODEL_ID, name, item["Size"])
-        url = f"https://modelscope.cn/models/{MODEL_ID}/resolve/{item['Revision']}/{quote(name)}"
         target = destination / name
         partial, record = target.with_name(target.name + ".part"), target.with_name(target.name + ".part.json")
         for path in (target, partial, record):
@@ -426,10 +549,7 @@ def _prepare_weights(progress, should_stop):
             if read_json(record, {}) != expected:
                 partial.unlink(missing_ok=True)
             atomic_json(record, expected)
-            _stream_weight(url, partial, item["Size"], tracker.report, should_stop)
-            if not _verified(partial, item, tracker):
-                partial.unlink(missing_ok=True)
-                raise RuntimeError(f"检索模型文件校验失败：{name}")
+            _download_weight(name, item, partial, tracker, should_stop)
             partial.replace(target)
             record.unlink(missing_ok=True)
         tracker.report(item["Size"])
