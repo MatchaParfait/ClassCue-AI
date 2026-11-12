@@ -72,6 +72,23 @@ python scripts/release.py build --notes release/notes.md
 可使用 `python scripts/release.py verify <ZIP文件路径>` 离线验证包内签名和所有程序文件。
 开源源码及测试继续由 GitHub 仓库/Source code 附件提供。MIT 许可证、字体/模型的原始许可证随程序保留。
 
+## 仅供全新安装的测试包
+
+测试包使用 `test-<版本>` 标签和 GitHub Pre-release 标记，例如 `test-0.2.3`，
+软件内部版本仍与 `pyproject.toml`、`uv.lock` 一致。该标签不会触发 `v*` 正式发行流程。
+
+1. 提交版本、锁文件及 `release/test-notes.md`，取得完整 commit SHA。
+2. 手动运行 `Test Release`，将该 SHA 填入 `expected_commit`。
+3. 工作流只构建前端、按发行清单签名打包，并上传预发布草稿，不运行全套产品测试。
+4. 下载草稿 ZIP，核对实际文件、签名及哈希后，以 Pre-release、非 Latest 发布原附件。
+   不执行正式版的 `finalize`。
+
+测试包仅上传签名 ZIP，不上传面向正式更新渠道的 `app-release.json`，
+也不生成或修改 `update-feed`。包内仍保留签名安装清单。
+发布说明必须写明不稳定、仅支持新目录安装和实际验证范围；
+数据库、设置、运行环境及模型不从旧安装继承。
+原有正式发行流程和稳定版仍独立维护，不用测试包替换稳定版附件。
+
 ## 发公告
 
 编辑 `release/announcements.json`，它是一个 JSON 数组。示例（请替换成真实日期及内容，不要直接把过期示例当公告发布）：
