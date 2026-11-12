@@ -6,7 +6,9 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
@@ -178,11 +180,111 @@ class BridgeStore:
             raise BridgeFailure("launch_failed", "无法唤起 DSH，请手动开启桌面版后重试") from None
         return True
 
-    def history(self, question_id):
+    def history(self, question_id, *, visible_only=False):
         with self.store.connect() as db:
             rows = db.execute("""SELECT request_id,content_version,instance_id,receipt,created_at
                 FROM dsh_bridge_requests WHERE question_id=? ORDER BY created_at,rowid""", (question_id,)).fetchall()
-        return [{**dict(row), "receipt": json.loads(row["receipt"]) if row["receipt"] else None} for row in rows]
+        result = []
+        for row in rows:
+            receipt = json.loads(row["receipt"]) if row["receipt"] else None
+            if visible_only and (not receipt or receipt.get("discussion_state") != "active"):
+                continue
+            result.append({**dict(row), "receipt": receipt,
+                           **({"origin": "fork", "parent_request_id": receipt["parent_request_id"]}
+                              if receipt and receipt.get("origin") == "fork" else {})})
+        return result
+
+    def sync_discussions(self, receipts, *, library_id, question_id, instance_id):
+        if not isinstance(receipts, list) or any(not isinstance(value, dict) for value in receipts):
+            raise BridgeFailure("invalid_response", "DSH 返回了无效的讨论记录")
+        for receipt in receipts:
+            identity_keys = ("request_id", "session_id")
+            if receipt.get("origin") == "fork":
+                identity_keys += ("parent_request_id", "parent_session_id")
+            if any(not isinstance(receipt.get(key), str)
+                   or not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", receipt[key]) for key in identity_keys):
+                raise BridgeFailure("invalid_response", "DSH 返回了无效的讨论身份")
+        pending = receipts
+        with self.store.connect() as db:
+            known = {row["request_id"]: dict(row) for row in db.execute(
+                "SELECT * FROM dsh_bridge_requests WHERE question_id=? AND instance_id=?",
+                (question_id, instance_id))}
+            while pending:
+                remaining, progress = [], False
+                for receipt in pending:
+                    is_fork = receipt.get("origin") == "fork"
+                    previous = known.get(receipt.get("request_id"))
+                    parent = known.get(receipt.get("parent_request_id")) if is_fork else previous
+                    if is_fork and parent is None:
+                        remaining.append(receipt)
+                        continue
+                    if parent is None:
+                        raise BridgeFailure("invalid_response", "DSH 返回了未登记的独立讨论")
+                    source = json.loads(parent["snapshot"])
+                    parent_receipt = json.loads(parent["receipt"]) if parent["receipt"] else None
+                    if is_fork and parent_receipt is None:
+                        remaining.append(receipt)
+                        continue
+                    if (receipt.get("library_id") != library_id or receipt.get("question_id") != question_id
+                            or receipt.get("instance_id") != instance_id
+                            or receipt.get("content_version") != parent["content_version"]
+                            or receipt.get("document_id") != source.get("document_id")
+                            or receipt.get("course_id") != source.get("course_id")
+                            or (is_fork and (receipt.get("parent_session_id") != parent_receipt.get("session_id")
+                                             or receipt.get("status") != "linked"))
+                            or (not is_fork and previous and parent_receipt
+                                and receipt.get("session_id") != parent_receipt.get("session_id"))
+                            or receipt.get("discussion_state") not in
+                            ("active", "draft", "archived", "missing", "unavailable", "pending")
+                            or (receipt.get("workspace_id") is not None
+                                and (not isinstance(receipt["workspace_id"], str)
+                                     or not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", receipt["workspace_id"])))):
+                        raise BridgeFailure("invalid_response", "DSH 讨论与原题或父对话不一致")
+                    request_id = receipt["request_id"]
+                    if previous:
+                        previous_receipt = json.loads(previous["receipt"]) if previous["receipt"] else {}
+                        if previous_receipt and any(previous_receipt.get(key) != receipt.get(key) for key in
+                               ("origin", "session_id", "parent_request_id", "parent_session_id")):
+                            raise BridgeFailure("invalid_response", "DSH 讨论身份发生冲突")
+                        if previous_receipt == receipt:
+                            continue
+                    if is_fork and previous is None:
+                        try:
+                            created_at = datetime.fromisoformat(receipt["created_at"])
+                            if created_at.tzinfo is None:
+                                raise ValueError()
+                            created_at = created_at.astimezone(timezone.utc)
+                        except (KeyError, TypeError, ValueError, OverflowError):
+                            raise BridgeFailure("invalid_response", "DSH 分支创建时间无效") from None
+                        snapshot = {key: value for key, value in source.items() if key != "content"}
+                        snapshot.update(request_id=request_id, origin="fork",
+                                        parent_request_id=receipt["parent_request_id"])
+                        db.execute("""INSERT OR IGNORE INTO dsh_bridge_requests
+                            (request_id,question_id,content_version,instance_id,snapshot,receipt,created_at)
+                            VALUES(?,?,?,?,?,?,?)""",
+                                   (request_id, question_id, parent["content_version"], instance_id,
+                                    encode(snapshot), encode(receipt), created_at.strftime("%Y-%m-%d %H:%M:%S.%f")))
+                    saved = db.execute("SELECT * FROM dsh_bridge_requests WHERE request_id=?", (request_id,)).fetchone()
+                    if saved["question_id"] != question_id or saved["instance_id"] != instance_id:
+                        raise BridgeFailure("invalid_response", "DSH 分支身份发生冲突")
+                    db.execute("UPDATE dsh_bridge_requests SET receipt=? WHERE request_id=?",
+                               (encode(receipt), request_id))
+                    saved = {**dict(saved), "receipt": encode(receipt)}
+                    known[request_id] = dict(saved)
+                    progress = True
+                if not progress:
+                    if remaining:
+                        raise BridgeFailure("invalid_response", "DSH 分支缺少可核对的父讨论")
+                    break
+                pending = remaining
+            received = {receipt.get("request_id") for receipt in receipts}
+            for request_id, row in known.items():
+                if request_id in received or not row["receipt"]:
+                    continue
+                receipt = json.loads(row["receipt"])
+                if receipt.get("discussion_state") != "missing":
+                    db.execute("UPDATE dsh_bridge_requests SET receipt=? WHERE request_id=?",
+                               (encode({**receipt, "discussion_state": "missing"}), request_id))
 
     def request(self, request_id):
         with self.store.connect() as db:
@@ -256,8 +358,25 @@ class DshBridge:
                 ON CONFLICT(instance_id) DO UPDATE SET config_id=excluded.config_id""", (instance_id, config_id))
         return root
 
+    def history(self, question_id):
+        # Reading history never starts DSH. Cached links remain readable while it is closed.
+        if not self.records.history(question_id):
+            return []
+        try:
+            client, status = self.records.client(self.client_factory)
+            if "discussion_sync" in status.get("capabilities", []):
+                receipts = client.call("discussions", {"library_id": self.library_id, "question_id": question_id})
+                self.records.sync_discussions(receipts, library_id=self.library_id, question_id=question_id,
+                                              instance_id=status["instance_id"])
+        except BridgeFailure as error:
+            if error.code not in {"not_paired", "plugin_unavailable", "disconnected", "timeout", "instance_mismatch"}:
+                raise
+        return self.records.history(question_id, visible_only=True)
+
     def prepare(self, question_id, *, workspace_id=None, new_discussion=False):
         client, status = self.active_client()
+        if not new_discussion:
+            self.history(question_id)
         with self.store.connect() as db:
             prior = db.execute("""SELECT * FROM dsh_bridge_requests WHERE question_id=?
                 ORDER BY created_at DESC,rowid DESC""", (question_id,)).fetchall()
@@ -271,12 +390,19 @@ class DshBridge:
             snapshot = self.snapshot_provider(self.store, self.library_id, question_id)
         with self.store.connect() as db:
             if prior and not new_discussion:
-                row = next((row for row in prior if row["content_version"] == snapshot["content_version"]), None)
-                if row is None:
+                matching = [row for row in prior if row["content_version"] == snapshot["content_version"]]
+                if not matching:
                     raise BridgeFailure("question_changed", "题目内容已修改，请明确新建讨论")
-                if row["instance_id"] != status["instance_id"]:
+                matching = [row for row in matching if row["instance_id"] == status["instance_id"]]
+                if not matching:
                     raise BridgeFailure("instance_mismatch", "该题绑定到另一个 DSH 实例，请连接原实例或明确新建讨论")
+                row = next((row for row in matching if (json.loads(row["receipt"]) if row["receipt"] else {})
+                            .get("discussion_state") not in {"archived", "missing"}), None)
+                if row is None:
+                    return self.prepare(question_id, new_discussion=True)
                 request = json.loads(row["snapshot"])
+                if request.get("origin") == "fork":
+                    return self.resume(row["request_id"], open_session=True)
             else:
                 self.require_tree(status)
                 root = self.records.workspace_root(status["instance_id"])
@@ -304,10 +430,13 @@ class DshBridge:
             raise BridgeFailure("instance_mismatch", "请连接此讨论原先使用的 DSH 桌面实例")
         if json.loads(row["snapshot"]).get("layout") == "workspace_tree":
             self.require_tree(status)
+        fork = json.loads(row["snapshot"]).get("origin") == "fork"
+        if fork and "native_forks" not in status.get("capabilities", []):
+            raise BridgeFailure("plugin_outdated", "请更新 ClassCue 插件至 0.4.0，以打开原生分支讨论")
         try:
             receipt = client.call("open" if open_session else "request", {"request_id": request_id})
         except BridgeFailure as error:
-            if not open_session or error.code != "request_missing" or row["receipt"] is not None:
+            if fork or not open_session or error.code != "request_missing" or row["receipt"] is not None:
                 raise
             # The previous timeout may have happened before Host admission.
             receipt = client.call("prepare", json.loads(row["snapshot"]))

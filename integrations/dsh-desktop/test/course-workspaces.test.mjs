@@ -34,7 +34,7 @@ test("different documents and video examples in one course share a workspace, wi
   assert.equal(second.workspace_id, "database");
   assert.equal(video.workspace_id, "database");
   assert.equal(new Set([chosen.session_id, second.session_id, video.session_id]).size, 3);
-  assert.equal(bridge.next("client").course_name, "course-a");
+  assert.equal((await bridge.next("client")).course_name, "course-a");
   const restarted = new Bridge(root, native);
   assert.equal((await restarted.prepare(question("fourth", "course-a"))).workspace_id, "database");
   assert.equal((await restarted.open(chosen.request_id)).session_id, chosen.session_id);

@@ -68,6 +68,30 @@ function directory(path) {
   }
 }
 
+export async function readDiscussionStates(ctx, rows) {
+  const states = new Map();
+  const archived = new Set(ctx.workspaceRegistry.archivedSessionIds);
+  for (const row of rows) {
+    if (archived.has(row.session_id)) {
+      states.set(row.session_id, "archived");
+      continue;
+    }
+    const live = ctx.sessions.get(row.session_id);
+    if (!live && !await ctx.sessionPersistence.stat(row.session_id)) {
+      states.set(row.session_id, ["reserved", "choose_workspace"].includes(row.status) ? "pending" : "missing");
+      continue;
+    }
+    if (!ctx.workspaceRegistry.get(row.workspace_id)?.sessionIds.includes(row.session_id)) {
+      states.set(row.session_id, "unavailable");
+      continue;
+    }
+    const info = await ctx.sessionController.inspect(row.session_id);
+    // Match DSH's sessionListMetadata.blank: a real turn, not draft injection or metadata.
+    states.set(row.session_id, info.events.some(event => event.type === "turn/start") ? "active" : "draft");
+  }
+  return states;
+}
+
 /** One writer per desktop profile; every side effect follows a persisted intent. */
 export class Bridge {
   constructor(root, native) {
@@ -88,6 +112,8 @@ export class Bridge {
     this.tail = Promise.resolve();
     this.leases = new Map();
     this.client = null;
+    this.forksDirty = true;
+    this.forkRevision = 0;
     this.save();
   }
 
@@ -128,12 +154,16 @@ export class Bridge {
       layout: row.layout ?? "legacy", root_id: row.root_id ?? null,
       cwd: row.cwd ?? null, session_id: row.session_id, status: row.status,
       error: row.error ?? null, outcome: row.outcome ?? null,
+      ...(row.discussion_state ? { discussion_state: row.discussion_state } : {}),
+      ...(row.origin === "fork" ? { origin: "fork", parent_request_id: row.parent_request_id,
+        parent_session_id: row.parent_session_id, created_at: row.created_at } : {}),
     };
   }
   status() {
     return { protocol: PROTOCOL, desktop_version: this.native.desktopVersion ?? "0.2.1-rc.5",
       instance_id: this.state.instance_id, client_connected: this.client !== null && Date.now() - this.client.time < 5000,
-      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory", "course_workspace", "workspace_tree"] };
+      capabilities: ["question_draft", "multiple_images", "open_session", "workspace_memory", "course_workspace",
+        "workspace_tree", "native_forks", ...(this.native.discussionStates ? ["discussion_sync"] : [])] };
   }
   workspaces() { return this.native.workspaces(); }
   get(requestId) {
@@ -142,6 +172,77 @@ export class Bridge {
     return row;
   }
   request(requestId) { return this.receipt(this.get(requestId)); }
+
+  forksChanged() {
+    this.forkRevision += 1;
+    this.forksDirty = true;
+  }
+
+  syncForks() {
+    return this.serial(async () => {
+      if (!this.native.forkHeaders) { this.forksDirty = false; return; }
+      const revision = this.forkRevision;
+      const candidates = (await this.native.forkHeaders()).filter(header =>
+        header.isSeeded === true && header.parentSession && header.origin !== "subagent");
+      const known = new Map(Object.values(this.state.requests).map(row => [row.session_id, row]));
+      let changed = false, pending = false, progress;
+      do {
+        progress = false;
+        for (const header of candidates) {
+          if (known.has(header.id)) continue;
+          const parent = known.get(header.parentSession);
+          if (!parent) continue;
+          if (!header.durable || !header.workspace_id) { pending = true; continue; }
+          requireId(header.id);
+          requireId(header.workspace_id);
+          const request_id = `fork-${digest([parent.library_id, header.id]).slice(0, 40)}`;
+          const row = {
+            request_id, library_id: parent.library_id, course_id: parent.course_id,
+            course_name: parent.course_name, document_id: parent.document_id,
+            question_id: parent.question_id, content_version: parent.content_version,
+            title: parent.title, source: parent.source, snapshot_hash: parent.snapshot_hash,
+            layout: parent.layout, root_id: parent.root_id,
+            session_id: header.id, workspace_id: header.workspace_id, cwd: header.cwd,
+            origin: "fork", parent_request_id: parent.request_id, parent_session_id: parent.session_id,
+            created_at: new Date(header.createdAt).toISOString(), status: "linked",
+          };
+          this.state.requests[request_id] = row;
+          known.set(header.id, row);
+          changed = progress = true;
+        }
+      } while (progress);
+      // Creation precedes native workspace attachment and persistence. Retry after those settle.
+      this.forksDirty = pending || revision !== this.forkRevision;
+      if (changed) this.save();
+    });
+  }
+
+  async discussions({ library_id, question_id }) {
+    requireId(library_id);
+    requireId(question_id);
+    if (this.forksDirty) await this.syncForks();
+    return this.serial(async () => {
+      const rows = Object.values(this.state.requests)
+        .filter(row => row.library_id === library_id && row.question_id === question_id);
+      if (this.native.discussionStates) {
+        const states = await this.native.discussionStates(rows);
+        let changed = false;
+        for (const row of rows) {
+          const state = states.get(row.session_id);
+          if (!["active", "draft", "archived", "missing", "unavailable", "pending"].includes(state))
+            throw new BridgeError("native_state_unknown", "无法确认 DSH 对话状态，请稍后重试");
+        }
+        for (const row of rows) {
+          const state = states.get(row.session_id);
+          if (row.discussion_state === state) continue;
+          row.discussion_state = state;
+          changed = true;
+        }
+        if (changed) this.save();
+      }
+      return rows.map(row => this.receipt(row));
+    });
+  }
 
   configureRoot(input) {
     return this.serial(async () => {
@@ -245,7 +346,8 @@ export class Bridge {
           || row.content_version !== content_version || row.snapshot_hash !== snapshotHash)
           throw new BridgeError("request_conflict", "相同请求编号不能传入不同内容");
       } else {
-        const previous = Object.values(this.state.requests).filter(r => `${r.library_id}/${r.question_id}` === key);
+        const previous = Object.values(this.state.requests)
+          .filter(r => r.origin !== "fork" && `${r.library_id}/${r.question_id}` === key);
         if (previous.length && !input.new_discussion) {
           row = previous.findLast(r => r.content_version === content_version);
           if (!row) throw new BridgeError("question_changed", "题目已修改，请明确新建讨论；旧版本对话仍保留");
@@ -288,6 +390,10 @@ export class Bridge {
   }
 
   async ensureBound(row) {
+    if (row.origin === "fork") {
+      await this.native.check(row.session_id, row.workspace_id);
+      return;
+    }
     if (row.layout === "workspace_tree") {
       await this.treeWorkspace(row);
       if (row.status !== "reserved") {
@@ -360,9 +466,10 @@ export class Bridge {
     });
   }
 
-  next(clientId) {
+  async next(clientId) {
     requireId(clientId);
     this.client = { id: clientId, time: Date.now() };
+    if (this.forksDirty) await this.syncForks();
     for (const row of Object.values(this.state.requests)) {
       if (!row.action || row.status === "reserved") continue;
       const lease = this.leases.get(row.command);
@@ -370,7 +477,7 @@ export class Bridge {
       this.leases.set(row.command, { client: clientId, until: Date.now() + 30000 });
       return { ...this.receipt(row), command: row.command, action: row.action,
         title: row.title, source: row.source,
-        content: ["sent", "choose_workspace"].includes(row.status) ? [] : this.content(row),
+        content: ["sent", "linked", "choose_workspace"].includes(row.status) ? [] : this.content(row),
         workspaces: row.status === "choose_workspace" ? this.workspaces() : [],
       };
     }
@@ -397,7 +504,7 @@ export class Bridge {
   backup(requestId, content) {
     return this.serial(async () => {
       const row = this.get(requestId);
-      if (row.status === "sent") return;
+      if (["sent", "linked"].includes(row.status)) return;
       if (!Array.isArray(content)) throw new BridgeError("invalid_content", "草稿格式无效");
       if (content.length) validateContent(content);
       row.draft = content;
@@ -409,7 +516,7 @@ export class Bridge {
     return this.serial(async () => {
       let changed = false;
       for (const row of Object.values(this.state.requests)) {
-        if (row.session_id !== sessionId || row.status === "sent") continue;
+        if (row.session_id !== sessionId || ["sent", "linked"].includes(row.status)) continue;
         row.status = "sent";
         delete row.draft;
         row.has_draft = false;

@@ -1,6 +1,6 @@
 {
   "name": "classcue-dsh-desktop",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "private": true,
   "description": "ClassCue 单题桌面会话桥接",
   "type": "module",

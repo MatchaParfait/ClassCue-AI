@@ -30,11 +30,11 @@ export function DshQuestionActions({ questionId, contentVersion, scope = "defaul
   if (provider === "codex") return <CodexQuestionActions key={`${scope}:${questionId}:${contentVersion}`}
     questionId={questionId} scope={scope} />;
   return <DesktopQuestionActions key={`${scope}:${questionId}:${contentVersion}`}
-    questionId={questionId} contentVersion={contentVersion} scope={scope} />;
+    questionId={questionId} scope={scope} />;
 }
 
-function DesktopQuestionActions({ questionId, contentVersion, scope }: {
-  questionId: string; contentVersion: number; scope: string;
+function DesktopQuestionActions({ questionId, scope }: {
+  questionId: string; scope: string;
 }) {
   const cache = useQueryClient();
   const [settings, setSettings] = useState(false);
@@ -47,19 +47,24 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
   const statusKey = ["dsh-status", scope];
   const requestKey = (id: string | null) => ["dsh-request", scope, id];
   const status = useQuery({ queryKey: statusKey, queryFn: getDshStatus, retry: false });
-  const history = useQuery({ queryKey: historyKey, queryFn: () => getDshDiscussions(questionId), retry: false });
+  const history = useQuery({ queryKey: historyKey, queryFn: () => getDshDiscussions(questionId), retry: false,
+    refetchInterval: () => document.visibilityState === "visible" ? 5000 : false });
   const receipt = useQuery({
     queryKey: requestKey(requestId), queryFn: () => getDshRequest(requestId!), enabled: Boolean(requestId),
     retry: false, refetchInterval: query => {
       const value = query.state.data;
       return query.state.error || value?.error || value?.outcome === "cancelled"
-        || value && ["sent", "draft_ready"].includes(value.status) ? false : 1000;
+        || value && ["sent", "linked", "draft_ready"].includes(value.status) ? false : 1000;
     },
   });
-  const active = history.data?.filter(d => d.content_version === contentVersion).at(-1);
   const start = useMutation({
     mutationFn: (newDiscussion: boolean) => prepareDshQuestion(questionId, newDiscussion),
-    onSuccess: value => { setRequestId(value.request_id); void cache.invalidateQueries({ queryKey: historyKey }); },
+    onSuccess: value => {
+      setRequestId(value.request_id);
+      cache.setQueryData(requestKey(value.request_id), value);
+      void cache.invalidateQueries({ queryKey: requestKey(value.request_id) });
+      void cache.invalidateQueries({ queryKey: historyKey });
+    },
     onError: reason => {
       const message = (reason as Error).message;
       setError(message);
@@ -73,7 +78,10 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
       cache.setQueryData(requestKey(value.request_id), value);
       void cache.invalidateQueries({ queryKey: requestKey(value.request_id) });
     },
-    onError: reason => setError((reason as Error).message),
+    onError: reason => {
+      setError((reason as Error).message);
+      void cache.invalidateQueries({ queryKey: historyKey });
+    },
   });
   const pending = start.isPending || open.isPending;
   const busy = pending || configBusy;
@@ -84,6 +92,7 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
     : result?.error ? "无法准备 DSH 草稿，请检查桌面连接后重试。"
     : result?.status === "choose_workspace" ? "这是旧版未完成的讨论，请在 DSH 完成原工作区选择；新建独立讨论会使用 ClassCue 的默认目录。"
     : result?.status === "draft_ready" ? "题目已放入 DSH 草稿，等待你发送。"
+    : result?.status === "linked" ? "已打开 DSH 分支讨论。"
     : result?.status === "sent" ? "已打开原讨论。"
     : result ? "正在等待 DSH 准备对话…" : "";
   return <div className="dsh-question-actions">
@@ -91,7 +100,7 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
       <button className="secondary-button compact" type="button" disabled={pending || status.isPending || history.isPending}
         onClick={() => {
           setError("");
-          if (active) open.mutate(active.request_id); else start.mutate(false);
+          start.mutate(false);
         }}>
         {pending ? <LoaderCircle className="spin" size={16} /> : <MessageSquare size={16} />}
         在 DSH 中讨论
@@ -104,14 +113,21 @@ function DesktopQuestionActions({ questionId, contentVersion, scope }: {
         onClick={() => { setError(""); setSettings(true); }}><Settings2 size={16} /></button>
     </div>
     {notice && <p role="status">{notice}</p>}
-    {(error || receipt.error) && <p className="field-error" role="alert">{error || (receipt.error as Error).message}</p>}
+    {(error || receipt.error || history.error) && <p className="field-error" role="alert">
+      {error || (receipt.error as Error | null)?.message || (history.error as Error).message}
+    </p>}
     {Boolean(history.data?.length) && <details><summary>讨论记录（{history.data!.length}）</summary>
-      <ul>{history.data!.map((entry, index) => <li key={entry.request_id}>
+      <ul>{history.data!.map((entry, index) => {
+        const parent = history.data!.findIndex(d => d.request_id === entry.parent_request_id);
+        return <li key={entry.request_id}>
         <button className="text-button" type="button" disabled={pending}
           onClick={() => { setError(""); open.mutate(entry.request_id); }}>
-          <ExternalLink size={14} />讨论 {index + 1} · 题目版本 {entry.content_version}
+          <ExternalLink size={14} />讨论 {index + 1}
+          {entry.origin === "fork" && (parent >= 0 ? ` · 分支自讨论 ${parent + 1}` : " · DSH 分支")}
+          {` · 题目版本 ${entry.content_version}`}
         </button>
-      </li>)}</ul>
+      </li>;
+      })}</ul>
     </details>}
     {settings && createPortal(<div className="modal-backdrop" onClick={() => { if (!busy) setSettings(false); }}>
       <div ref={modal} className="settings-dialog dsh-connection-dialog" role="dialog" aria-modal="true"

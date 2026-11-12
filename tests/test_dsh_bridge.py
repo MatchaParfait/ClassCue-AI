@@ -2,6 +2,7 @@ import base64
 import json
 import sqlite3
 import struct
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,12 @@ class FakeClient:
     def call(self, method, params=None):
         if method == "status":
             return {"instance_id": self.instance, "protocol": 1, "desktop_version": "0.2.1-rc.5",
-                    "capabilities": ["course_workspace", "workspace_tree"]}
+                    "capabilities": ["course_workspace", "workspace_tree", "discussion_sync"]}
+        if method == "discussions":
+            return [receipt for receipt in self.requests.values()
+                    if receipt.get("library_id") == params["library_id"]
+                    and receipt.get("question_id") == params["question_id"]
+                    and receipt.get("instance_id") == self.instance]
         if method == "workspaces":
             return []
         if method == "configure_root":
@@ -48,8 +54,11 @@ class FakeClient:
         if method == "prepare":
             request_id = params["request_id"]
             self.requests.setdefault(request_id, {
+                **{key: params[key] for key in ("library_id", "document_id", "question_id", "course_id")
+                   if key in params},
                 "request_id": request_id, "session_id": f"session-{request_id}", "instance_id": self.instance,
-                "status": "bound", "content_version": params["content_version"],
+                "status": "bound", "content_version": params["content_version"], "workspace_id": "native-workspace",
+                "discussion_state": "draft",
             })
             if self.fail_after_write:
                 raise BridgeFailure("timeout", "synthetic timeout")
@@ -203,7 +212,7 @@ def test_desktop_routes_are_unavailable_in_web_and_preserve_recovery(bridge):
     assert response.status_code == 202
     request_id = response.json()["request_id"]
     assert client.post(f"/api/dsh-bridge/requests/{request_id}/open").json()["request_id"] == request_id
-    assert len(client.get("/api/dsh-bridge/questions/question/discussions").json()) == 1
+    assert client.get("/api/dsh-bridge/questions/question/discussions").json() == []
     assert client.post("/api/dsh-bridge/discussions", json={"question_id": "q", "content": []}).status_code == 422
 
 
@@ -393,7 +402,7 @@ def test_application_import_save_prepare_and_restore_use_registered_routes(real_
         request_id = receipt["request_id"]
         record = json.loads(DshBridge(materials.store, "library").records.request(request_id)["snapshot"])
         assert "(1) Draw." in str(record["content"]) and "(2) Explain." in str(record["content"])
-        assert len(client.get(f"/api/dsh-bridge/questions/{question['id']}/discussions").json()) == 1
+        assert client.get(f"/api/dsh-bridge/questions/{question['id']}/discussions").json() == []
         assert client.post(f"/api/dsh-bridge/requests/{request_id}/open").json()["session_id"] == receipt["session_id"]
         assert client.delete(f"/api/study-questions/{question['id']}").status_code == 200
         assert client.post("/api/dsh-bridge/discussions", json={"question_id": question["id"]}).status_code == 404
@@ -518,3 +527,282 @@ def test_root_api_preserves_selection_on_bad_path_and_excludes_web_mode(bridge, 
     web = FastAPI()
     web.include_router(router(provider, bridge_factory=lambda *_: service, desktop=lambda: False))
     assert TestClient(web).get("/api/dsh-bridge/workspace-root").status_code == 404
+
+
+def fork_receipt(service, parent_id, request_id="native-child", session_id="native-session", **changes):
+    parent = service.records.request(parent_id)
+    source = json.loads(parent["snapshot"])
+    receipt = json.loads(parent["receipt"])
+    return {key: value for key, value in {
+        **source, **receipt, "content": None, "request_id": request_id, "session_id": session_id,
+        "library_id": service.library_id, "question_id": parent["question_id"],
+        "document_id": source["document_id"], "course_id": source.get("course_id"),
+        "origin": "fork", "parent_request_id": parent_id, "parent_session_id": receipt["session_id"],
+        "workspace_id": "native-workspace", "status": "linked", "created_at": "2026-10-30T12:00:00.000Z",
+        "discussion_state": "active",
+        **changes,
+    }.items() if key != "content"}
+
+
+def serve_forks(monkeypatch, receipts):
+    original = FakeClient.call
+
+    def call(self, method, params=None):
+        if method == "discussions":
+            return [*original(self, method, params), *receipts]
+        result = original(self, method, params)
+        if method == "status":
+            return {**result, "capabilities": [*result["capabilities"], "native_forks"]}
+        return result
+
+    monkeypatch.setattr(FakeClient, "call", call)
+
+
+def test_native_forks_sync_reopen_and_restart_without_transmitting_a_question(bridge, monkeypatch):
+    service, _ = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = "active"
+    child = fork_receipt(service, original["request_id"])
+    child["created_at"] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+    serve_forks(monkeypatch, [child])
+    FakeClient.requests[child["request_id"]] = child
+    assert len(service.history("question")) == 2
+    row = service.records.request(child["request_id"])
+    assert "content" not in json.loads(row["snapshot"])
+    assert service.history("question") == service.history("question")
+    restarted = DshBridge(service.store, "library", service.snapshot_provider, FakeClient)
+    assert restarted.resume(child["request_id"], open_session=True)["session_id"] == child["session_id"]
+    assert restarted.prepare("question")["session_id"] == child["session_id"]
+    assert len(restarted.history("question")) == 2
+    assert len(FakeClient.requests) == 2
+    original_call = FakeClient.call
+
+    def missing(self, method, params=None):
+        if method == "open" and params["request_id"] == child["request_id"]:
+            raise BridgeFailure("request_missing", "分支记录已移除")
+        if method == "prepare":
+            pytest.fail("原生分支不得通过 prepare 重建或发送题目")
+        return original_call(self, method, params)
+
+    monkeypatch.setattr(FakeClient, "call", missing)
+    with pytest.raises(BridgeFailure, match="分支记录已移除"):
+        restarted.resume(child["request_id"], open_session=True)
+    assert len(restarted.records.history("question")) == 2
+
+
+def test_a_plugin_downgrade_keeps_native_fork_links_but_does_not_open_them_as_independent_questions(bridge, monkeypatch):
+    service, _ = bridge
+    original = service.prepare("question")
+    child = fork_receipt(service, original["request_id"])
+    service.records.sync_discussions([child], library_id="library", question_id="question", instance_id=FakeClient.instance)
+    original_call = FakeClient.call
+
+    def legacy(self, method, params=None):
+        value = original_call(self, method, params)
+        return {**value, "capabilities": ["workspace_tree"]} if method == "status" else value
+
+    monkeypatch.setattr(FakeClient, "call", legacy)
+    assert len(service.history("question")) == 1
+    with pytest.raises(BridgeFailure) as failure:
+        service.resume(child["request_id"], open_session=True)
+    assert failure.value.code == "plugin_outdated"
+    assert service.resume(original["request_id"], open_session=True)["session_id"] == original["session_id"]
+
+
+def test_native_forks_follow_parent_version_and_nested_ancestry_even_when_listed_in_reverse(bridge, monkeypatch):
+    service, version = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = "active"
+    child = fork_receipt(service, original["request_id"])
+    service.records.sync_discussions([child], library_id="library", question_id="question", instance_id=FakeClient.instance)
+    grandchild = fork_receipt(service, child["request_id"], "grandchild", "grandchild-session")
+    with service.store.connect() as db:
+        db.execute("DELETE FROM dsh_bridge_requests WHERE request_id=?", (child["request_id"],))
+    version["value"] = 2
+    newer = service.prepare("question", new_discussion=True)
+    FakeClient.requests[newer["request_id"]]["discussion_state"] = "active"
+    new_child = fork_receipt(service, newer["request_id"], "new-child", "new-child-session")
+    serve_forks(monkeypatch, [grandchild, new_child, child])
+    rows = service.history("question")
+    assert len(rows) == 5
+    versions = {row["request_id"]: row["content_version"] for row in rows}
+    assert versions[child["request_id"]] == versions[grandchild["request_id"]] == 1
+    assert versions[new_child["request_id"]] == 2
+    assert next(row for row in rows if row["request_id"] == grandchild["request_id"])["parent_request_id"] == child["request_id"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"question_id": "another-question"}, {"library_id": "another-library"},
+    {"instance_id": "another-instance"}, {"content_version": 99},
+    {"document_id": "another-document"}, {"course_id": "another-course"},
+    {"parent_session_id": "another-parent"}, {"session_id": "../unsafe"},
+])
+def test_native_fork_rejects_inconsistent_binding_without_partial_writes(bridge, changes):
+    service, _ = bridge
+    original = service.prepare("question")
+    good = fork_receipt(service, original["request_id"], "good", "good-session")
+    bad = fork_receipt(service, original["request_id"], **changes)
+    with pytest.raises(BridgeFailure) as failure:
+        service.records.sync_discussions([good, bad], library_id="library", question_id="question",
+                                  instance_id=FakeClient.instance)
+    assert failure.value.code == "invalid_response"
+    assert len(service.records.history("question")) == 1
+
+
+@pytest.mark.parametrize("changes", [
+    {"request_id": []}, {"request_id": {}}, {"session_id": []},
+    {"parent_request_id": []}, {"parent_session_id": {}},
+    {"discussion_state": []}, {"workspace_id": []},
+    {"created_at": "2026-10-30T12:00:00"},
+])
+def test_malformed_fork_fields_are_rejected_without_replacing_cached_history(bridge, changes):
+    service, _ = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = "active"
+    before = service.history("question")
+    malformed = fork_receipt(service, original["request_id"], **changes)
+    with pytest.raises(BridgeFailure) as failure:
+        service.records.sync_discussions([malformed], library_id="library", question_id="question",
+                                        instance_id=FakeClient.instance)
+    assert failure.value.code == "invalid_response"
+    assert service.records.history("question", visible_only=True) == before
+    assert len(service.records.history("question")) == 1
+
+
+def test_unresolved_fork_ancestry_rolls_back_updates_and_preserves_cached_history(bridge):
+    service, _ = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = "active"
+    before = service.history("question")
+    good = fork_receipt(service, original["request_id"], "good", "good-session")
+    orphan = fork_receipt(service, original["request_id"], parent_request_id="unknown-parent")
+    with pytest.raises(BridgeFailure) as failure:
+        service.records.sync_discussions([good, orphan], library_id="library", question_id="question",
+                                        instance_id=FakeClient.instance)
+    assert failure.value.code == "invalid_response"
+    assert service.records.history("question", visible_only=True) == before
+    assert len(service.records.history("question")) == 1
+
+
+@pytest.mark.parametrize("native_state", ["archived", "missing"])
+def test_hidden_other_instance_bindings_still_require_explicit_new_discussion(bridge, tmp_path, native_state):
+    service, _ = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = native_state
+    assert service.history("question") == []
+    FakeClient.instance = "another-instance"
+    service.records.connect(tmp_path / "another.json", FakeClient)
+    service.configure_root(str(tmp_path), FakeClient.instance)
+    with pytest.raises(BridgeFailure) as failure:
+        service.prepare("question")
+    assert failure.value.code == "instance_mismatch"
+    assert len(service.records.history("question")) == 1
+    assert len(FakeClient.requests) == 1
+    fresh = service.prepare("question", new_discussion=True)
+    assert fresh["instance_id"] == FakeClient.instance
+    assert fresh["session_id"] != original["session_id"]
+
+
+def test_cached_forks_remain_readable_offline_without_starting_dsh_and_receipt_updates_are_idempotent(bridge, monkeypatch):
+    service, _ = bridge
+    original = service.prepare("question")
+    FakeClient.requests[original["request_id"]]["discussion_state"] = "active"
+    child = fork_receipt(service, original["request_id"])
+    serve_forks(monkeypatch, [child])
+    service.history("question")
+    service.records.save_receipt(child["request_id"], {**child, "outcome": "opened"})
+    assert len(service.history("question")) == 2
+    monkeypatch.setattr(service.records, "wake", lambda: pytest.fail("读取历史不得启动 DSH"))
+    monkeypatch.setattr(service.records, "auto_connect", lambda *_: pytest.fail("读取历史不得自动配对"))
+
+    def offline(*_):
+        raise BridgeFailure("plugin_unavailable", "离线")
+
+    monkeypatch.setattr(service.records, "client", offline)
+    assert len(service.history("question")) == 2
+    provider = type("Provider", (), {"get": lambda _: service.store, "library_id": lambda _: "library"})()
+    app = FastAPI()
+    app.include_router(router(provider, bridge_factory=lambda *_: service, desktop=lambda: True))
+    response = TestClient(app).get("/api/dsh-bridge/questions/question/discussions")
+    assert response.status_code == 200
+    assert next(row for row in response.json() if row.get("origin") == "fork")["parent_request_id"] == original["request_id"]
+
+
+def test_unsent_drafts_are_recoverable_but_never_count_as_discussion_history(bridge):
+    service, _ = bridge
+    first = service.prepare("question")
+    assert service.history("question") == []
+    assert service.prepare("question")["request_id"] == first["request_id"]
+    second = service.prepare("question", new_discussion=True)
+    assert service.history("question") == []
+    assert service.prepare("question")["request_id"] == second["request_id"]
+    assert len(service.records.history("question")) == 2
+    # A transport "sent" receipt alone is insufficient; DSH must have started a real turn.
+    FakeClient.requests[second["request_id"]]["status"] = "sent"
+    assert service.history("question") == []
+    FakeClient.requests[second["request_id"]]["discussion_state"] = "active"
+    assert [row["request_id"] for row in service.history("question")] == [second["request_id"]]
+
+
+def test_archiving_and_restoring_in_dsh_controls_history_without_deleting_bindings(bridge):
+    service, _ = bridge
+    first = service.prepare("question")
+    native = FakeClient.requests[first["request_id"]]
+    native["discussion_state"] = "active"
+    assert len(service.history("question")) == 1
+    native["discussion_state"] = "archived"
+    assert service.history("question") == []
+    assert len(service.records.history("question")) == 1
+    native["discussion_state"] = "active"
+    assert service.history("question")[0]["request_id"] == first["request_id"]
+
+
+@pytest.mark.parametrize("native_state", ["archived", "missing"])
+def test_default_button_prepares_a_new_draft_when_all_old_discussions_are_hidden(bridge, native_state):
+    service, _ = bridge
+    first = service.prepare("question")
+    FakeClient.requests[first["request_id"]]["discussion_state"] = native_state
+    second = service.prepare("question")
+    assert second["request_id"] != first["request_id"]
+    assert service.history("question") == []
+    assert len(service.records.history("question")) == 2
+
+
+def test_default_button_skips_archived_latest_discussion_and_uses_older_active_one(bridge):
+    service, _ = bridge
+    first = service.prepare("question")
+    FakeClient.requests[first["request_id"]]["discussion_state"] = "active"
+    second = service.prepare("question", new_discussion=True)
+    FakeClient.requests[second["request_id"]]["discussion_state"] = "archived"
+    assert service.prepare("question")["request_id"] == first["request_id"]
+    assert len(service.records.history("question")) == 2
+
+
+def test_successful_empty_native_inventory_hides_stale_links_but_read_failures_do_not(bridge, monkeypatch):
+    service, _ = bridge
+    first = service.prepare("question")
+    FakeClient.requests[first["request_id"]]["discussion_state"] = "active"
+    assert len(service.history("question")) == 1
+    original = FakeClient.call
+
+    def failed(self, method, params=None):
+        if method == "discussions":
+            raise BridgeFailure("disconnected", "暂时断线")
+        return original(self, method, params)
+
+    monkeypatch.setattr(FakeClient, "call", failed)
+    assert len(service.history("question")) == 1
+    monkeypatch.setattr(FakeClient, "call", original)
+    FakeClient.requests.clear()
+    assert service.history("question") == []
+    assert len(service.records.history("question")) == 1
+
+
+def test_old_unverified_sent_receipts_are_not_presented_as_confirmed_discussions(bridge, monkeypatch):
+    service, _ = bridge
+    receipt = service.prepare("question")
+    service.records.save_receipt(receipt["request_id"], {key: value for key, value in
+                                {**receipt, "status": "sent"}.items() if key != "discussion_state"})
+    monkeypatch.setattr(service.records, "client",
+                        lambda *_: (_ for _ in ()).throw(BridgeFailure("plugin_unavailable", "离线")))
+    assert service.history("question") == []

@@ -2,7 +2,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 import time
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -640,6 +640,32 @@ def test_stale_idle_timer_cannot_close_newer_worker(monkeypatch):
     assert not closed
     worker._expire(2)
     assert closed
+
+
+def test_transcription_handoff_does_not_interrupt_busy_ppt_worker(monkeypatch):
+    worker = runtime.SlideWorker()
+    entered, release = Event(), Event()
+    closed = []
+    monkeypatch.setattr(runtime, "_worker", worker)
+    monkeypatch.setattr(worker, "_close_locked", lambda: closed.append(True))
+
+    def busy():
+        with worker.lock:
+            entered.set()
+            assert release.wait(10)
+
+    thread = Thread(target=busy)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        runtime.release_idle_worker("video_transcribe")
+        assert closed == []
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+    runtime.release_idle_worker("video_transcribe")
+    assert closed == [True]
 
 
 def test_exited_worker_is_reaped_before_starting_a_replacement(monkeypatch):

@@ -105,4 +105,7 @@ test("an image-only question prepares attachments with an empty prompt and prese
   assert.equal(await controller.prepare(command, shell, true), "opened");
   assert.equal(draft, "User's own question");
   assert.equal(created, 1);
+  assert.equal(await controller.prepare({ ...command, status: "linked", content: [] }, shell, true), "opened");
+  assert.equal(created, 1);
+  assert.equal(draft, "User's own question");
 });

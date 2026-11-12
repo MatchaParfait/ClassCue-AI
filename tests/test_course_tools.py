@@ -137,6 +137,32 @@ def test_transcribe_skips_saved_and_never_calls_analysis(fixture, monkeypatch):
     assert call(f, "start_transcription", video_ids=[one, two])["job_id"] is None
 
 
+@pytest.mark.parametrize("cancel_during_release", [False, True])
+def test_cancelled_resource_handoff_never_initializes_asr(fixture, monkeypatch, cancel_during_release):
+    import classcue.slide_runtime as slides
+
+    f = fixture
+    identity = video(f, "cancelled-handoff")
+    original_status = f.store.get_video(identity)["status"]
+    cancelled = Event()
+    released = []
+    calls = fake_asr(monkeypatch)
+    if not cancel_during_release:
+        cancelled.set()
+
+    def release(_job_type):
+        released.append(True)
+        cancelled.set()
+
+    monkeypatch.setattr(slides, "release_idle_worker", release)
+    with pytest.raises(tools.ProcessingCancelled):
+        f.service._transcribe_video(identity, {"model_id": "whisper-turbo"},
+                                    cancelled.is_set, lambda *_: None)
+    assert released == ([True] if cancel_during_release else [])
+    assert calls == [] and not f.store.has_transcript(identity)
+    assert f.store.get_video(identity)["status"] == original_status
+
+
 def test_course_task_is_visible_with_entries_and_model_in_desktop_api(fixture, monkeypatch):
     f = fixture
     one, two = video(f, "已转写", text="原文"), video(f, "待转写")

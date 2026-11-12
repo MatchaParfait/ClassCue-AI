@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
-import { Bridge, BridgeError, atomicJson } from "./bridge.mjs";
+import { Bridge, BridgeError, atomicJson, readDiscussionStates } from "./bridge.mjs";
 import { servePipe } from "./pipe.mjs";
 
 const VERSION = "0.2.1-rc.5";
@@ -72,6 +72,19 @@ export default class ClassCueBridge extends TypertRemoteService {
         if (!await ctx.sessionPersistence.stat(id))
           throw new BridgeError("session_not_durable", "对话尚未持久保存，请重试同一请求");
       },
+      forkHeaders: async () => {
+        // Read supported header projections only; never scan chats or infer links from names/cwd.
+        const stored = await ctx.sessionPersistence.list();
+        const durable = new Set(stored.map(item => item.header.id));
+        const headers = new Map(stored.map(item => [item.header.id, item.header]));
+        for (const session of ctx.sessions.list()) headers.set(session.id, session.header);
+        const workspaces = ctx.workspaceRegistry.list();
+        const membership = new Map(workspaces.flatMap(workspace =>
+          workspace.sessionIds.map(id => [id, workspace.id])));
+        return [...headers.values()].map(header => ({ ...header, durable: durable.has(header.id),
+          workspace_id: membership.get(header.id) }));
+      },
+      discussionStates: rows => readDiscussionStates(ctx, rows),
     };
     this.bridge = new Bridge(root, native);
     const path = `\\\\.\\pipe\\classcue-dsh-${this.bridge.state.instance_id}`;
@@ -83,6 +96,7 @@ export default class ClassCueBridge extends TypertRemoteService {
         case "prepare": return this.bridge.prepare(params);
         case "request": return this.bridge.request(params.request_id);
         case "open": return this.bridge.open(params.request_id);
+        case "discussions": return this.bridge.discussions(params);
         default: throw new BridgeError("method_unknown", "不支持的桥接操作");
       }
     });
@@ -95,7 +109,7 @@ export default class ClassCueBridge extends TypertRemoteService {
           instance_id: this.bridge.state.instance_id, desktop_version: VERSION });
         // A send may have been committed immediately before an unclean Host shutdown.
         for (const row of Object.values(this.bridge.state.requests)) {
-          if (["reserved", "choose_workspace", "sent"].includes(row.status)) continue;
+          if (["reserved", "choose_workspace", "sent", "linked"].includes(row.status)) continue;
           try {
             const info = await ctx.sessionController.inspect(row.session_id);
             if (info?.events.some(e => e.type === "user/message")) await this.bridge.sent(row.session_id);
@@ -116,6 +130,10 @@ export default class ClassCueBridge extends TypertRemoteService {
       if (event.type === "user/message")
         this.bridge.sent(session.id).catch(() => ctx.logger.error("ClassCue 对话状态保存失败"));
     });
+    ctx.on("session/created", session => {
+      if (session.header.parentSession && session.header.isSeeded && session.header.origin !== "subagent")
+        this.bridge.forksChanged();
+    }, { global: true });
   }
   owner() {
     if (this.ctx.invocation?.peer.principal.kind !== "owner")

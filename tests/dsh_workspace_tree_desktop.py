@@ -161,7 +161,7 @@ async def main(args):
                         lambda parts: "Shared scenario" in "\n".join(parts))
             again = await api("GET", f"/api/dsh-bridge/requests/{receipts[0]['request_id']}")
             assert again["session_id"] == receipts[0]["session_id"]
-            assert len(await api("GET", f"/api/dsh-bridge/questions/{question['id']}/discussions")) == 1
+            assert await api("GET", f"/api/dsh-bridge/questions/{question['id']}/discussions") == []
             # Exercise multi-image transport in this same document node without using real files.
             image = BytesIO()
             Image.new("RGB", (80, 40), "green").save(image, "PNG")

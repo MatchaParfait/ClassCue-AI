@@ -77,7 +77,7 @@ def router(provider, *, bridge_factory=DshBridge, desktop=None):
 
     @routes.get("/questions/{question_id}/discussions")
     def history(question_id: str):
-        return use(lambda bridge: bridge.records.history(question_id))
+        return use(lambda bridge: bridge.history(question_id))
 
     @routes.get("/requests/{request_id}")
     def request(request_id: str):

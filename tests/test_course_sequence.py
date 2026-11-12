@@ -152,6 +152,69 @@ def test_sequence_runs_after_transcription_without_ai_and_replays(sequence):
     assert invoke(b, "get_job", job_id=second["job_id"])["entries"][0]["steps"][0]["status"] == "skipped"
 
 
+def test_sequence_releases_idle_ppt_before_each_asr_and_keeps_it_for_saved_subtitles(sequence, monkeypatch):
+    import classcue.slide_runtime as slides
+    import classcue.video_pipeline as pipeline
+
+    b = sequence
+    ids = register_library_videos(b, count=3)
+    b.store.mark_transcribed(ids[1], [TranscriptSegment(1, 0, 1000, "saved transcript")])
+    worker = slides.SlideWorker()
+    worker.process = object()
+    released, extracted, transcribed = [], [], []
+
+    def close():
+        released.append(worker.process)
+        worker.process = None
+
+    def transcribe(path, *_args, **_kwargs):
+        assert worker.process is None
+        transcribed.append(path.name)
+        return [TranscriptSegment(1, 0, 1000, "synthetic transcript")], 1000
+
+    def extract(video_id, *_args):
+        assert b.store.has_transcript(video_id)
+        if video_id == ids[1]:
+            assert worker.process is not None
+        extracted.append(video_id)
+        worker.process = object()
+        return {"status": "completed", "count": 1}
+
+    monkeypatch.setattr(slides, "_worker", worker)
+    monkeypatch.setattr(worker, "_close_locked", close)
+    monkeypatch.setattr(pipeline, "_transcribe_video_with_fallback", transcribe)
+    b.application.state.course_batch_tools["slides"] = extract
+    result = invoke(b, "start_processing_sequence", video_ids=ids, request_id="resource-handoff-sequence")
+    assert wait(b, result["job_id"])["status"] == "completed"
+    assert len(transcribed) == 2 and extracted == ids
+    assert len(released) == 2 and all(process is not None for process in released)
+    assert b.store.get_segments(ids[1])[0].text == "saved transcript"
+    assert b.ai == []
+
+
+def test_sequence_worker_release_failure_stops_before_asr_and_later_videos(sequence, monkeypatch):
+    import classcue.slide_runtime as slides
+
+    b = sequence
+    ids = register_library_videos(b, count=2)
+    worker = slides.SlideWorker()
+
+    def fail():
+        raise RuntimeError("synthetic PPT worker release failed")
+
+    monkeypatch.setattr(slides, "_worker", worker)
+    monkeypatch.setattr(worker, "_close_locked", fail)
+    monkeypatch.setattr(slides, "close_workers", lambda: None)
+    result = invoke(b, "start_processing_sequence", video_ids=ids, request_id="resource-handoff-failure")
+    assert wait(b, result["job_id"])["status"] == "failed"
+    assert b.asr == b.slides == b.ai == []
+    state = json.loads(b.store.get_job(result["job_id"])["request_json"])
+    assert state["entries"][0]["steps"][0]["status"] == "failed"
+    assert state["entries"][0]["steps"][1]["status"] == "pending"
+    assert state["entries"][1]["status"] == "pending"
+    assert "PPT worker release failed" in state["entries"][0]["error"]
+
+
 @pytest.mark.parametrize("error", [ValueError("synthetic ASR error"), ResourcePaused("synthetic memory")])
 def test_asr_failure_stops_all_later_steps_and_videos(sequence, monkeypatch, error):
     b = sequence

@@ -15,9 +15,10 @@ export interface DshReceipt {
   workspace_id: string | null;
   cwd: string | null;
   session_id: string;
-  status: "choose_workspace" | "reserved" | "bound" | "draft_ready" | "sent";
+  status: "choose_workspace" | "reserved" | "bound" | "draft_ready" | "sent" | "linked";
   error: string | null;
   outcome?: string | null;
+  discussion_state?: "active" | "draft" | "archived" | "missing" | "unavailable" | "pending";
 }
 export interface DshDiscussion {
   request_id: string;
@@ -25,6 +26,8 @@ export interface DshDiscussion {
   instance_id: string;
   receipt: DshReceipt | null;
   created_at: string;
+  origin?: "fork";
+  parent_request_id?: string;
 }
 export interface DshWorkspaceRoot {
   config_id: string;

@@ -39,6 +39,7 @@ afterEach(() => {
   host?.remove(); cache?.clear(); root = undefined;
   mocks.desktop = false;
   vi.clearAllMocks();
+  vi.mocked(api.getDshDiscussions).mockResolvedValue([]);
 });
 const button = (text: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.includes(text))!;
 
@@ -50,20 +51,20 @@ it("does not expose desktop bridge or query it in an ordinary browser", async ()
 
 it("continues the current version binding and preserves older discussion entries", async () => {
   mocks.desktop = true;
-  vi.mocked(api.getDshDiscussions).mockResolvedValueOnce([
+  vi.mocked(api.getDshDiscussions).mockResolvedValue([
     { request_id: "old", content_version: 1, instance_id: "instance", receipt: null, created_at: "" },
     { request_id: "current", content_version: 2, instance_id: "instance", receipt: null, created_at: "" },
   ]);
   const receipt = { request_id: "current", question_id: "question1", content_version: 2, instance_id: "instance",
     workspace_id: "workspace", cwd: "synthetic", session_id: "session", status: "draft_ready" as const, error: null };
-  vi.mocked(api.openDshDiscussion).mockResolvedValue(receipt);
+  vi.mocked(api.prepareDshQuestion).mockResolvedValue(receipt);
   vi.mocked(api.getDshRequest).mockResolvedValue(receipt);
   await mount();
   await vi.waitFor(() => expect(host.textContent).toContain("题目版本 1"));
   await vi.waitFor(() => expect(button("在 DSH 中讨论").disabled).toBe(false));
   await act(async () => button("在 DSH 中讨论").click());
-  expect(api.openDshDiscussion).toHaveBeenCalledWith("current");
-  expect(api.prepareDshQuestion).not.toHaveBeenCalled();
+  expect(api.prepareDshQuestion).toHaveBeenCalledWith("question1", false);
+  expect(api.openDshDiscussion).not.toHaveBeenCalled();
   expect(host.textContent).toContain("题目版本 1");
   await vi.waitFor(() => expect(host.textContent).toContain("等待你发送"));
 });
@@ -81,12 +82,118 @@ it("clearly identifies a legacy pending discussion that still needs its original
   await vi.waitFor(() => expect(host.textContent).toContain("旧版未完成的讨论"));
 });
 
+it("labels a native branch with its parent and opens the existing session without preparing a new question", async () => {
+  mocks.desktop = true;
+  vi.mocked(api.getDshDiscussions).mockResolvedValueOnce([
+    { request_id: "parent", content_version: 2, instance_id: "instance", receipt: null, created_at: "" },
+    { request_id: "branch", content_version: 2, instance_id: "instance", receipt: null, created_at: "",
+      origin: "fork", parent_request_id: "parent" },
+  ]);
+  const receipt = { request_id: "branch", question_id: "question1", content_version: 2, instance_id: "instance",
+    workspace_id: "workspace", cwd: "synthetic", session_id: "native-branch", status: "linked" as const, error: null };
+  vi.mocked(api.openDshDiscussion).mockResolvedValue(receipt);
+  vi.mocked(api.getDshRequest).mockResolvedValue(receipt);
+  await mount();
+  await vi.waitFor(() => expect(host.textContent).toContain("分支自讨论 1"));
+  await act(async () => button("分支自讨论 1").click());
+  expect(api.openDshDiscussion).toHaveBeenCalledWith("branch");
+  expect(api.prepareDshQuestion).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(host.textContent).toContain("已打开 DSH 分支讨论"));
+  expect(button("讨论 1")).toBeTruthy();
+});
+
+it("discovers a native branch automatically while the question is visible without opening or sending it", async () => {
+  mocks.desktop = true;
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    vi.mocked(api.getDshDiscussions)
+      .mockResolvedValueOnce([
+        { request_id: "parent", content_version: 2, instance_id: "instance", receipt: null, created_at: "" },
+      ])
+      .mockResolvedValue([
+        { request_id: "parent", content_version: 2, instance_id: "instance", receipt: null, created_at: "" },
+        { request_id: "branch", content_version: 2, instance_id: "instance", receipt: null, created_at: "",
+          origin: "fork", parent_request_id: "parent" },
+      ]);
+    await mount();
+    await vi.waitFor(() => expect(host.textContent).toContain("讨论记录（1）"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    await vi.waitFor(() => expect(host.textContent).toContain("分支自讨论 1"));
+    expect(api.prepareDshQuestion).not.toHaveBeenCalled();
+    expect(api.openDshDiscussion).not.toHaveBeenCalled();
+  } finally {
+    vi.mocked(api.getDshDiscussions).mockResolvedValue([]);
+    vi.useRealTimers();
+  }
+});
+
 it("does not query a hidden desktop workbench", async () => {
   mocks.desktop = true;
   await mount({ active: false });
   expect(host.textContent).toBe("");
   expect(api.getDshStatus).not.toHaveBeenCalled();
   expect(api.getDshDiscussions).not.toHaveBeenCalled();
+});
+
+it("keeps an unsent draft out of discussion history while preserving its prepare action", async () => {
+  mocks.desktop = true;
+  const receipt = { request_id: "draft", question_id: "question1", content_version: 2, instance_id: "instance",
+    workspace_id: "workspace", cwd: "synthetic", session_id: "draft-session", status: "draft_ready" as const,
+    discussion_state: "draft" as const, error: null };
+  vi.mocked(api.prepareDshQuestion).mockResolvedValue(receipt);
+  vi.mocked(api.getDshRequest).mockResolvedValue(receipt);
+  await mount();
+  await vi.waitFor(() => expect(button("在 DSH 中讨论").disabled).toBe(false));
+  await act(async () => button("在 DSH 中讨论").click());
+  await vi.waitFor(() => expect(host.textContent).toContain("等待你发送"));
+  expect(host.querySelector("details")).toBeNull();
+  expect(api.prepareDshQuestion).toHaveBeenCalledWith("question1", false);
+});
+
+it("refreshes a terminal receipt when retrying the same saved draft", async () => {
+  mocks.desktop = true;
+  const receipt = { request_id: "draft-retry", question_id: "question1", content_version: 2, instance_id: "instance",
+    workspace_id: "workspace", cwd: "synthetic", session_id: "draft-session", status: "bound" as const,
+    error: null, outcome: null };
+  vi.mocked(api.prepareDshQuestion).mockResolvedValue(receipt);
+  vi.mocked(api.getDshRequest).mockResolvedValue({ ...receipt, error: "draft_conflict", outcome: "draft_conflict" });
+  await mount();
+  await vi.waitFor(() => expect(button("在 DSH 中讨论").disabled).toBe(false));
+  await act(async () => button("在 DSH 中讨论").click());
+  await vi.waitFor(() => expect(host.textContent).toContain("DSH 中已有草稿，已保留"));
+  const reads = vi.mocked(api.getDshRequest).mock.calls.length;
+  vi.mocked(api.getDshRequest).mockResolvedValue({ ...receipt, status: "draft_ready", outcome: "draft_ready" });
+  await act(async () => button("在 DSH 中讨论").click());
+  await vi.waitFor(() => expect(vi.mocked(api.getDshRequest).mock.calls.length).toBeGreaterThan(reads));
+  await vi.waitFor(() => expect(host.textContent).toContain("等待你发送"));
+  expect(host.textContent).not.toContain("DSH 中已有草稿，已保留");
+  expect(api.prepareDshQuestion).toHaveBeenNthCalledWith(2, "question1", false);
+});
+
+it("does not invent parent discussion zero when DSH has archived a fork's parent", async () => {
+  mocks.desktop = true;
+  vi.mocked(api.getDshDiscussions).mockResolvedValueOnce([
+    { request_id: "branch", content_version: 2, instance_id: "instance", receipt: null, created_at: "",
+      origin: "fork", parent_request_id: "archived-parent" },
+  ]);
+  await mount();
+  await vi.waitFor(() => expect(host.textContent).toContain("DSH 分支"));
+  expect(host.textContent).not.toContain("讨论 0");
+  expect(host.textContent).toContain("讨论记录（1）");
+});
+
+it("removes a DSH-archived discussion at the next sync and rechecks on a stale link error", async () => {
+  mocks.desktop = true;
+  vi.mocked(api.getDshDiscussions).mockResolvedValueOnce([
+    { request_id: "archived", content_version: 2, instance_id: "instance", receipt: null, created_at: "" },
+  ]);
+  vi.mocked(api.openDshDiscussion).mockRejectedValueOnce(new Error("原对话已归档"));
+  await mount();
+  await vi.waitFor(() => expect(host.textContent).toContain("讨论记录（1）"));
+  await act(async () => button("讨论 1").click());
+  await vi.waitFor(() => expect(host.querySelector("details")).toBeNull());
+  expect(host.textContent).toContain("原对话已归档");
+  expect(api.prepareDshQuestion).not.toHaveBeenCalled();
 });
 
 it("isolates bindings and connection status when switching libraries", async () => {

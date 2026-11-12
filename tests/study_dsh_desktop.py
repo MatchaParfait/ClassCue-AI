@@ -197,8 +197,14 @@ async def main(args):
             async def history(question_id):
                 return await api(f"/api/dsh-bridge/questions/{question_id}/discussions")
 
-            entries = await history(question["id"])
-            request_id = entries[0]["request_id"]
+            async def pending_request(question_id):
+                response = await page.request.post(base + "/api/dsh-bridge/discussions",
+                                                   data={"question_id": question_id})
+                assert response.ok, (response.status, "pending question")
+                return (await response.json())["request_id"]
+
+            assert await history(question["id"]) == []
+            request_id = await pending_request(question["id"])
             receipt = await until(lambda: api(f"/api/dsh-bridge/requests/{request_id}"),
                                   lambda value: value["status"] == "draft_ready")
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 2)
@@ -209,7 +215,7 @@ async def main(args):
             await dsh.screenshot(path=str(output / "dsh-two-crops.png"))
             assert not "\n".join(await dsh.locator('[contenteditable="true"]').all_text_contents()).strip()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
-            assert len(await history(question["id"])) == 1
+            assert await history(question["id"]) == []
             assert (await api(f"/api/dsh-bridge/requests/{request_id}"))["session_id"] == receipt["session_id"]
             assert await dsh.locator('img[src^="blob:"]').count() == 2
             print("PDF saved through native reader; two crops in one unsent DSH draft; reopen is idempotent", flush=True)
@@ -228,7 +234,8 @@ async def main(args):
             await page.get_by_role("button", name="阅读", exact=True).click()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             md_question = (await api(f"/api/study-questions?document_id={markdown['id']}"))[0]
-            md_request = (await history(md_question["id"]))[0]["request_id"]
+            assert await history(md_question["id"]) == []
+            md_request = await pending_request(md_question["id"])
             md_receipt = await until(lambda: api(f"/api/dsh-bridge/requests/{md_request}"),
                                      lambda value: value["status"] == "draft_ready")
             assert md_receipt["session_id"] != receipt["session_id"]
@@ -243,7 +250,7 @@ async def main(args):
             await page.reload()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).wait_for()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
-            assert len(await history(md_question["id"])) == 1
+            assert await history(md_question["id"]) == []
             await page.locator(".study-file-open").filter(has_text="synthetic-cross-page.pdf").click()
             await page.get_by_role("button", name="在 DSH 中讨论", exact=True).click()
             await until(lambda: dsh.locator('img[src^="blob:"]').count(), lambda count: count == 2)

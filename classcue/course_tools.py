@@ -822,10 +822,16 @@ class CourseTools:
         return operation
 
     def _transcribe_video(self, video_id, selection, should_cancel, progress):
+        from classcue.slide_runtime import release_idle_worker
         from classcue.video_pipeline import _transcribe_video_with_fallback, _audio_path
         row = self._video(video_id)
         if not Path(row["video_path"]).is_file():
             raise ValueError("视频文件不可用")
+        if should_cancel():
+            raise ProcessingCancelled("用户已停止转写")
+        release_idle_worker("video_transcribe")
+        if should_cancel():
+            raise ProcessingCancelled("用户已停止转写")
         with frozen_selection(selection):
             require_prepared_asr_model(selection["model_id"])
             self.store.set_status(video_id, "processing")

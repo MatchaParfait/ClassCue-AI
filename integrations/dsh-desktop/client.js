@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
         this.markers = markers;
       }
       async prepare(command, shell, isBlank) {
-        if (command.status === "sent" || !isBlank) return "opened";
+        if (command.status === "sent" || command.status === "linked" || !isBlank) return "opened";
         const key = `${command.instance_id}/${command.session_id}`;
         const marker = this.markers.get(key);
         if (marker && marker.ids.every(id => this.conversation.resolveDraftAttachments([id]).length === 1))
@@ -148,7 +148,7 @@ window.__ModuleLoader__.load({
             const shell = ctx.conversation.input.for(binding.ctx);
             result = await drafts.prepare(command, shell, binding.session.getSnapshot().blank);
             ctx.uiWorkspace.openSession(command.session_id);
-            if (command.status !== "sent" && result !== "draft_conflict" && !watched.has(command.session_id)) {
+            if (!["sent", "linked"].includes(command.status) && result !== "draft_conflict" && !watched.has(command.session_id)) {
               const watch = { requestId: command.request_id, reference: binding, fingerprint: null,
                 shell, pending: Promise.resolve(), unsubscribe: null };
               watched.set(command.session_id, watch);
