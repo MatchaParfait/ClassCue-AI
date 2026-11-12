@@ -36,6 +36,10 @@ codex plugin add classcue@classcue
 这是仓库 marketplace 分发，不等同于已上架 OpenAI 官方公共插件目录。
 GitHub 安装读取已推送的仓库版本；本地尚未提交或推送的修改只适合通过本地来源验收。
 
+发布该插件需要将 marketplace 清单、插件源码、版本清单和预构建产物一起推送到
+GitHub 来源所跟踪的分支；不依赖 APP 的 Release、签名更新源或 npm 发布。
+只在其他测试分支推送时，默认来源不会自动切换到该分支。
+
 ## 第一次连接 APP
 
 1. 先启动 ClassCue，完成首次运行环境准备。
@@ -51,6 +55,8 @@ GitHub 安装读取已推送的仓库版本；本地尚未提交或推送的修�
 当前宿主不会默认把 `CODEX_HOME` 传给 MCP；仓库插件根据宿主提供的安装缓存位置识别所属目录。
 未知缓存布局会明确报错，避免读取其他配置；这时可以使用下方的本机安装器。
 APP 被移动或重新安装后，重新保存连接以更新路径。
+源码测试版换用新克隆目录时，也需在新 APP 中重新选择学习工作区并保存连接；
+已安装的插件与 APP 目录分别管理，不会因重新克隆而自动切换连接。
 
 未完成连接时，工具仍可被发现，但调用会明确提示保存 APP 设置；
 不会猜测视频库，也不会先启动一个未登记的应用。
@@ -99,7 +105,7 @@ codex plugin marketplace upgrade classcue
 codex plugin add classcue@classcue
 ```
 
-本地仓库来源先更新本地源码，再执行 `codex plugin add classcue@classcue`；
+本地仓库来源需重新登记新版完整源码目录，再执行 `codex plugin add classcue@classcue`；
 `marketplace upgrade` 只用于 Git 来源，不适用于本地目录。
 个人来源则先重新运行本机安装器，再执行 `codex plugin add classcue@personal`。
 完成后重新打开 Codex，确认实际工具列表；仅修改源码不会更新正在运行的 MCP 进程。
